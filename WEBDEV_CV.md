@@ -1,6 +1,6 @@
 # Web Development CV
 
-[← in-html](https://codeberg.org/slnknrr/in-html/src/branch/all-in-one/)
+[← in-html](https://github.com/slnknrr-dev/in-html/blob/all-in-one/)
 · [slnknrr →](https://codeberg.org/slnknrr/.profile/src/branch/about/)
 
 ## Profile

@@ -169,7 +169,7 @@ Electron-артефакты отдают страницы из привилег�
 примеров запускайте `node course.js --fix`. CI запускает `--check`.
 
 Русские курсы начинаются с оглавления
-[.t9n/ru/LEARN_COURSE.md](https://codeberg.org/slnknrr/in-html/src/branch/all-in-one/.t9n/ru/LEARN_COURSE.md).
+[.t9n/ru/LEARN_COURSE.md](https://github.com/slnknrr-dev/in-html/blob/all-in-one/.t9n/ru/LEARN_COURSE.md).
 
 ## CI
 
@@ -189,7 +189,7 @@ flowchart TD
   gh --> ghp["то же дерево<br/>→ GitHub Pages"]
 ```
 
-| | [.forgejo/workflows/html5.yml](https://codeberg.org/slnknrr/in-html/src/branch/all-in-one/.forgejo/workflows/html5.yml) | [.github/workflows/html5.yml](https://codeberg.org/slnknrr/in-html/src/branch/all-in-one/.github/workflows/html5.yml) |
+| | [.forgejo/workflows/html5.yml](https://github.com/slnknrr-dev/in-html/blob/all-in-one/.forgejo/workflows/html5.yml) | [.github/workflows/html5.yml](https://github.com/slnknrr-dev/in-html/blob/all-in-one/.github/workflows/html5.yml) |
 | --- | --- | --- |
 | где выполняется | Codeberg, `codeberg-tiny`, `node:24-bookworm` | GitHub, `ubuntu-latest`, `node:24-bookworm` |
 | сборка, воспроизводимость, проверки, курсы | да | да |
@@ -207,5 +207,5 @@ flowchart TD
 
 **Настройка GitHub.** Settings → Pages → Source: GitHub Actions. Секреты не нужны.
 
-Страницы курсов ссылаются в превью на `https://slnknrr.codeberg.page/` (`PAGES` в `course.js`), поэтому копия на GitHub
+Страницы курсов ссылаются в превью на `https://slnknrr-dev.github.io/in-html/` (`PAGES` в `course.js`), поэтому копия на GitHub
 Pages ведёт за живыми примерами обратно на Codeberg Pages.

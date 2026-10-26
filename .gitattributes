@@ -1,0 +1,3 @@
+# Push scripts: bash needs LF, cmd.exe needs CRLF, whatever core.autocrlf says.
+*.sh text eol=lf
+*.bat text eol=crlf

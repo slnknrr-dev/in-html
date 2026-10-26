@@ -111,6 +111,8 @@ flowchart LR
 | `mime.js` | one media-type table for the dev server and the builder |
 | `check.js` · `check-electron.js` · `check-editor.js` | checks: modules, tests, audit, Electron, headless browser, e2e |
 | `course.js` | `LEARN_*_COURSE.md` → course pages with live examples |
+| `pages-index.js` | front pages of a published tree: application catalogue and course programme per language |
+| `github-push.*` · `codeberg-push.*` | commit and push to one forge, with this repository's absolute links rewritten for it |
 
 Key decisions, in short:
 
@@ -201,5 +203,44 @@ access to the Pages repository. The variables `PAGES_REPO` (default `slnknrr/pag
 
 **GitHub setup.** Settings → Pages → Source: GitHub Actions. No secrets are needed.
 
-The course pages link their previews to `https://slnknrr.codeberg.page/` (`PAGES` in `course.js`), so the copy on
+**Front pages on GitHub Pages.** `node pages-index.js <dir>` writes the site's front pages into the published tree.
+English is at the root and every `.t9n/<lang>/` gets `<lang>/`:
+
+| page | contents |
+| --- | --- |
+| `index.html`, `<lang>/index.html` | application catalogue: one card per published application with its description (README table of that language), class, artifact tags from the NOTICE files, Open / Offline demo / Source buttons and its other pages; search (`/` focuses it, `?q=` and `?tag=` in the URL) and tag filters |
+| `course/in-html/index.html`, `<lang>/course/in-html/index.html` | course programme in the parts and order of `.t9n/<lang>/LEARN_COURSE.md`; a language without courses links to those that have them |
+
+Each page links to the same page in every other language. Nothing is listed by hand, and an application or course
+that was not published gets no card.
+
+## Pushing to a forge
+
+```bash
+./github-push.sh "commit message"
+```
+
+```bash
+./codeberg-push.sh "commit message"
+```
+
+On Windows, run `github-push.bat "commit message"` or `codeberg-push.bat "commit message"`. The `.bat` files run the
+`.sh` scripts in Git Bash. The commit message is required, and everything else is done by the script:
+
+1. Runs `git init` if the folder is not a repository yet.
+2. Rewrites this repository's absolute links in the Markdown files (artifact folders excluded) for the target forge:
+   - `codeberg.org/slnknrr/<repo>/src/branch/…` ↔ `github.com/slnknrr-dev/<repo>/blob/…`;
+   - the `raw` links the same way;
+   - `slnknrr.codeberg.page/…` ↔ `slnknrr-dev.github.io/<repo>/…`, except in `LEARN_*_COURSE.md`, whose preview
+     links `course.js --check` maintains.
+
+   Links to other repositories and the bare repository URLs (as in "Where it lives") are left alone.
+3. Runs `git add -A`, `git commit -m "<message>"` (skipped when there is nothing to commit) and
+   `git branch -M all-in-one`.
+4. Pushes `all-in-one` to `https://github.com/slnknrr-dev/<repo>.git` or `https://codeberg.org/slnknrr/<repo>.git`.
+
+`<repo>` is the name of the folder above `all-in-one` (`in-html`, `in-javascript`). The rewritten links stay in the
+working tree until the next push to the other forge rewrites them back.
+
+The course pages link their previews to `https://slnknrr-dev.github.io/in-html/` (`PAGES` in `course.js`), so the copy on
 GitHub Pages links back to Codeberg Pages for the live examples.

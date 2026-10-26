@@ -7,7 +7,8 @@
 #    sources. Pull requests also report artifacts that are out of date.
 # 2. pages: on the default branch, builds the published single-file pages (LANDING.html, RESUME.html, …), the offline
 #    demos (demo/<slug>.html) and the courses (course/in-html/<slug>.html) — the same tree Codeberg Pages receives —
-#    and deploys it to GitHub Pages.
+#    adds front pages (pages-index.js: index.html, <lang>/index.html, [<lang>/]course/in-html/index.html) and
+#    deploys it to GitHub Pages at https://slnknrr-dev.github.io/in-html/.
 #
 # GitHub setup: Settings → Pages → Source: GitHub Actions. No secrets are needed.
 
@@ -78,6 +79,12 @@ jobs:
           node singlefile.js --target demo --demo pages-out/demo --quiet
           node course.js --out pages-out
           touch pages-out/.nojekyll
+
+      # Front pages: the application catalogue and the course programme in every language (en at the root,
+      # other languages under <lang>/), generated from the repository.
+      - name: Front pages
+        shell: bash
+        run: node pages-index.js pages-out
 
       - uses: actions/upload-pages-artifact@v3
         with:

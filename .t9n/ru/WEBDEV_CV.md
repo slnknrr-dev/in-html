@@ -1,6 +1,6 @@
 # Резюме веб-разработчика
 
-[← in-html](https://codeberg.org/slnknrr/in-html/src/branch/all-in-one/.t9n/ru/README.md)
+[← in-html](https://github.com/slnknrr-dev/in-html/blob/all-in-one/.t9n/ru/README.md)
 · [slnknrr →](https://codeberg.org/slnknrr/.profile/src/branch/about/)
 
 ## Профиль

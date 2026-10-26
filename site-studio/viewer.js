@@ -131,7 +131,7 @@ addUI(UI_RT);
 
 // twoPass (doc/render.js firstPass): exports render twice, because whether a block renders (and so which links
 // have a live target) can depend on later content, e.g. a cart shown only when something is purchasable.
-defineProduct({
+const SPEC = {
   prefix: 'lp', format: 'ss-site', version: VERSION, name: 'Untitled site',
   regions: REGIONS, uiLangs: UI_LANGS,
   blocks: { ...BT_A, ...BT_B, ...BT_C, ...BT_D, ...BT_CHAT, ...BT_COL, ...BT_PT, ...BT_E, ...BT_WIKI, ...BT_PG },
@@ -146,7 +146,15 @@ defineProduct({
   exportHooks,
   // Export options `api` (backend exports) → ctx.api; `route` / `page` / `extra.as404` → ctx.route (pages).
   makeCtx: (ctx, opts) => { backendCtx(ctx, opts); pagesCtx(ctx, opts); },
-});
+};
+defineProduct(SPEC);
+
+// The doc/ registry holds one product per JS realm. A process that loaded another document product after this one
+// (the full check.js run imports every module) calls this before using the site product again.
+export function activateProduct() {
+  for (const d of [UI_CHAT, UI_COL, UI_PG, UI_D, UI_PT, UI_E, UI_WIKI, UI_CORE, UI_A, UI_B, UI_C, UI_RT]) addUI(d);
+  defineProduct(SPEC);
+}
 
 // Facade re-exports: the editor imports the engine only through this module, so the product can swap engine pieces
 // without touching editor code.

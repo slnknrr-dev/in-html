@@ -35,6 +35,7 @@ const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPat
 // `ok` counts and reports but never throws: the whole suite runs and prints every failure, the return value is the
 // failure count (exit code 1 when non-zero).
 export async function run() {
+  V.activateProduct(); // other document products may have been loaded into this process (node check.js)
   let n = 0;
   let fail = 0;
   const ok = (name, cond, info) => { n++; if (!cond) { fail++; console.log('FAIL ' + name + (info !== undefined ? ' ' + JSON.stringify(info).slice(0, 300) : '')); } };

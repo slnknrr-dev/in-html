@@ -1,0 +1,455 @@
+/* bookmarks-editor/app.css - Bookmarks: sidebar + list layout, list / cards / compact items, selection, bulk bar,
+   search suggestions, dialogs (editor, tags, folders, import / export, duplicates, settings, help), sign-in screens.
+   Needs ui/base.css + ui/app.css. Phones: the sidebar is a drawer and the bulk bar sits at the bottom. */
+
+/* CONTRACT
+   - Namespace `bm-`; shared primitives are `ed-` (ui/base.css), shell `ap-` (ui/app.css). Loaded third, so a single
+     class here (0,1,0) overrides a primitive or the shell by source order, without !important.
+   - Specificity budget: one class; two for context or state (`.bm-l-cards .bm-item`, `.bm-item.bm-sel`). Layout
+     variants are context classes on the list root (.bm-l-list / .bm-l-cards / .bm-l-compact, set by list.js), so
+     one item markup serves three looks and switching layout is a single className write.
+   - State classes: `ed-on` (current nav / tag / radio, reused from base), `bm-sel` (selected item), and body-level
+     modes toggled by JS: bm-dragging, bm-drop-page, bm-drawer-open. A body class reaches any descendant with one
+     extra class (0,2,0) instead of threading state through every component.
+   - Colours via tokens only; exceptions (avatar hsl from --bm-hue, white avatar/logo text, drawer scrim) are marked.
+   - Per-element custom properties (--bm-depth, --bm-hue) are set inline by JS: data in a variable, rule in CSS. The
+     alternative (inline padding / background) would hard-code layout in JS and block media-query overrides.
+   - !important: three uses, each commented (drop highlight, chip input focus ring, print).
+   - The 57px offsets below = .ap-top min-height 56px + 1px border-bottom (ui/app.css). The header grows if it
+     wraps, but below 860px the sidebar stops being sticky, so the constant only matters on wide screens. */
+
+/* Two-column app on top of .ap-main: (0,1,0) after ui/app.css wins padding/max-width by order. minmax(0,1fr): the
+   default 1fr = minmax(auto,1fr) would let a long unbroken URL widen the column past the viewport.
+   align-items:start: the grid item must not stretch, or position:sticky on .bm-side has no room to stick. */
+.bm-app { display: grid; grid-template-columns: 268px minmax(0, 1fr); padding: 0; max-width: none; align-items: start; }
+/* Spans both columns so the boot spinner (static in index.html) is centred on the page, not in the sidebar track. */
+.bm-loading { grid-column: 1 / -1; display: grid; place-items: center; min-height: 50vh; }
+/* Sign-in screen: 140px ~ header + footer, so the card sits in the visual middle without forcing a scrollbar. */
+.bm-gate-main { display: grid; place-items: center; min-height: calc(100vh - 140px); }
+
+/* --- sidebar ----------------------------------------------------------------------------------------------------------------- */
+/* Sticky sidebar with its own scroll. Two height declarations = progressive enhancement: engines without dvh keep
+   the vh line; with dvh the mobile URL bar no longer hides the bottom. overscroll-behavior:contain stops a scroll
+   that reaches the end of the tree from chaining into the page. */
+.bm-side {
+  position: sticky; top: 57px; height: calc(100vh - 57px); height: calc(100dvh - 57px); overflow: auto; padding: 14px 10px 28px;
+  border-right: 1px solid var(--ed-border); background: var(--ed-panel); overscroll-behavior: contain;
+}
+/* Adjacent-sibling spacing: no trailing margin on the last section, no :last-child fixup. */
+.bm-side-sec + .bm-side-sec { margin-top: 18px; }
+.bm-nav, .bm-tree { list-style: none; margin: 0; padding: 0; }
+/* Buttons restyled as rows: border:0 + transparent background undo the UA button look; width:100% makes the whole
+   row the hit area. 550 weight sits between regular and semibold (variable fonts honour it, static ones round). */
+.bm-nav-i, .bm-tree-b {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 0 10px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--ed-text); font-weight: 550; text-align: left;
+}
+.bm-nav-i .ed-ic, .bm-tree-b .ed-ic { color: var(--ed-muted); }
+.bm-nav-i:hover, .bm-tree-row:hover { background: var(--ed-hover); }
+/* Hover and current state are painted on the row; for tree items the row wraps both the twisty and the label button,
+   so highlighting the button alone would leave the twisty outside the pill. */
+.bm-nav-i.ed-on, .bm-tree-row.ed-on { background: var(--ed-accent-weak); }
+.bm-nav-i.ed-on, .bm-nav-i.ed-on .ed-ic, .bm-tree-row.ed-on .bm-tree-b, .bm-tree-row.ed-on .ed-ic { color: var(--ed-accent); }
+/* flex:1 + min-width:0 + ellipsis: the truncation triple. Without min-width:0 a flex item never shrinks below its
+   content and the count is pushed out of the sidebar. */
+.bm-nav-l { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* margin-left:auto pins the counter right; tabular-nums keeps a column of counts aligned. */
+.bm-count { margin-left: auto; padding-left: 6px; font-size: 12px; font-weight: 500; color: var(--ed-faint); font-variant-numeric: tabular-nums; }
+.bm-side-h { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 0 4px 6px 10px; min-height: 26px; }
+.bm-side-h h2 { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--ed-faint); }
+.bm-side-empty { margin: 0 10px; color: var(--ed-faint); font-size: 12.5px; }
+/* Indent by depth: --bm-depth set inline in list.js. 14px per level keeps 6+ levels readable inside 268px. */
+.bm-tree-row { display: flex; align-items: center; padding-left: calc(var(--bm-depth, 0) * 14px); border-radius: 8px; }
+.bm-tree-b { flex: 1 1 auto; min-width: 0; min-height: 32px; padding: 0 8px 0 2px; background: transparent; font-weight: 500; }
+/* The row already shows hover (above); a second background on the button would double-tint. */
+.bm-tree-b:hover { background: transparent; }
+.bm-tree-tw { flex: none; display: inline-grid; place-items: center; width: 22px; height: 30px; padding: 0; border: 0; background: transparent; color: var(--ed-faint); border-radius: 6px; }
+/* Twisty: one chevron rotated by aria-expanded. The ARIA attribute is the single source of truth for assistive tech
+   and visuals alike; a separate .open class could drift from it. */
+.bm-tree-tw svg { width: 14px; height: 14px; transition: transform .15s; }
+.bm-tree-tw[aria-expanded="true"] svg { transform: rotate(90deg); }
+.bm-tree-tw:hover { color: var(--ed-text); }
+.bm-tagfilter { height: 30px; margin: 0 4px 8px; width: calc(100% - 8px); }
+/* Tag cloud: wrap + gap; the pill shape (999px radius) works for any height, unlike a fixed px radius. */
+.bm-tagcloud { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 4px; }
+.bm-tagbtn {
+  display: inline-flex; align-items: baseline; gap: 4px; padding: 2px 9px; border: 1px solid var(--ed-border); border-radius: 999px;
+  background: var(--ed-panel); color: var(--ed-muted); line-height: 1.5;
+}
+.bm-tagbtn:hover { border-color: var(--ed-faint); color: var(--ed-text); }
+.bm-tagbtn.ed-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); color: var(--ed-accent); }
+.bm-tagn { font-size: 10.5px; opacity: .65; font-variant-numeric: tabular-nums; }
+/* Five weight buckets, font-size by tag frequency (class chosen in list.js). Discrete classes, not inline sizes, so
+   the scale lives here. */
+.bm-w1 { font-size: 11.5px; } .bm-w2 { font-size: 12.5px; } .bm-w3 { font-size: 13.5px; } .bm-w4 { font-size: 14.5px; font-weight: 550; } .bm-w5 { font-size: 15.5px; font-weight: 600; }
+/* Active drop target while dragging. outline (not border) adds no layout shift; negative offset keeps it inside an
+   overflow:auto parent. !important: hover and .ed-on rows set background with equal or higher specificity (0,2,0)
+   and the drop feedback must win over both while the pointer is over them. */
+.bm-drop-on { outline: 2px dashed var(--ed-accent); outline-offset: -2px; background: var(--ed-accent-weak) !important; }
+/* While a drag runs (body.bm-dragging, list.js), every valid drop zone gets a faint inset ring so the user sees
+   where items can land. Only nav entries that accept drops are listed. */
+.bm-dragging .bm-tree-row, .bm-dragging .bm-nav-i[data-drop="all"], .bm-dragging .bm-nav-i[data-drop="fav"], .bm-dragging .bm-nav-i[data-drop="unread"], .bm-dragging .bm-nav-i[data-drop="archive"] { box-shadow: inset 0 0 0 1px var(--ed-border-strong); }
+/* Drawer scrim and hamburger stay in the DOM; shown only by the narrow-screen media query at the end. */
+.bm-backdrop { display: none; }
+.bm-menu-btn { display: none; }
+
+/* --- content: search, toolbar, bulk bar --------------------------------------------------------------------------------------- */
+/* Column of bar / toolbar / list. min-width:0: grid child, see .bm-app. */
+.bm-content { min-width: 0; display: flex; flex-direction: column; gap: 10px; padding: 14px 22px 40px; }
+.bm-bar { display: flex; align-items: center; gap: 8px; }
+/* position:relative anchors the absolute icon, help button and suggestion popup to the search field. */
+.bm-search { position: relative; flex: 1 1 auto; min-width: 0; }
+/* Horizontal padding reserves room for the absolute icon (left) and help button (right): text never runs under them. */
+.bm-q { height: 40px; padding: 0 38px 0 36px; font-size: 14.5px; border-radius: 10px; }
+/* type=search draws its own clear "x" in WebKit/Blink, colliding with the help button; hidden for one consistent look. */
+.bm-q::-webkit-search-cancel-button { display: none; }
+/* pointer-events:none: a click on the magnifier reaches the input underneath instead of being swallowed. */
+.bm-q-ic { position: absolute; left: 11px; top: 11px; color: var(--ed-faint); pointer-events: none; }
+.bm-q-ic svg { width: 18px; height: 18px; }
+.bm-q-help { position: absolute; right: 5px; top: 5px; }
+.bm-add { height: 40px; padding: 0 16px; border-radius: 10px; }
+/* Suggestion popup: absolute under the field, left/right 0 = field width. z-index 40 clears the sticky bulk bar (25)
+   and header (30). max-height + overflow keeps a long list inside the viewport. */
+.bm-sugg {
+  position: absolute; z-index: 40; top: calc(100% + 4px); left: 0; right: 0; margin: 0; padding: 4px; list-style: none; max-height: 320px; overflow: auto;
+  background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: 10px; box-shadow: var(--ed-shadow-lg);
+}
+.bm-sugg-i { display: flex; align-items: center; gap: 10px; min-height: 32px; padding: 0 10px; border-radius: 6px; cursor: pointer; }
+/* .ed-on is the keyboard-highlighted row (arrow keys); hover and keyboard share one look so they never disagree. */
+.bm-sugg-i:hover, .bm-sugg-i.ed-on { background: var(--ed-accent-weak); color: var(--ed-accent); }
+.bm-sugg-k { min-width: 52px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-faint); }
+.bm-sugg-v { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bm-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 36px; }
+.bm-title-wrap { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+/* overflow-wrap:anywhere: folder names can be one long token; anywhere (unlike break-word) also lowers min-content,
+   so the flex parent can actually shrink. */
+.bm-view-t { font-size: 19px; font-weight: 680; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.bm-view-n { color: var(--ed-muted); font-size: 13px; }
+.bm-crumbs { display: flex; flex-wrap: wrap; align-items: baseline; color: var(--ed-faint); font-size: 13px; width: 100%; }
+.bm-crumb-b { border: 0; background: transparent; padding: 0; color: var(--ed-muted); }
+.bm-crumb-b:hover { color: var(--ed-accent); text-decoration: underline; }
+.bm-sort { width: auto; height: 30px; }
+.bm-layouts .ed-seg-btn { padding: 0 8px; }
+.bm-layouts svg { width: 16px; height: 16px; }
+/* Bulk action bar sticks under the header (64px = 57px header + gap). z-index 25 < header 30: it slides under the
+   header, not over it. color-mix derives a translucent accent border from the token: no extra token per theme. */
+.bm-bulk {
+  position: sticky; top: 64px; z-index: 25; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 6px 8px;
+  background: var(--ed-accent-weak); border: 1px solid color-mix(in srgb, var(--ed-accent) 35%, transparent); border-radius: 12px; box-shadow: var(--ed-shadow-sm);
+}
+.bm-bulk-n { font-weight: 650; color: var(--ed-accent); }
+/* (0,2,0) beats .ed-btn's own background: buttons stay panel-coloured on the tinted bar for contrast. */
+.bm-bulk .ed-btn { background: var(--ed-panel); }
+
+/* --- list ------------------------------------------------------------------------------------------------------------------------- */
+/* The list root is focusable (keyboard navigation in list.js); focus is shown on the current item instead. */
+.bm-list { outline: none; }
+/* List / compact: one rounded panel; overflow:hidden clips item hover backgrounds to the radius. */
+.bm-l-list, .bm-l-compact { display: flex; flex-direction: column; background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: 14px; overflow: hidden; box-shadow: var(--ed-shadow-sm); }
+/* Cards: auto-fill + minmax(260px,1fr) = as many columns as fit, no media queries. align-items:start: cards keep
+   their own height instead of stretching to the tallest one in the row. */
+.bm-l-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; align-items: start; }
+/* position:relative anchors the absolute card actions. outline:none: the focus-visible ring below replaces it. */
+.bm-item { position: relative; display: flex; align-items: flex-start; gap: 12px; padding: 11px 12px 11px 14px; outline: none; cursor: default; }
+/* Separators between items only (adjacent sibling), never above the first or below the last. */
+.bm-l-list .bm-item + .bm-item, .bm-l-compact .bm-item + .bm-item { border-top: 1px solid var(--ed-border); }
+.bm-item:hover { background: var(--ed-panel-2); }
+/* Inset box-shadow, not outline: the panel has overflow:hidden and would clip an outside outline. */
+.bm-item:focus-visible { box-shadow: inset 0 0 0 2px var(--ed-accent); }
+.bm-item.bm-sel { background: var(--ed-accent-weak); }
+/* Selection checkbox hidden until needed: shown in select mode / with a selection (classes on the list root, set in
+   list.js) and, on hover-capable devices only, on hover. Touch has no hover, so it relies on select mode instead of
+   a checkbox that would appear on the first tap and steal it. */
+.bm-check { display: none; flex: none; align-items: center; justify-content: center; width: 20px; height: 32px; cursor: pointer; }
+.bm-box { display: inline-grid; place-items: center; width: 18px; height: 18px; border: 1.5px solid var(--ed-border-strong); border-radius: 5px; background: var(--ed-panel); color: var(--ed-accent-text); }
+.bm-box svg { width: 13px; height: 13px; stroke-width: 3; }
+.bm-sel .bm-box { background: var(--ed-accent); border-color: var(--ed-accent); }
+.bm-has-sel .bm-check, .bm-selecting .bm-check { display: inline-flex; }
+@media (hover: hover) { .bm-item:hover .bm-check { display: inline-flex; } }
+/* Letter avatar for sites without an icon. Hue hashed from the host (common.js hueOf -> --bm-hue), fixed S/L so
+   every hue has similar contrast with white text. Raw #fff deliberate: the background is not a theme token. */
+.bm-av {
+  flex: none; display: inline-grid; place-items: center; border-radius: 9px; color: #fff; font-weight: 700; font-size: 14px; line-height: 1;
+  background: hsl(var(--bm-hue, 220) 55% 46%); user-select: none;
+}
+.bm-av-img { background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.bm-av img { display: block; object-fit: contain; }
+/* The text column takes the free width; min-width:0 lets titles wrap or ellipsize inside it. */
+.bm-main { flex: 1 1 auto; min-width: 0; }
+.bm-line1 { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.bm-title { color: var(--ed-text); font-weight: 600; font-size: 14.5px; text-decoration: none; overflow-wrap: anywhere; line-height: 1.35; }
+/* Tag-qualified (0,1,1) on purpose: only real links underline; a .bm-title span (no URL) stays plain. */
+a.bm-title:hover { color: var(--ed-accent); text-decoration: underline; }
+.bm-nolink { color: var(--ed-muted); }
+.bm-is-unread .bm-title { font-weight: 700; }
+.bm-flags { display: inline-flex; align-items: center; gap: 6px; flex: none; color: var(--ed-faint); }
+.bm-flags svg { width: 14px; height: 14px; display: block; }
+.bm-unread { width: 8px; height: 8px; border-radius: 50%; background: var(--ed-accent); }
+.bm-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; margin-top: 2px; font-size: 12.5px; color: var(--ed-muted); min-width: 0; }
+.bm-host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.bm-crumb { display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: var(--ed-muted); font-size: inherit; }
+.bm-crumb .ed-ic, .bm-crumb svg { width: 13px; height: 13px; }
+.bm-crumb:hover { color: var(--ed-accent); }
+/* Two-line clamp. -webkit-line-clamp needs display:-webkit-box + box-orient; it is the clamp every engine ships.
+   pre-line keeps the user's line breaks but collapses runs of spaces. */
+.bm-notes { margin-top: 3px; font-size: 13px; color: color-mix(in srgb, var(--ed-text) 82%, transparent); white-space: pre-line; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.bm-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.bm-tag { height: 22px; padding: 0 9px; border: 0; border-radius: 999px; background: var(--ed-hover); color: var(--ed-muted); font-size: 12px; font-weight: 500; }
+/* The '#' is decoration in CSS, so the button text (and its accessible name) stays the bare tag. */
+.bm-tag::before { content: "#"; opacity: .5; }
+.bm-tag:hover { background: var(--ed-accent-weak); color: var(--ed-accent); }
+/* Negative margins align the icon buttons' visual edge with the text edge despite their padding. */
+.bm-acts { display: flex; align-items: center; gap: 0; flex: none; margin: -3px -4px 0 0; }
+/* Row actions appear on hover or keyboard focus (focus-within) on mouse devices; on touch they are always visible,
+   since there is no hover to reveal them. A starred item keeps its star visible as information. opacity, not
+   display: the buttons stay focusable and keep their space, so the row does not reflow on hover. */
+@media (hover: hover) {
+  .bm-acts .ed-iconbtn { opacity: 0; transition: opacity .12s; }
+  .bm-item:hover .bm-acts .ed-iconbtn, .bm-item:focus-within .bm-acts .ed-iconbtn, .bm-acts .ed-star-on { opacity: 1; }
+}
+.bm-subfolders { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--ed-border); }
+/* In card layout subfolders span the whole grid row instead of becoming one card-sized cell. */
+.bm-l-cards .bm-subfolders { grid-column: 1 / -1; border: 0; padding: 0; }
+.bm-subfolder { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 12px; border: 1px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel-2); font-weight: 550; }
+.bm-subfolder:hover { border-color: var(--ed-accent); color: var(--ed-accent); }
+.bm-more-items { margin: 10px auto; }
+.bm-l-cards .bm-more-items { grid-column: 1 / -1; }
+
+/* Cards */
+/* Cards: context selector (0,2,0) restyles the same .bm-item markup. flex-wrap lets meta and tags flow under the title. */
+.bm-l-cards .bm-item { flex-wrap: wrap; padding: 14px; border: 1px solid var(--ed-border); border-radius: 14px; background: var(--ed-panel); box-shadow: var(--ed-shadow-sm); min-height: 120px; }
+.bm-l-cards .bm-item:hover { border-color: var(--ed-border-strong); box-shadow: var(--ed-shadow); background: var(--ed-panel); }
+.bm-l-cards .bm-item.bm-sel { background: var(--ed-accent-weak); border-color: var(--ed-accent); }
+.bm-l-cards .bm-notes { -webkit-line-clamp: 4; }
+/* Actions float to the card corner; .bm-line1 reserves 56px on the right so the title never runs under them. */
+.bm-l-cards .bm-acts { position: absolute; top: 10px; right: 10px; margin: 0; }
+.bm-l-cards .bm-line1 { padding-right: 56px; }
+
+/* Compact */
+/* Compact: one line per item. Title ellipsizes, meta never wraps, tags get at most 30% and clip. Crumb hidden: the
+   folder path is the least useful datum in a dense list. */
+.bm-l-compact .bm-item { align-items: center; gap: 10px; padding: 6px 10px 6px 12px; }
+.bm-l-compact .bm-check { height: 22px; }
+.bm-l-compact .bm-av { border-radius: 6px; font-size: 11px; }
+.bm-l-compact .bm-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.bm-l-compact .bm-line1 { flex: 1 1 auto; min-width: 0; }
+.bm-l-compact .bm-title { font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bm-l-compact .bm-meta { flex: 0 1 auto; flex-wrap: nowrap; margin: 0; white-space: nowrap; }
+.bm-l-compact .bm-meta .bm-crumb { display: none; }
+.bm-l-compact .bm-host { max-width: 220px; }
+.bm-l-compact .bm-tags { flex-wrap: nowrap; margin: 0; overflow: hidden; max-width: 30%; }
+.bm-l-compact .bm-acts { margin: 0; }
+.bm-l-compact .bm-acts .ed-iconbtn { width: 26px; height: 26px; }
+
+/* Empty states */
+/* Empty and welcome states: centred column, text capped at 52ch for readable line length. */
+.bm-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 48px 20px; text-align: center; color: var(--ed-muted); }
+.bm-l-cards .bm-empty { grid-column: 1 / -1; }
+.bm-empty h2 { color: var(--ed-text); font-size: 18px; }
+.bm-empty p { margin: 0; max-width: 52ch; }
+.bm-empty-ic { display: grid; place-items: center; width: 56px; height: 56px; border-radius: 16px; background: var(--ed-accent-weak); color: var(--ed-accent); }
+.bm-empty-ic svg { width: 28px; height: 28px; }
+.bm-welcome { padding: 56px 20px; }
+.bm-howto { max-width: 560px; text-align: left; margin-top: 8px; }
+/* The <details> body is left-aligned for reading; only the summary toggle is centred under the welcome text. */
+.bm-howto summary { cursor: pointer; color: var(--ed-accent); text-align: center; }
+.bm-howto ul { margin: 10px 0 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+/* Custom drag image: rendered off-screen (top:-100px) and handed to dataTransfer.setDragImage in list.js. It must be
+   in the DOM and painted to be captured, so display:none or visibility:hidden would not work. */
+.bm-drag-ghost { position: fixed; top: -100px; left: 0; padding: 6px 12px; border-radius: 999px; background: var(--ed-accent); color: var(--ed-accent-text); font-weight: 650; }
+/* External file / link dragged over the window (main.js): the whole content area shows a dashed drop zone. */
+body.bm-drop-page .bm-content { outline: 2px dashed var(--ed-accent); outline-offset: -6px; border-radius: 12px; }
+
+/* --- header chip and footer -------------------------------------------------------------------------------------------------------- */
+/* Sync status chip in the header; max-width + ellipsis on .bm-chip-t keep a long error from widening the header. */
+.bm-chip-sync { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--ed-border); border-radius: 999px; background: var(--ed-panel); color: var(--ed-muted); font-size: 12.5px; font-weight: 550; max-width: 220px; }
+.bm-chip-sync .ed-ic, .bm-chip-sync svg { width: 16px; height: 16px; }
+.bm-chip-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bm-st-ok .ed-ic { color: var(--ed-ok); }
+/* Reuses the shared ed-spin keyframes from ui/base.css; no duplicate @keyframes per app. */
+.bm-st-syncing .ed-ic svg { animation: ed-spin 1.2s linear infinite; }
+.bm-st-offline { color: var(--ed-muted); }
+.bm-st-error, .bm-st-auth { color: var(--ed-danger); border-color: color-mix(in srgb, var(--ed-danger) 40%, transparent); }
+.bm-foot { color: var(--ed-warn); }
+/* Busy state: pointer-events:none blocks double submits while a request runs; opacity signals it. */
+.bm-busy { opacity: .7; pointer-events: none; }
+
+/* --- dialogs --------------------------------------------------------------------------------------------------------------------------- */
+.bm-dlg-edit { width: min(600px, 100%); }
+.bm-edit-head { display: flex; align-items: flex-end; gap: 12px; }
+.bm-edit-head > .ed-field { flex: 1 1 auto; }
+.bm-edit-av { flex: none; padding-bottom: 0; }
+/* Duplicate warning in the editor. :empty hides the box until JS fills it: no separate hidden toggling. */
+.bm-dup { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--ed-warn) 14%, transparent); font-size: 13px; }
+.bm-dup:empty { display: none; }
+.bm-dup .ed-ic { color: var(--ed-warn); }
+.bm-dup span { flex: 1 1 200px; }
+.bm-checks { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+.bm-check-row { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+/* accent-color tints native checkboxes with the theme accent and keeps the native control (a11y, keyboard). */
+.bm-check-row input { width: 16px; height: 16px; accent-color: var(--ed-accent); }
+.bm-dates { margin: 0; }
+/* margin-right:auto pushes the remaining footer buttons right: one extra action left, confirm actions right. */
+.ed-dlg-foot .bm-dlg-left { margin-right: auto; }
+/* Tag input = chips + a borderless input inside one field-looking box; :focus-within paints the focus ring on the
+   box while the inner input has focus, so the composite reads as one field. */
+.bm-chipbox { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; height: auto; min-height: 34px; padding: 3px 6px; cursor: text; }
+.bm-chipbox:focus-within { border-color: var(--ed-accent); box-shadow: var(--ed-focus); }
+/* display:contents removes the wrapper box so the chips become flex items of .bm-chipbox and wrap with the input. */
+.bm-chips { display: contents; }
+.bm-chips-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+.bm-chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 3px 0 10px; border-radius: 999px; background: var(--ed-accent-weak); color: var(--ed-accent); font-size: 12.5px; font-weight: 550; }
+.bm-chip .bm-count { color: inherit; opacity: .7; padding-left: 2px; }
+.bm-chip-off { opacity: .55; text-decoration: line-through; }
+.bm-chip-x { display: inline-grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; }
+.bm-chip-x svg { width: 12px; height: 12px; }
+.bm-chip-x:hover { background: color-mix(in srgb, var(--ed-accent) 18%, transparent); }
+/* box-shadow:none removes the global :focus-visible ring (ui/base.css): the chip box already shows focus via
+   :focus-within, a second ring inside it would double up. The input has no .ed-input class, so the only rival is
+   :focus-visible (0,1,0), which this later (0,1,0) rule already beats by order; !important is defensive only. */
+.bm-chip-in { flex: 1 1 90px; min-width: 90px; height: 26px; border: 0; outline: 0; background: transparent; box-shadow: none !important; }
+.bm-chipbox .bm-sugg { top: calc(100% + 4px); }
+.bm-pick { max-height: min(50vh, 420px); overflow: auto; padding: 4px; border: 1px solid var(--ed-border); border-radius: 10px; }
+/* Folder picker rows indented by --bm-depth (dialogs.js). :has(input:checked) highlights the row from the native
+   radio state, no JS class to keep in sync. Engines without :has() just skip the highlight. */
+.bm-pick-i { display: flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 10px 0 calc(10px + var(--bm-depth, 0) * 18px); border-radius: 7px; cursor: pointer; }
+.bm-pick-i:hover { background: var(--ed-hover); }
+.bm-pick-i:has(input:checked) { background: var(--ed-accent-weak); color: var(--ed-accent); }
+.bm-pick-i input { accent-color: var(--ed-accent); }
+.bm-tagman { max-height: 50vh; overflow: auto; border: 1px solid var(--ed-border); border-radius: 10px; }
+.bm-tagman-i { display: flex; align-items: center; gap: 8px; padding: 4px 8px 4px 10px; }
+.bm-tagman-i + .bm-tagman-i { border-top: 1px solid var(--ed-border); }
+.bm-tagman-n { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; font-weight: 550; }
+.bm-tagman-i .bm-count { margin-left: 0; margin-right: 6px; }
+.bm-dupes { display: flex; flex-direction: column; gap: 10px; max-height: 56vh; overflow: auto; }
+.bm-dupe { border: 1px solid var(--ed-border); border-radius: 10px; padding: 8px 10px; }
+.bm-dupe-h { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.bm-dupe-url { font-family: var(--ed-mono); font-size: 12px; color: var(--ed-muted); overflow-wrap: anywhere; }
+.bm-dupe-i { display: flex; align-items: center; gap: 10px; padding: 5px 4px; border-radius: 6px; cursor: pointer; }
+/* Same :has() pattern as the folder picker: the checkbox is the state. */
+.bm-dupe-i:has(input:checked) { background: var(--ed-accent-weak); }
+.bm-dupe-t { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; font-weight: 550; }
+.bm-dupe-t small { font-weight: 400; color: var(--ed-muted); }
+.bm-tabs { align-self: flex-start; }
+.bm-tabs .ed-seg-btn { min-height: 30px; padding: 0 14px; }
+.bm-transfer .ap-drop { min-height: 104px; }
+.bm-paste { margin-top: 8px; font-family: var(--ed-mono); font-size: 12px; }
+.bm-pastebox summary, .bm-map summary, .bm-dupreport summary { cursor: pointer; color: var(--ed-accent); font-weight: 550; }
+.bm-imp-out { display: flex; flex-direction: column; gap: 12px; }
+.bm-imp-out:empty { display: none; }
+.bm-imp-src { gap: 8px; }
+.bm-imp-src .ed-select { width: auto; max-width: 260px; }
+.bm-stats { display: flex; flex-wrap: wrap; gap: 8px; }
+.bm-stat { padding: 4px 10px; border-radius: 999px; background: var(--ed-hover); font-size: 13px; }
+.bm-stat b { font-variant-numeric: tabular-nums; }
+.bm-sub-h { font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--ed-muted); }
+.bm-imp-table { max-height: 260px; }
+.bm-cell-url { font-family: var(--ed-mono); font-size: 12px; overflow-wrap: anywhere; max-width: 320px; }
+.bm-dupreport ul { margin: 8px 0 0; padding-left: 18px; max-height: 200px; overflow: auto; font-size: 13px; }
+/* CSV column mapping: auto-fill grid of 200px cells, adapts from one to four columns without breakpoints. */
+.bm-map-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px 12px; margin-top: 8px; }
+.bm-map-i { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--ed-muted); }
+/* fieldset reset: the UA gives it border, padding and min-width:min-content (which can overflow narrow dialogs). */
+.bm-fs { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 6px; }
+.bm-fs legend { padding: 0; margin-bottom: 6px; font-size: 12px; font-weight: 700; color: var(--ed-muted); }
+.bm-radio { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border: 1px solid var(--ed-border); border-radius: 10px; cursor: pointer; }
+.bm-radio.ed-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.bm-radio input { margin-top: 3px; accent-color: var(--ed-accent); }
+.bm-radio span { display: flex; flex-direction: column; }
+.bm-radio small { color: var(--ed-muted); }
+.bm-settings { gap: 18px; }
+.bm-set-sec { display: flex; flex-direction: column; gap: 10px; }
+.bm-set-sec + .bm-set-sec { padding-top: 14px; border-top: 1px solid var(--ed-border); }
+.bm-set-sec h3 { font-size: 14px; font-weight: 700; }
+.bm-set-sec h4 { margin: 8px 0 0; font-size: 13px; }
+.bm-set-sec .ed-hint { margin: 0; }
+.bm-linkrow { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.bm-linkrow code { flex: 1 1 200px; min-width: 0; padding: 5px 8px; border-radius: 6px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); font: 12px var(--ed-mono); overflow-wrap: anywhere; }
+.bm-bookmarklet { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border: 1px dashed var(--ed-accent); border-radius: 999px; color: var(--ed-accent); font-weight: 650; text-decoration: none; cursor: grab; }
+.bm-rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--ed-border); border-radius: 10px; }
+.bm-rows li { display: flex; align-items: center; gap: 10px; padding: 7px 10px; }
+.bm-rows li + li { border-top: 1px solid var(--ed-border); }
+.bm-rows-t { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.bm-rows-t small { color: var(--ed-muted); }
+.bm-help-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; }
+.bm-help-cols h3 { font-size: 13px; margin-bottom: 8px; }
+.bm-help { border-collapse: collapse; width: 100%; font-size: 13px; }
+.bm-help th { text-align: left; padding: 4px 12px 4px 0; vertical-align: top; white-space: nowrap; font-weight: 500; }
+.bm-help td { padding: 4px 0; color: var(--ed-muted); }
+/* white-space:pre keeps multi-space key combos intact; the syntax table overrides to normal for long examples. */
+.bm-help kbd { padding: 1px 6px; border: 1px solid var(--ed-border); border-radius: 5px; background: var(--ed-panel-2); color: var(--ed-text); white-space: pre; }
+.bm-syntax kbd { white-space: normal; }
+
+/* --- sign-in screens ----------------------------------------------------------------------------------------------------------------------- */
+.bm-gate { width: 100%; display: grid; place-items: center; padding: 24px 0; }
+.bm-gate-card { width: min(420px, 100%); padding: 26px 24px; background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: 16px; box-shadow: var(--ed-shadow); }
+/* Fixed gradient end #7c3aed: the purple of the favicon gradient (index.html), the same in both themes. */
+.bm-gate-logo { display: grid; place-items: center; width: 48px; height: 48px; margin-bottom: 14px; border-radius: 14px; color: #fff; background: linear-gradient(135deg, var(--ed-accent), #7c3aed); }
+.bm-gate-logo svg { width: 26px; height: 26px; }
+.bm-auth-form { display: flex; flex-direction: column; gap: 12px; }
+.bm-auth-form h2 { font-size: 20px; }
+.bm-auth-form .ed-hint { margin: 0; }
+.bm-auth-form .ed-input { height: 38px; }
+.bm-auth-go { height: 38px; margin-top: 4px; }
+.bm-auth-err { margin: 0; }
+.bm-gate-note { margin-top: 14px; }
+.bm-connect-out { display: flex; flex-direction: column; gap: 10px; }
+.bm-connect-out .bm-auth-form { padding: 14px; border: 1px solid var(--ed-border); border-radius: 12px; }
+.bm-secret code { color: var(--ed-text); }
+
+/* --- narrow screens ----------------------------------------------------------------------------------------------------------------------------- */
+/* Narrow screens: single column; the sidebar becomes an off-canvas drawer and the bulk bar a bottom toolbar.
+   860px: below it the 268px sidebar plus a usable list no longer fit. */
+@media (max-width: 860px) {
+  .bm-app { grid-template-columns: minmax(0, 1fr); }
+  /* Drawer: fixed, slid out with transform (composited, no layout). visibility:hidden as well, so the off-screen
+     links leave the tab order and the accessibility tree; transform alone would keep them focusable. -104% also
+     hides the box-shadow. z-index 90 above the scrim (80). */
+  .bm-side {
+    position: fixed; z-index: 90; top: 0; left: 0; bottom: 0; width: min(310px, 86vw); height: 100%; box-shadow: var(--ed-shadow-lg);
+    transform: translateX(-104%); transition: transform .2s ease; visibility: hidden;
+  }
+  body.bm-drawer-open .bm-side { transform: none; visibility: visible; }
+  /* Raw rgba scrim: a dimming layer is the same in both themes, so no token. */
+  body.bm-drawer-open .bm-backdrop { display: block; position: fixed; inset: 0; z-index: 80; background: rgba(15, 18, 24, .45); }
+  .bm-menu-btn { display: inline-flex; width: 40px; height: 40px; flex: none; border: 1px solid var(--ed-border-strong); background: var(--ed-panel); }
+  /* 96px bottom padding: room for the fixed bulk bar so it never covers the last item. */
+  .bm-content { padding: 12px 12px 96px; }
+  /* Bulk bar moves to the bottom (thumb reach); top:auto cancels the sticky offset. Labels hidden, icon buttons only. */
+  .bm-bulk { position: fixed; z-index: 70; top: auto; left: 8px; right: 8px; bottom: 10px; box-shadow: var(--ed-shadow-lg); background: var(--ed-panel); }
+  .bm-bulk-l { display: none; }
+  .bm-bulk .bm-bulk-b { width: 36px; height: 36px; padding: 0; }
+  .bm-chip-sync .bm-chip-t { display: none; }
+}
+/* Phones: icon-only add button, single card column, bigger action targets. The bulk bar scrolls horizontally instead
+   of wrapping (scrollbar hidden); flex:none keeps buttons from squeezing, the spacer still absorbs extra width. */
+@media (max-width: 560px) {
+  .bm-add-l { display: none; }
+  .bm-add { width: 40px; padding: 0; }
+  .bm-toolbar { gap: 6px; }
+  .bm-title-wrap { flex: 1 1 100%; }
+  .bm-sort { flex: 1 1 auto; max-width: 60%; }
+  .bm-item { gap: 10px; padding: 10px 8px 10px 10px; }
+  .bm-l-compact .bm-meta, .bm-l-compact .bm-tags { display: none; }
+  .bm-l-cards { grid-template-columns: minmax(0, 1fr); }
+  .bm-acts .ed-iconbtn { width: 34px; height: 34px; }
+  .ed-dialog { max-height: 92vh; }
+  .ed-backdrop { padding: 10px; }
+  .bm-edit-head { flex-wrap: wrap; }
+  .bm-bulk { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: 4px; }
+  .bm-bulk > * { flex: none; }
+  .bm-bulk .ed-spacer { flex: 1 0 0; }
+}
+/* Touch: rows and the twisty grow toward the 44px target guideline regardless of screen width. */
+@media (pointer: coarse) {
+  .bm-nav-i, .bm-tree-b { min-height: 42px; }
+  .bm-tree-tw { height: 40px; width: 30px; }
+  .bm-tag { height: 28px; }
+}
+/* Print: chrome and controls removed; !important beats inline display set by JS. The grid becomes block so the list
+   takes the full paper width. */
+@media print {
+  .bm-side, .bm-bar, .bm-toolbar .ed-seg, .bm-bulk, .bm-acts, .bm-check { display: none !important; }
+  .bm-app { display: block; }
+}

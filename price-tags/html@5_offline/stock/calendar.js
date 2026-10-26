@@ -1,0 +1,4 @@
+const RE=/^(\d{4})-(\d{2})-(\d{2})$/;const MS=86_400_000;function dayNumber(day){const m=RE.exec(String(day));if(!m)throw new RangeError(`day expected (YYYY-MM-DD): ${day}`);const t=Date.UTC(+m[1],+m[2]-1,+m[3]);const n=t/MS;if(fromDayNumber(n)!==day)throw new RangeError(`no such day: ${day}`);return n;}
+function fromDayNumber(n){return new Date(n*MS).toISOString().slice(0,10);}
+function isDay(s){try{dayNumber(s);return true;}catch{return false;}}
+const addDays=(day,n)=>fromDayNumber(dayNumber(day)+n);const daysBetween=(a,b)=>dayNumber(b)-dayNumber(a);export{daysBetween,isDay,addDays};

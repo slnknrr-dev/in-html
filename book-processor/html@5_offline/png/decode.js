@@ -1,0 +1,1 @@
+import"../codec/zlib.js";import"./chunks.js";const ADAM7=[[0,0,8,8],[4,0,8,8],[0,4,4,8],[2,0,4,4],[0,2,2,4],[1,0,2,2],[0,1,1,2]];export{ADAM7};

@@ -1,0 +1,306 @@
+/* qr-tool/app.css - QR Studio: create page (content, sticky stage with the styled code, design panels, export,
+   print sheet) and scan page (image / camera view with the detected outline, result card, history). Needs
+   ui/base.css + ui/app.css.
+
+   CONTRACT
+   - Namespace: own classes start with `qr-`; shared primitives `ed-` (ui/base.css), shell `ap-` (ui/app.css). Shared
+     classes are only targeted inside a qr- context (.qr-form .ed-seg, .ap-main.qr-create).
+   - Specificity budget: one class; two for state/context. One deliberate exception of four classes, commented below,
+     to out-rank a shell rule of three.
+   - Colours: UI chrome via tokens; the code's paper is raw #fff in every theme (scanners need dark modules on light
+     ground), and the verification badges use fixed saturated green/amber with white text so they read the same on
+     the light paper area in both themes.
+   - Custom properties as component inputs: colour presets receive --bg / --a / --b inline from JS, so one rule draws
+     any preset without per-preset classes.
+   - !important only in print, to hide everything but the print sheet. */
+
+.qr-create, .qr-scan { max-width: 1360px; }
+.qr-mono, .qr-hex, .qr-payload { font-family: var(--ed-mono); }
+/* Download links styled as buttons: undo link colour/underline the button primitive does not reset for <a>. */
+a.ed-btn { color: inherit; text-decoration: none; }
+a.ed-btn.ed-primary { color: var(--ed-accent-text); }
+
+/* ---------------------------------------------------------------- create: layout */
+/* Create page: content (a), stage (s, both rows), code info (c), design (d). Named areas make the breakpoints a
+   template swap; same layout system as barcode-studio so users of both apps find things in the same place. */
+.qr-work {
+  display: grid; gap: 18px; align-items: start;
+  grid-template-columns: minmax(290px, 340px) minmax(0, 1fr) minmax(270px, 320px);
+  grid-template-rows: auto 1fr;
+  grid-template-areas: "a s d" "c s d";
+}
+.qr-a { grid-area: a; }
+.qr-s { grid-area: s; }
+.qr-c { grid-area: c; }
+.qr-d { grid-area: d; }
+.qr-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* Sticky stage only when it fits: a sticky element taller than the viewport would hide its bottom (export). */
+@media (min-height: 700px) and (min-width: 861px) { .qr-s { position: sticky; top: 72px; } }
+@media (max-width: 1180px) {
+  .qr-work { grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); grid-template-rows: auto auto 1fr; grid-template-areas: "a s" "c s" "d s"; }
+}
+@media (max-width: 860px) {
+  .qr-work { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-template-areas: "a" "s" "c" "d"; }
+}
+
+/* ---------------------------------------------------------------- chips (types, styles) */
+/* Chips fill as many 58px columns as fit; the type and style pickers override with fixed 5 or 3 columns so the
+   grid stays aligned and predictable regardless of label length. */
+.qr-chips { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); }
+.qr-types { grid-template-columns: repeat(5, minmax(0, 1fr)); margin-bottom: 14px; }
+.qr-chip {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 58px; padding: 7px 4px 6px;
+  border: 1px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel-2); color: var(--ed-muted);
+  font-size: 11.5px; font-weight: 550; line-height: 1.15; text-align: center; transition: border-color .15s, background .15s, color .15s, transform .1s;
+}
+.qr-chip:hover { color: var(--ed-text); border-color: var(--ed-border-strong); }
+.qr-chip:active { transform: scale(.97); }
+/* Selected chip: inset box-shadow thickens the border visually without changing the box size. */
+.qr-chip.qr-on { color: var(--ed-accent); border-color: var(--ed-accent); background: var(--ed-accent-weak); box-shadow: inset 0 0 0 1px var(--ed-accent); }
+.qr-chip .ed-ic, .qr-chip .ed-ic svg { width: 20px; height: 20px; }
+/* Long translated labels break inside words (hyphens: auto uses the element's lang) rather than overflow. */
+.qr-chip-l { overflow-wrap: anywhere; hyphens: auto; }
+.qr-chip-art { display: inline-flex; }
+.qr-styles { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.qr-styles .qr-chip { font-size: 11px; padding-inline: 2px; }
+.qr-styles-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.qr-styles .qr-chip { min-height: 62px; }
+
+/* ---------------------------------------------------------------- stage */
+/* Stage background: accent glow + dot grid from tokens via color-mix(), so it follows dark mode. */
+.qr-stage {
+  min-height: 0; padding: clamp(18px, 4vw, 40px) 18px 16px; overflow: hidden;
+  background-image: radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--ed-accent) 14%, transparent), transparent 62%),
+    radial-gradient(color-mix(in srgb, var(--ed-text) 9%, transparent) 1px, transparent 1.3px);
+  background-size: auto, 16px 16px;
+}
+.qr-stage-in { display: flex; flex-direction: column; align-items: center; gap: 16px; width: 100%; }
+/* Square paper (aspect-ratio: 1) at most 400px: QR codes are square, so the box never jumps when content changes. */
+.qr-paper {
+  width: min(100%, 400px); aspect-ratio: 1; border-radius: 16px; overflow: hidden; background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .08), 0 18px 40px -12px rgba(16, 24, 40, .35);
+  transition: box-shadow .2s, transform .2s;
+}
+.qr-paper > svg { display: block; width: 100%; height: 100%; }
+/* Transparent-background preview: a checkerboard (repeating-conic-gradient) reveals the missing background. */
+.qr-paper.qr-transparent {
+  background: repeating-conic-gradient(#e7e9ee 0 25%, #ffffff 0 50%) 0 0 / 18px 18px;
+}
+.qr-paper.qr-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px; text-align: center;
+  background: var(--ed-panel); color: var(--ed-muted); border: 1.5px dashed var(--ed-border-strong); box-shadow: none;
+}
+.qr-empty-art svg { width: 64px; height: 64px; opacity: .45; }
+.qr-paper.qr-empty p { margin: 0; max-width: 28ch; }
+.qr-stage-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; min-height: 30px; }
+.qr-stage-meta { display: flex; gap: 6px; flex-wrap: wrap; }
+.qr-chip-info {
+  padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+  background: color-mix(in srgb, var(--ed-panel) 85%, transparent); border: 1px solid var(--ed-border); color: var(--ed-muted);
+}
+.qr-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px 4px 8px; border-radius: 999px; font-size: 12.5px; font-weight: 650; }
+/* :empty hides the badge until verification starts. */
+.qr-badge:empty { display: none; }
+.qr-badge .ed-ic, .qr-badge svg { width: 16px; height: 16px; }
+.qr-badge-ok { color: #fff; background: #15803d; }
+.qr-badge-fail { color: #fff; background: #b45309; }
+.qr-badge-checking { color: var(--ed-muted); background: var(--ed-panel); border: 1px solid var(--ed-border); }
+/* Spinner reuses the shared ed-spin keyframes from ui/base.css. */
+.qr-badge-checking svg { animation: ed-spin 1s linear infinite; }
+
+/* Warnings under the stage */
+.qr-warn { display: flex; flex-direction: column; gap: 6px; }
+.qr-warn:empty { display: none; }
+.qr-w {
+  display: flex; align-items: flex-start; gap: 8px; padding: 8px 12px; border-radius: 10px; font-size: 13px;
+  border: 1px solid var(--ed-border); background: var(--ed-panel);
+}
+.qr-w .ed-ic { margin-top: 1px; }
+/* Warning border tints mixed from state tokens with the neutral border, so they stay subtle in both themes. */
+.qr-w-warn { border-color: color-mix(in srgb, var(--ed-warn) 55%, var(--ed-border)); }
+.qr-w-warn .ed-ic { color: var(--ed-warn); }
+.qr-w-error { border-color: color-mix(in srgb, var(--ed-danger) 60%, var(--ed-border)); background: var(--ed-danger-weak); }
+.qr-w-error .ed-ic { color: var(--ed-danger); }
+.qr-w-info .ed-ic { color: var(--ed-accent); }
+
+/* Export */
+.qr-export { display: flex; flex-direction: column; gap: 8px; }
+.qr-export-row { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Export buttons share a row and grow; the size select keeps a modest fixed basis. */
+.qr-export-row > .ed-btn { flex: 1 1 auto; }
+.qr-size-sel { width: auto; flex: 0 1 140px; }
+
+/* Code info */
+.qr-ec { display: flex; width: 100%; }
+/* min-height 2.8em reserves two lines for the error-correction hint, so switching levels does not shift the
+   panel below. */
+.qr-ec-hint { margin: 6px 0 12px; min-height: 2.8em; }
+.qr-info .ap-kv { margin-bottom: 8px; }
+/* Capacity bar turns warning-coloured when the chosen version is full (state class from JS). */
+.qr-fill.qr-full > i { background: var(--ed-warn); }
+.qr-details { margin-top: 12px; border-top: 1px solid var(--ed-border); padding-top: 8px; }
+/* Custom disclosure marker: list-style for Firefox/Chromium, ::-webkit-details-marker for Safari. */
+.qr-details > summary {
+  display: flex; align-items: center; gap: 6px; padding: 4px 2px; cursor: pointer; list-style: none;
+  font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-muted);
+}
+.qr-details > summary::-webkit-details-marker { display: none; }
+.qr-details > summary .ed-ic { width: 14px; height: 14px; transition: transform .15s; }
+.qr-details[open] > summary .ed-ic { transform: rotate(90deg); }
+.qr-payload { max-height: 220px; margin-top: 6px; }
+
+/* Forms */
+.qr-form { gap: 10px; }
+/* (0,4,0) on purpose: ui/app.css `.ap-card .ed-field + .ed-field { margin-top: 10px }` is (0,3,0); the form already
+   spaces fields with its flex gap, so the extra margin is removed without !important. */
+.ap-card .qr-form .ed-field + .ed-field { margin-top: 0; }
+/* Segmented controls stretch to the form width (display: flex instead of the primitive's inline-flex). */
+.qr-form .ed-seg, .qr-sub .ed-seg { display: flex; }
+.qr-issues:not(:empty) { margin-top: 8px; }
+
+/* Colours */
+.qr-presets { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+/* Preset swatch: --bg is the background colour, --a / --b the two module colours drawn as a diagonal gradient. */
+.qr-preset {
+  width: 34px; height: 34px; padding: 4px; border-radius: 10px; border: 1px solid var(--ed-border-strong); background: var(--bg);
+  transition: transform .1s;
+}
+.qr-preset:hover { transform: translateY(-1px); }
+.qr-preset i { display: block; width: 100%; height: 100%; border-radius: 6px; background: linear-gradient(135deg, var(--a), var(--b)); }
+/* Foreground | swap button | background in one row; align-items: end lines the swap button up with the inputs. */
+.qr-colors { display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; gap: 8px; margin-bottom: 10px; }
+.qr-swap { margin-bottom: 2px; }
+.qr-color { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.qr-hex { font-size: 12px; color: var(--ed-muted); text-transform: uppercase; }
+.qr-transparent-note .ed-hint { margin: 2px 0 0; }
+/* Sub-options of a setting are indented with a left rule to show they depend on the setting above. */
+.qr-sub { margin: 10px 0 0 6px; padding-left: 12px; border-left: 2px solid var(--ed-border); }
+
+/* Logo */
+.qr-logo-drop { min-height: 96px; }
+.qr-logo-row { display: flex; align-items: center; gap: 10px; }
+.qr-logo-thumb {
+  width: 48px; height: 48px; object-fit: contain; border-radius: 8px; border: 1px solid var(--ed-border);
+  background: repeating-conic-gradient(var(--ed-hover) 0 25%, var(--ed-panel) 0 50%) 0 0 / 10px 10px;
+}
+.qr-logo-meta { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.qr-logo-meta b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qr-logo-meta .ed-hint { margin: 0; }
+/* Logo coverage meter: green when the logo is small enough for the error-correction level, amber when risky, red
+   when the code will likely fail. The bar and the number share the state class. */
+.qr-cover { margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.qr-cover-top { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 12.5px; }
+.qr-cover .ed-hint { margin: 6px 0 0; }
+.qr-cover-ok b, .qr-cover-ok .ap-progress > i { color: var(--ed-ok); background-color: var(--ed-ok); }
+.qr-cover-ok b { background: none; }
+.qr-cover-warn b { color: var(--ed-warn); }
+.qr-cover-warn .ap-progress > i { background: var(--ed-warn); }
+.qr-cover-bad b { color: var(--ed-danger); }
+.qr-cover-bad .ap-progress > i { background: var(--ed-danger); }
+
+/* ---------------------------------------------------------------- print sheet */
+.qr-print { display: none; }
+@media print {
+/* Print: 12 mm page margins; the sheet width (186 mm = 210 - 2 x 12) fits A4 exactly. Grid columns are set inline by
+   JS from the chosen layout. */
+  @page { margin: 12mm; }
+  body.qr-printing { display: block; background: #fff; min-height: 0; }
+/* !important beats every display value set by the shell or the app on body's children (any specificity). */
+  body.qr-printing > :not(#qr-print) { display: none !important; }
+  body.qr-printing .qr-print { display: grid !important; width: 186mm; gap: 0; }
+/* break-inside: avoid keeps each code and caption together: a QR cut by a page break is unreadable. */
+  .qr-print-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3mm; margin: 0; break-inside: avoid; }
+  .qr-print-code svg { display: block; width: 100%; height: 100%; }
+  .qr-print-cell figcaption { font: 600 10pt/1.25 var(--ed-font); color: #111; text-align: center; max-width: 90%; overflow-wrap: anywhere; }
+}
+
+/* ---------------------------------------------------------------- scan page */
+.qr-scan-work { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 18px; align-items: start; }
+@media (max-width: 900px) { .qr-scan-work { grid-template-columns: minmax(0, 1fr); } }
+.qr-source { display: flex; flex-direction: column; gap: 12px; }
+.qr-src-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.qr-src { min-width: 240px; }
+.qr-drop-big { min-height: 300px; font-size: 15px; }
+.qr-drop-big .ed-ic, .qr-drop-big svg { width: 34px; height: 34px; }
+.qr-cam-empty .ed-ic { width: 40px; height: 40px; }
+.qr-drop-compact { min-height: 64px; flex-direction: row; padding: 12px; }
+.qr-src-hint { margin: 0; }
+.qr-view {
+/* Viewer: a one-cell grid; the image and its outline canvas are stacked in the same cell (grid-area 1 / 1) with the
+   same size constraints, so the outline lines up with the picture without absolute positioning. */
+  position: relative; display: grid; place-items: center; overflow: hidden; border-radius: 14px; border: 1px solid var(--ed-border);
+  background: var(--ed-stage);
+}
+.qr-view-image { max-height: 70vh; }
+/* The picture and its outline share one grid cell and the same size constraints, so they line up. */
+.qr-view-image > * { grid-area: 1 / 1; }
+.qr-view-img, .qr-view-image .qr-overlay { display: block; max-width: 100%; max-height: 70vh; width: auto; height: auto; }
+.qr-view-image .qr-overlay { pointer-events: none; }
+/* Camera: object-fit: contain (never crops), so overlay coordinates map to the visible video area once JS sizes the
+   overlay to the video's intrinsic size. */
+.qr-view-cam { aspect-ratio: 4 / 3; max-height: min(70vh, 640px); background: #0b0d10; }
+.qr-video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.qr-view-cam .qr-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.qr-cam-off .qr-video, .qr-cam-off .qr-overlay { display: none; }
+.qr-cam-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; color: #9aa3b2; text-align: center; padding: 24px; }
+.qr-cam-empty svg { width: 40px; height: 40px; }
+.qr-cam-empty p { margin: 0; max-width: 34ch; }
+/* Reticle: corner brackets drawn with eight background gradients (no extra DOM); the 100vmax spread shadow dims the
+   area outside the target square. */
+.qr-reticle {
+  position: absolute; width: min(60%, 60vh); aspect-ratio: 1; pointer-events: none; border-radius: 18px;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .22);
+  background:
+    linear-gradient(#fff, #fff) left top / 26px 3px no-repeat, linear-gradient(#fff, #fff) left top / 3px 26px no-repeat,
+    linear-gradient(#fff, #fff) right top / 26px 3px no-repeat, linear-gradient(#fff, #fff) right top / 3px 26px no-repeat,
+    linear-gradient(#fff, #fff) left bottom / 26px 3px no-repeat, linear-gradient(#fff, #fff) left bottom / 3px 26px no-repeat,
+    linear-gradient(#fff, #fff) right bottom / 26px 3px no-repeat, linear-gradient(#fff, #fff) right bottom / 3px 26px no-repeat;
+  opacity: .85;
+}
+.qr-cam-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.qr-cam-sel { width: auto; flex: 1 1 200px; }
+.qr-status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ed-muted); min-height: 22px; }
+.qr-status:empty { display: none; }
+.qr-st-ok { color: var(--ed-ok); font-weight: 600; }
+.qr-st-warn { color: var(--ed-warn); font-weight: 600; }
+.qr-st-error { color: var(--ed-danger); font-weight: 600; }
+.qr-dec { padding-top: 10px; border-top: 1px solid var(--ed-border); }
+.qr-dec-note { margin: 6px 0 0; }
+
+.qr-results { gap: 14px; }
+/* Ring pulse on a new result; spread from 0 to 14px fades out. */
+.qr-result.qr-flash { animation: qr-flash .9s ease-out; }
+@keyframes qr-flash { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ed-ok) 55%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
+.qr-r-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.qr-r-empty .ed-ic, .qr-r-empty svg { width: 34px; height: 34px; opacity: .6; }
+.qr-r-empty p { margin: 0; }
+.qr-r-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.qr-r-head b { font-size: 15px; }
+.qr-r-head .ed-hint { margin: 0; }
+.qr-r-icon {
+  display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 12px;
+  color: var(--ed-accent); background: var(--ed-accent-weak);
+}
+.qr-r-icon svg { width: 22px; height: 22px; }
+.qr-kv { gap: 6px 12px; }
+.qr-kv dd { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.qr-val { white-space: pre-wrap; overflow-wrap: anywhere; }
+.qr-r-raw { margin-top: 12px; }
+.qr-r-raw-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.qr-r-raw pre { max-height: 200px; }
+.qr-hist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow: auto; }
+.qr-hist-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 8px; background: transparent;
+  text-align: left; color: var(--ed-text);
+}
+.qr-hist-item:hover { background: var(--ed-hover); }
+.qr-hist-item .ed-ic { color: var(--ed-muted); }
+.qr-hist-t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qr-hist-item time { flex: none; font-size: 12px; color: var(--ed-faint); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 480px) {
+/* (0,2,0) beats the shell's `.ap-main` padding (0,1,0) on phones: narrower gutters give the code more width. */
+  .ap-main.qr-create, .ap-main.qr-scan { padding: 14px 10px 24px; }
+  .qr-src { min-width: 0; width: 100%; }
+  .qr-drop-big { min-height: 220px; }
+}

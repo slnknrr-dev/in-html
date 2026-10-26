@@ -1,0 +1,1 @@
+import{TPL_CHARITY}from"./templates-charity.js";import{TPL_OSS}from"./templates-oss.js";import{TPL_CREATOR}from"./templates-creator.js";import{TPL_SCHOOL}from"./templates-school.js";import{TPL_EMERGENCY}from"./templates-emergency.js";import{TPL_BLANK}from"./templates-blank.js";const TEMPLATES=[TPL_CHARITY,TPL_OSS,TPL_CREATOR,TPL_SCHOOL,TPL_EMERGENCY,TPL_BLANK];export{TEMPLATES};

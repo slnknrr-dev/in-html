@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- rental-studio/leads.html: the leads page of Rental Studio, one of four pages sharing common.js and app.css.
+     Each page is an empty shell; leads.js renders into <main>. Separate HTML files (not one SPA with a router) keep each
+     page's module graph small and let the browser's own history/back work without hash routing. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rental Studio — Leads</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f766e'/%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round' d='M6 15.5 16 7l10 8.5M9 13.5V25h14V13.5M14 25v-6h4v6'/%3E%3C/svg%3E">
+<!-- Cascade order: shared tokens/primitives, app shell, then rs- rules of this app (later file wins ties). -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- Page registry: hidden anchors read by common.js pageHref(id) with getAttribute (not .href, which would be
+     absolutised). The single-file build rewrites these hrefs, so navigation keeps working after bundling. -->
+<a id="pg-calendar" href="index.html" hidden></a>
+<a id="pg-prices" href="prices.html" hidden></a>
+<a id="pg-payouts" href="payouts.html" hidden></a>
+<a id="pg-leads" href="leads.html" hidden></a>
+<main class="ap-main" id="main"></main>
+<!-- Page entry module: deferred and strict; relative imports are why the dev server serves the repository root. -->
+<script type="module" src="./leads.js"></script>
+</body>
+</html>

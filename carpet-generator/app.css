@@ -1,0 +1,176 @@
+/* carpet-generator/app.css - Carpet Generator: madder and indigo accents on warm wool tones, the three-column workspace
+   (controls, the rug, outputs), tradition cards, palette roles, the motif editor, phones. Loaded third, after
+   ui/base.css (tokens, .ed-* primitives) and ui/app.css (.ap-* shell).
+
+   CONTRACT
+   - Namespace: every class here starts with `cg-`; the app root is `body.cg`. A selector never restyles another app.
+   - Specificity budget: one class (0,1,0); two for state or context (`.cg-trad.on`, `.cg-seedrow .ed-input`). The
+     theme block uses `body.cg` (0,1,1) so app tokens beat the :root defaults of ui/base.css without !important.
+   - Colours via tokens (--ed-*). Raw colours only where they are content, not chrome: the logo gradient (madder to
+     indigo, the brand dyes) and the translucent black borders of colour swatches, which must read on any swatch.
+   - !important: once (.cg-dyesel width), commented there.
+   - Layout: grid for column templates, flex for one-axis rows. minmax(0, 1fr) and min-width:0 on every track that
+     holds text: the default min-width:auto would let a long tradition name or share code push the column wider.
+   - Pixel art: every bitmap of the rug (cards, gallery, motif canvas) uses image-rendering: pixelated, because one
+     image pixel = one knot; smoothing would blur the knot grid when upscaled. */
+
+/* App theme. Tokens are overridden on body.cg (0,1,1), not :root (0,1,0): the shared :root values stay intact for any
+   page without .cg, and body passes the custom properties down to the whole tree. The background is a faint vertical
+   "warp" stripe (2px of 3%-alpha brown every 5px) layered over the token colour, so dark mode only swaps the base. */
+body.cg {
+  --ed-accent: #8a2422; --ed-accent-hover: #6f1c1b; --ed-accent-weak: #f6e5df; --ed-accent-text: #fff;
+  --ed-bg: #f4efe6; --ed-panel: #fffcf6; --ed-panel-2: #f8f2e8; --ed-border: #e6dccb; --ed-border-strong: #d3c5ae; --ed-hover: #f1e9dc;
+  background: repeating-linear-gradient(90deg, rgba(110, 70, 30, .03) 0 2px, transparent 2px 5px), var(--ed-bg);
+}
+/* Dark theme, two entry points with identical values (same pattern as ui/base.css): the system preference unless the
+   user forced light (:not([data-theme="light"])), and an explicit data-theme="dark". The duplication is deliberate:
+   CSS cannot OR a media query with an attribute selector. The accent goes lighter (salmon) to keep contrast. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) body.cg { --ed-accent: #e8806b; --ed-accent-hover: #f39a87; --ed-accent-weak: #3a221d; --ed-accent-text: #1c0d0a;
+    --ed-bg: #151413; --ed-panel: #1d1b19; --ed-panel-2: #23211e; --ed-border: #322e29; --ed-border-strong: #433d36; --ed-hover: #2b2824; }
+}
+:root[data-theme="dark"] body.cg { --ed-accent: #e8806b; --ed-accent-hover: #f39a87; --ed-accent-weak: #3a221d; --ed-accent-text: #1c0d0a;
+  --ed-bg: #151413; --ed-panel: #1d1b19; --ed-panel-2: #23211e; --ed-border: #322e29; --ed-border-strong: #433d36; --ed-hover: #2b2824; }
+/* Brand mark: madder to indigo, the two dyes of the favicon. Raw colours by intent (identity, same in both themes). */
+body.cg .ap-logo { background: linear-gradient(135deg, #8a2422, #1e2b4d); }
+/* Stacked cards in the side panel and the right column: adjacent-sibling margin, no :first-child reset needed. */
+body.cg .ap-card + .ap-card { margin-top: 14px; }
+
+/* Workspace: controls column + centre. minmax(290px, 340px): wide enough for the tradition grid and the seed row,
+   capped so the rug gets the space. align-items:start: items keep their own height, which sticky requires. */
+.cg-work { display: grid; grid-template-columns: minmax(290px, 340px) minmax(0, 1fr); gap: 18px; align-items: start; }
+/* Sticky side panel with its own scroll. top:72px = shell header + gap; max-height leaves 16px below, so the panel
+   never extends past the viewport (a sticky box taller than the screen hides its tail). ui/app.css .ap-side uses
+   76/92px; these (0,1,0) rules win by source order since this file loads later. */
+.cg-side { position: sticky; top: 72px; max-height: calc(100vh - 88px); overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+/* Centre = stage + outputs column, a nested grid so the outputs can drop under the stage at 1240px on their own. */
+.cg-center { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 360px); gap: 18px; align-items: start; }
+.cg-right { display: flex; flex-direction: column; }
+/* Stage card: no padding (the canvas runs edge to edge), overflow:hidden clips the canvas to the card radius. */
+.cg-stagecard { padding: 0; overflow: hidden; position: sticky; top: 72px; }
+.cg-stagehead { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--ed-border); flex-wrap: wrap; }
+/* min-width:0 lets a long "tradition · field · seed" title shrink instead of pushing the view buttons off the card. */
+.cg-title { min-width: 0; display: flex; flex-direction: column; }
+/* Card titles are small uppercase labels elsewhere (.ap-card-h); here the rug name is the headline: serif, 18px,
+   no bottom margin. (0,2,0) beats .ap-card-h (0,1,0) regardless of order. */
+.cg-title .ap-card-h { margin: 0; font-family: Georgia, "Iowan Old Style", serif; font-size: 18px; }
+/* Stage height = viewport minus shell header, stage head and edit bar (214px), floored at 380px for short screens.
+   The chart view (stitch/view.js) sizes its canvas to this box, so the box needs a definite height. */
+.cg-stage { position: relative; height: calc(100vh - 214px); min-height: 380px; background: var(--ed-stage); }
+/* display:block removes the inline-canvas baseline gap; outline:none because the view has its own focus handling. */
+.cg-stage .st-canvas { display: block; cursor: grab; outline: none; }
+
+/* Tradition picker: radio cards (role=radio in main.js). The 3-up template here is overridden to 4 columns further
+   down (same specificity, later rule wins), so on desktop only display/gap of this rule are live. */
+.cg-trads { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+/* <button> resets: buttons do not inherit color/font by default. */
+.cg-trad { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px; border: 1px solid var(--ed-border); border-radius: 12px; background: var(--ed-panel-2); color: inherit; font: inherit; cursor: pointer; }
+.cg-trad:hover { border-color: var(--ed-border-strong); }
+/* Selected: accent border plus a 2px weak-accent ring via box-shadow (no layout shift, unlike a thicker border). */
+.cg-trad.on { border-color: var(--ed-accent); box-shadow: 0 0 0 2px var(--ed-accent-weak); }
+/* 2/3 = rug proportion (60x90 cm thumbnails); contain keeps the fringe visible; pixelated: see CONTRACT. */
+.cg-trad img { width: 100%; aspect-ratio: 2 / 3; object-fit: contain; image-rendering: pixelated; }
+.cg-trad b { font-size: 12px; font-weight: 600; text-align: center; line-height: 1.2; }
+/* Seed input takes the rest of the row; min-width:0 so the dice/refresh buttons never wrap off. */
+.cg-seedrow .ed-input { flex: 1; min-width: 0; }
+.cg-code { font-family: var(--ed-mono); font-size: 12px; }
+/* Palette roles: colour input, role name with dye, compact dye select per row. */
+.cg-roles { display: flex; flex-direction: column; gap: 6px; }
+.cg-role { display: flex; align-items: center; gap: 8px; }
+.cg-role-t { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
+/* Single-line dye name with ellipsis: needs min-width:0 on the flex parent (above), or ellipsis never triggers. */
+.cg-role-t small { color: var(--ed-muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A 46px dye picker showing only its arrow. !important against .ed-input's width:100% (0,1,0): source order alone
+   already wins today, so this only guards against a future context rule of higher specificity. */
+.cg-dyesel { width: 46px !important; padding-right: 0; }
+.cg-outs { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+.cg-subh { margin: 14px 0 6px; font-size: 14px; }
+.cg-inl { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--ed-muted); }
+/* Inline select sized to its content instead of .ed-input's full width. */
+.cg-inl .ed-select { width: auto; }
+.cg-totals { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 10px; }
+.cg-stat { display: flex; flex-direction: column; padding: 8px 10px; border-radius: 10px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.cg-stat small { color: var(--ed-muted); font-size: 11.5px; }
+/* Yarn table: collapsed borders = single hairlines; tabular-nums keep knot and gram counts aligned by digit. */
+.cg-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cg-table th { text-align: left; font-size: 11.5px; color: var(--ed-muted); font-weight: 600; padding: 4px; border-bottom: 1px solid var(--ed-border-strong); }
+.cg-table td { padding: 4px; border-bottom: 1px solid var(--ed-border); }
+.cg-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+/* Colour chip. vertical-align:-2px centres a 14px box on lowercase text better than `middle`. The border is a
+   translucent black (not a token): it must separate a pale dye from any panel colour, light or dark. */
+.cg-sw { display: inline-block; width: 14px; height: 14px; border-radius: 3px; margin-right: 6px; vertical-align: -2px; border: 1px solid rgba(0, 0, 0, .2); }
+
+/* Motif editor dialog (motifs.js): tools column + scrollable board. */
+.cg-me-dlg { width: min(980px, 96vw); }
+.cg-me { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 16px; }
+.cg-me-tools { display: flex; flex-direction: column; gap: 10px; }
+.cg-me-tools .ed-seg { flex-wrap: wrap; }
+.cg-me-board { overflow: auto; }
+.cg-me-canvas { max-width: 100%; border-radius: 6px; cursor: crosshair; image-rendering: pixelated; }
+.cg-me-mine { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* 1240px: the outputs column no longer fits beside the stage, so it drops below. The stage stops being sticky (a
+   sticky card with content after it in the same column would slide over that content) and takes 70vh. */
+@media (max-width: 1240px) {
+  .cg-center { grid-template-columns: 1fr; }
+  .cg-stagecard { position: static; }
+  .cg-stage { height: 70vh; }
+}
+/* 860px (phones, narrow tablets): one column; the rug first via `order` (the result is the point of the page),
+   controls after it. `order` changes only the visual order: keyboard and screen readers still meet the side panel
+   first, an accepted mismatch. */
+@media (max-width: 860px) {
+  .cg-work { grid-template-columns: 1fr; }
+  .cg-side { position: static; max-height: none; overflow: visible; order: 2; }
+  .cg-center { order: 1; }
+  .cg-stage { height: 62vh; }
+  .cg-me { grid-template-columns: 1fr; }
+}
+
+/* Tabs of the side panel, the gallery, the layer stack, the knot editor. This section was appended later; its rules
+   override earlier ones of equal specificity by source order (.cg-trads). */
+/* Tabs: flex:1 1 auto spreads five segment buttons across the panel and lets them wrap on narrow widths. */
+.cg-tabs { width: 100%; display: flex; flex-wrap: wrap; }
+.cg-tabs .ed-seg-btn { flex: 1 1 auto; }
+.cg-panel { display: flex; flex-direction: column; gap: 14px; }
+/* Overrides the 3-column .cg-trads above. minmax(0, 1fr): long tradition names wrap instead of widening a track. */
+.cg-trads { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.cg-gal { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.cg-design { display: flex; flex-direction: column; gap: 4px; padding: 5px; border: 1px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel-2); color: inherit; font: inherit; cursor: pointer; text-align: center; }
+.cg-design:hover { border-color: var(--ed-accent); }
+.cg-design img { width: 100%; aspect-ratio: 2 / 3; object-fit: contain; image-rendering: pixelated; }
+.cg-design span { font-size: 11.5px; line-height: 1.2; }
+.cg-gal-group + .cg-gal-group { margin-top: 6px; }
+/* Banner offering to adopt the generated field into the layer stack (layers.js). */
+.cg-adopt { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border-radius: 10px; background: var(--ed-accent-weak); margin-bottom: 8px; font-size: 13px; }
+.cg-addrow .ed-select { flex: 1; min-width: 0; }
+.cg-empty { color: var(--ed-muted); font-size: 13px; text-align: center; padding: 14px 0; }
+/* Layer card. .off = disabled layer: dimmed but still editable (opacity, not display:none, keeps it reachable). */
+.cg-ly { border: 1px solid var(--ed-border); border-radius: 10px; margin-top: 8px; background: var(--ed-panel-2); }
+.cg-ly.off { opacity: .55; }
+.cg-ly-head { display: flex; align-items: center; gap: 4px; padding: 6px 8px; flex-wrap: wrap; }
+/* The layer name is a <button> (opens the body): full reset of button chrome, basis 120px before the row wraps. */
+.cg-ly-name { flex: 1 1 120px; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; padding: 2px 4px; }
+.cg-ly-name small { color: var(--ed-muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.cg-ly-sw { display: inline-flex; gap: 2px; }
+.cg-ly-sw i { width: 10px; height: 14px; border-radius: 2px; border: 1px solid rgba(0, 0, 0, .2); }
+.cg-ly-body { padding: 4px 10px 10px; border-top: 1px solid var(--ed-border); }
+.cg-ly-body h4 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--ed-muted); }
+/* Label/control grid: a fixed 96px label column so the sliders of all parameters line up. */
+.cg-ly-f { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 8px; align-items: center; font-size: 12.5px; margin: 3px 0; }
+.cg-ly-f .ed-range-wrap { min-width: 0; }
+.cg-ly-roles { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.cg-ly-roles .ed-select { width: auto; max-width: 132px; font-size: 12px; }
+/* Knot editor toolbar between the stage head and the stage (editor.js). */
+.cg-editbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 12px; border-bottom: 1px solid var(--ed-border); background: var(--ed-panel-2); }
+.cg-tools .ed-seg-btn { padding: 4px 7px; }
+.cg-swatches { display: flex; gap: 3px; flex-wrap: wrap; }
+.cg-swatch { width: 20px; height: 20px; border-radius: 5px; border: 1px solid rgba(0, 0, 0, .25); cursor: pointer; padding: 0; }
+/* Selected swatch: outline + offset, so the ring sits outside the swatch and never covers its colour. */
+.cg-swatch.on { outline: 2px solid var(--ed-accent); outline-offset: 1px; }
+.cg-warn { color: var(--ed-accent); }
+/* Second 860px block (belongs to the appended section): 3 tradition columns on phones, beating the 4-up rule above. */
+@media (max-width: 860px) {
+  .cg-trads { grid-template-columns: repeat(3, 1fr); }
+  .cg-editbar { gap: 6px; }
+}

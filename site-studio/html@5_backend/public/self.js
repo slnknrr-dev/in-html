@@ -1,0 +1,1 @@
+let html='';try{const d=globalThis.document;if(d&&d.documentElement&&!d.querySelector('script[type="module"][src], link[rel="stylesheet"][href]:not([href^="data:"])')){html='<!doctype html>\n'+d.documentElement.outerHTML;}}catch{html='';};const selfHTML=()=>html;export{selfHTML};

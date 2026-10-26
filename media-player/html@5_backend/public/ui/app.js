@@ -1,0 +1,4 @@
+import"./strings.js";import{h}from"./dom.js";import{downloadBlob}from"./files.js";import"./icons.js";import{t}from"./i18n.js";import"./lang.js";import{toast}from"./overlays.js";function download(data,name,type='application/octet-stream'){const blob=data instanceof Blob?data:new Blob([data],{type});downloadBlob(blob,name);}
+async function copyText(text,msg){try{await navigator.clipboard.writeText(text);toast(msg||t('ap.copied'),'ok');}catch{const ta=h('textarea',{style:{position:'fixed',opacity:'0'}},text);document.body.append(ta);ta.select();let ok=false;try{ok=document.execCommand('copy');}catch{ok=false;}
+ta.remove();toast(ok?msg||t('ap.copied'):t('ap.copyFail'),ok?'ok':'warn');}}
+export{download,copyText};

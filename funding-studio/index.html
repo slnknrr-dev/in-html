@@ -1,0 +1,64 @@
+<!doctype html>
+<!-- funding-studio/index.html - Funding Studio editor. The static skeleton defines the editor's regions (top bar,
+     format toolbar, left drawer, stage with canvas, right drawer, status line, overlay host) with ARIA landmarks and
+     roles; studio/ (the shared document editor) fills each region by id. Keeping the skeleton in HTML means the layout
+     exists before JS runs and the ids are a stable contract between this page and studio/.
+     Build (singlefile.js) strips every comment of this file. -->
+<html lang="en" class="ed-is-loading">
+<!-- ed-is-loading: lets studio/editor.css hide the not-yet-filled regions until the editor removes the class. -->
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Funding Studio</title>
+<meta name="description" content="Build multilingual donation pages: campaigns with goals, rewards, donor walls and transparency; Stripe, PayPal, TBC Bank, bank transfer, Bitcoin and Ethereum. Single HTML files, static sites or pages served by your own backend.">
+<meta name="color-scheme" content="light dark">
+<!-- Two theme-color metas with media queries: the browser picks the one matching the OS scheme, so the mobile address
+     bar matches the editor's light or dark background. -->
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14171c" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%23c2410c%27/%3E%3Cpath d=%27M16 18s-6-3.6-7.4-7.5C7.6 7.8 9.5 5.5 12 5.5c1.7 0 3.1.9 4 2.3.9-1.4 2.3-2.3 4-2.3 2.5 0 4.4 2.3 3.4 5C22 14.4 16 18 16 18z%27 fill=%27%23fff%27/%3E%3Cpath d=%27M7 26h18%27 stroke=%27%23fde68a%27 stroke-width=%273%27 stroke-linecap=%27round%27/%3E%3C/svg%3E">
+<!-- Order: shared tokens/primitives, rich-text editing, the generic editor, then this product's additions. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../richtext/richtext.css">
+<link rel="stylesheet" href="../studio/editor.css">
+<link rel="stylesheet" href="./editor.css">
+</head>
+<body class="ed-shell">
+<noscript><div class="ed-noscript"><p><strong>Funding Studio needs JavaScript.</strong><br>Please enable JavaScript to use the editor. Exported donation pages show their content and the payment details without it.</p></div></noscript>
+<!-- data-i18n-aria / data-i18n: the editor re-translates these static labels on language change. -->
+<header id="ed-top" role="banner"></header>
+<div id="ed-format" role="toolbar" aria-label="Formatting" data-i18n-aria="aria.format"></div>
+<div id="ed-main">
+  <aside id="ed-left" aria-label="Blocks, outline and files" data-i18n-aria="aria.left"></aside>
+  <section id="ed-stage" aria-label="Page" data-i18n-aria="aria.stage">
+    <div id="ed-stagebar"></div>
+    <!-- Banner is a polite live region: notices (restored draft, import issues) are announced without stealing focus. -->
+    <div id="ed-banner" role="status" aria-live="polite" hidden></div>
+    <div id="ed-scroll">
+      <!-- The canvas holds the rendered page; chrome (block toolbar) and the drop indicator are siblings, not
+           children, so the edited page's markup stays exactly what export produces. -->
+      <div id="ed-canvas"></div>
+      <div id="ed-chrome" role="toolbar" aria-label="Block" data-i18n-aria="aria.chrome" hidden></div>
+      <div id="ed-drop" hidden></div>
+    </div>
+  </section>
+  <aside id="ed-right" aria-label="Properties" data-i18n-aria="aria.right"></aside>
+</div>
+<footer id="ed-status" role="status" aria-live="polite"></footer>
+<div id="ed-overlays"></div>
+<div id="ed-loading" role="status"><div class="ed-spinner" aria-hidden="true"></div><p data-i18n="app.loading">Loading editor…</p></div>
+<!-- Startup watchdog, deliberately a classic inline script (not a module): it runs even when the module graph fails to
+     load (file:// without a server, old browser, a 404 in an import), which is exactly when it is needed. The editor
+     sets window.__edReady; if that has not happened after 9 s, the spinner turns into a hint how to open the editor. -->
+<script>
+  setTimeout(function () {
+    if (window.__edReady) return;
+    var box = document.getElementById('ed-loading');
+    if (!box || box.className.indexOf('ed-load-err') >= 0) return;
+    box.className = 'ed-load-err';
+    box.innerHTML = '<p><strong>The editor could not start.</strong></p><p>Open it through a web server (for example <code>node funding-studio/server.js</code>) in a current Chrome, Edge, Firefox or Safari.</p>';
+  }, 9000);
+</script>
+<script type="module" src="./editor.js"></script>
+</body>
+</html>

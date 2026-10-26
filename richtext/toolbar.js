@@ -1,0 +1,330 @@
+// richtext/toolbar.js - the formatting toolbar (#ed-format): buttons, groups, popovers, state updates.
+import { newBlock } from '../doc/model.js';
+import { t } from '../ui/i18n.js';
+import { S } from '../studio/state.js';
+import { findBlock } from '../studio/doc.js';
+import { commit } from '../studio/history.js';
+import { select } from '../studio/select.js';
+import { gridRoving } from '../studio/fields.js';
+import { RT_S } from './sanitize.js';
+import { rtActive, rtCurRange, rtEl, rtFlush, rtKey, rtKind, rtUp } from './field.js';
+import { RT_TOGGLES, rtCmd, rtInTag, rtInsertText, rtQState } from './ops.js';
+import { tblCreate } from './table-model.js';
+import { tblFocusCell, tblMultiCells, tblUpdateBar } from './table-ui.js';
+
+// ---------- Toolbar (#ed-format), popovers ----------
+
+// Icons are inline SVG strings (stroke = currentColor, so they follow the button's text colour in every theme and
+// state) or text glyphs for letter-format buttons. Static, author-controlled markup: the only place rtEl's `html`
+// is used.
+const RT_SVG = (d, extra = '') => `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"${extra}>${d}</svg>`;
+const RT_ICO = {
+  bold: '<span class="rt-g rt-gb">B</span>',
+  italic: '<span class="rt-g rt-gi">I</span>',
+  underline: '<span class="rt-g rt-gu">U</span>',
+  strike: '<span class="rt-g rt-gs">S</span>',
+  sup: '<span class="rt-g">x<sup>2</sup></span>',
+  sub: '<span class="rt-g">x<sub>2</sub></span>',
+  code: RT_SVG('<path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/>'),
+  alignleft: RT_SVG('<path d="M2 3.5h12M2 6.5h8M2 9.5h12M2 12.5h8"/>'),
+  aligncenter: RT_SVG('<path d="M2 3.5h12M4 6.5h8M2 9.5h12M4 12.5h8"/>'),
+  alignright: RT_SVG('<path d="M2 3.5h12M6 6.5h8M2 9.5h12M6 12.5h8"/>'),
+  alignjustify: RT_SVG('<path d="M2 3.5h12M2 6.5h12M2 9.5h12M2 12.5h12"/>'),
+  ul: RT_SVG('<path d="M6 4h8M6 8h8M6 12h8"/><circle cx="2.6" cy="4" r=".9" fill="currentColor"/><circle cx="2.6" cy="8" r=".9" fill="currentColor"/><circle cx="2.6" cy="12" r=".9" fill="currentColor"/>'),
+  ol: RT_SVG('<path d="M7 4h7M7 8h7M7 12h7"/><path d="M2.3 2.6h1v3M2 10.3c.3-.6 1.8-.6 1.8.3 0 .7-1.8 1.4-1.8 2.1h1.9" stroke-width="1"/>'),
+  indent: RT_SVG('<path d="M7 3.5h7M7 6.5h7M7 9.5h7M2 12.5h12M2 5l2.5 2L2 9"/>'),
+  outdent: RT_SVG('<path d="M7 3.5h7M7 6.5h7M7 9.5h7M2 12.5h12M4.5 5 2 7l2.5 2"/>'),
+  link: RT_SVG('<path d="M6.8 9.2a2.8 2.8 0 0 0 4 0l2-2a2.8 2.8 0 0 0-4-4l-.8.8M9.2 6.8a2.8 2.8 0 0 0-4 0l-2 2a2.8 2.8 0 0 0 4 4l.8-.8"/>'),
+  unlink: RT_SVG('<path d="M9.5 3.6l.4-.4a2.8 2.8 0 0 1 4 4l-1.6 1.6M6.5 12.4l-.4.4a2.8 2.8 0 0 1-4-4l1.6-1.6M2 2l12 12"/>'),
+  clear: RT_SVG('<path d="M3 3.5h8M7 3.5 5.2 13M10 9.5l4 4M14 9.5l-4 4"/>'),
+  chars: '<span class="rt-g">Ω</span>',
+  table: RT_SVG('<rect x="2" y="2.5" width="12" height="11" rx="1.2"/><path d="M2 6.2h12M2 9.8h12M6 2.5v11M10 2.5v11"/>'),
+  color: '<span class="rt-g rt-gc">A</span>',
+  hl: RT_SVG('<path d="M9.5 2.5 13.5 6.5 7 13H3v-4z"/><path d="M8 4l4 4"/>'),
+  caret: RT_SVG('<path d="M4.5 6.5 8 10l3.5-3.5"/>', ' class="rt-caret"'),
+  rowAbove: RT_SVG('<rect x="2" y="7.5" width="12" height="6" rx="1"/><path d="M2 10.5h12M8 1.5v4M6 3.5h4"/>'),
+  rowBelow: RT_SVG('<rect x="2" y="2.5" width="12" height="6" rx="1"/><path d="M2 5.5h12M8 10.5v4M6 12.5h4"/>'),
+  colLeft: RT_SVG('<rect x="7.5" y="2" width="6" height="12" rx="1"/><path d="M10.5 2v12M3.5 6v4M1.5 8h4"/>'),
+  colRight: RT_SVG('<rect x="2.5" y="2" width="6" height="12" rx="1"/><path d="M5.5 2v12M12.5 6v4M10.5 8h4"/>'),
+  delRow: RT_SVG('<rect x="2" y="5" width="12" height="6" rx="1"/><path d="M6 6.5l4 3M10 6.5l-4 3"/>'),
+  delCol: RT_SVG('<rect x="5" y="2" width="6" height="12" rx="1"/><path d="M6.5 6l3 4M9.5 6l-3 4"/>'),
+  merge: RT_SVG('<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M4 8h3M5.8 6.5 7.3 8 5.8 9.5M12 8H9M10.2 6.5 8.7 8l1.5 1.5"/>'),
+  split: RT_SVG('<rect x="2" y="3" width="12" height="10" rx="1"/><path d="M8 3v10M6.5 8H3.8M5 6.6 3.6 8 5 9.4M9.5 8h2.7M11 6.6 12.4 8 11 9.4"/>'),
+  th: RT_SVG('<rect x="2" y="2.5" width="12" height="11" rx="1"/><path d="M2 6.5h12" /><rect x="2" y="2.5" width="12" height="4" rx="1" fill="currentColor" stroke="none" opacity=".45"/>'),
+  bg: RT_SVG('<path d="M3 8.5 7.5 4l4.5 4.5L8 12.5a1.4 1.4 0 0 1-2 0z"/><path d="M5.2 2.2 7.5 4.5M13.3 10.7s1.2 1.4 1.2 2.1a1.2 1.2 0 0 1-2.4 0c0-.7 1.2-2.1 1.2-2.1z"/>'),
+  vtop: RT_SVG('<path d="M2.5 2.5h11M8 13.5V6M5.5 8.5 8 6l2.5 2.5"/>'),
+  vmid: RT_SVG('<path d="M2.5 8h11M8 1.5v4M6 3.5l2 2 2-2M8 14.5v-4M6 12.5l2-2 2 2"/>'),
+  vbot: RT_SVG('<path d="M2.5 13.5h11M8 2.5V10M5.5 7.5 8 10l2.5-2.5"/>'),
+  distribute: RT_SVG('<path d="M2 2.5v11M14 2.5v11M4.5 8h7M6 6.5 4.5 8 6 9.5M10 6.5 11.5 8 10 9.5"/>'),
+  trash: RT_SVG('<path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 9h6.6l.7-9M6.7 7v4M9.3 7v4"/>'),
+};
+// Palette: the familiar 10-column layout (greys, saturated hues, then tints and shades) so users find colours where
+// office suites put them. RT_CHARS: typographic characters hard to type on common layouts, plus NBSP (shown as ⍽).
+const RT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28];
+const RT_PALETTE = [
+  '#000000', '#434343', '#666666', '#999999', '#b7b7b7', '#cccccc', '#d9d9d9', '#efefef', '#f3f3f3', '#ffffff',
+  '#980000', '#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ffff', '#4a86e8', '#0000ff', '#9900ff', '#ff00ff',
+  '#e6b8af', '#f4cccc', '#fce5cd', '#fff2cc', '#d9ead3', '#d0e0e3', '#c9daf8', '#cfe2f3', '#d9d2e9', '#ead1dc',
+  '#cc4125', '#e06666', '#f6b26b', '#ffd966', '#93c47d', '#76a5af', '#6d9eeb', '#6fa8dc', '#8e7cc3', '#c27ba0',
+  '#85200c', '#990000', '#b45f06', '#bf9000', '#38761d', '#134f5c', '#1155cc', '#0b5394', '#351c75', '#741b47',
+];
+const RT_CHARS = ['—', '–', '•', '·', '…', '«', '»', '„', '“', '”',
+  '‘', '\u2019', '©', '®', '™', '°', '±', '×', '÷', '≈',
+  '≠', '≤', '≥', '∞', '½', '¼', '¾', '²', '³', 'µ',
+  '€', '£', '¥', '₽', '₾', '₴', '$', '§', '¶', '†',
+  '→', '←', '↑', '↓', '↔', '✓', '✔', '✗', '★', '☆',
+  '☎', '✉', '⌂', '●', '○', '■', '▸', '№', '‰', '\u00a0'];
+
+function rtHost() {
+  let h = document.getElementById('ed-format');
+  if (!h) { // the editor page provides #ed-format; create one defensively
+    h = rtEl('div', { id: 'ed-format' });
+    (document.getElementById('ed-top') || document.body.firstElementChild || document.body).after(h);
+  }
+  return h;
+}
+// preventDefault on mousedown keeps focus (and therefore the text selection) in the field while a toolbar button is
+// clicked; the click still fires. Keyboard users can still Tab to the buttons: only mouse focus is suppressed.
+function rtNoFocus(el) {
+  el.addEventListener('mousedown', (e) => { if (e.button === 0) e.preventDefault(); });
+  return el;
+}
+// data-need declares which field kinds enable the button ('inline', 'rich', 'single' = one field not a cell range,
+// 'text' = any field, 'any' = always): rtUpdateBar enables controls generically from this attribute.
+function rtBtn(id, title, ico, act, need = 'inline', ui = RT_S.ui) {
+  const b = rtEl('button', { type: 'button', class: 'rt-btn', 'data-rt': id, 'data-need': need, title, 'aria-label': title, html: ico });
+  rtNoFocus(b);
+  b.addEventListener('click', (e) => { e.preventDefault(); act(b, e); });
+  ui[id] = b;
+  return b;
+}
+function rtGrp(...kids) {
+  return rtEl('div', { class: 'rt-grp', role: 'group' }, ...kids);
+}
+/** (Re)build the formatting toolbar. Call rtInit() again after a UI-language change to relabel. */
+function rtBuildBar() {
+  const host = rtHost();
+  const old = host.querySelector('.rt-bar');
+  RT_S.ui = {};
+  const ui = RT_S.ui;
+  const blk = rtEl('select', { class: 'rt-sel rt-sel-blk', 'data-need': 'rich', title: t('rt.blockStyle'), 'aria-label': t('rt.blockStyle') },
+    ...[['p', 'rt.blk.p'], ['h3', 'rt.blk.h3'], ['h4', 'rt.blk.h4'], ['blockquote', 'rt.blk.quote'], ['pre', 'rt.blk.pre']]
+      .map(([v, k]) => rtEl('option', { value: v, text: t(k) })));
+  blk.addEventListener('change', () => rtCmd('block', blk.value));
+  ui.blk = blk;
+  const size = rtEl('select', { class: 'rt-sel rt-sel-size', 'data-need': 'inline', title: t('rt.size'), 'aria-label': t('rt.size') },
+    rtEl('option', { value: '', text: t('rt.size.default') }),
+    ...RT_SIZES.map((n) => rtEl('option', { value: String(n), text: n + ' pt' })));
+  size.addEventListener('change', () => rtCmd('size', size.value));
+  ui.size = size;
+  const colorBtn = rtBtn('color', t('rt.color'), RT_ICO.color + '<i class="rt-cbar"></i>' + RT_ICO.caret, (b) =>
+    rtPopOpen(b, rtPalette((c) => rtCmd('color', c), t('rt.color.auto'), RT_S.color)));
+  const hlBtn = rtBtn('hl', t('rt.highlight'), RT_ICO.hl + '<i class="rt-cbar"></i>' + RT_ICO.caret, (b) =>
+    rtPopOpen(b, rtPalette((c) => rtCmd('hl', c), t('rt.hl.none'), RT_S.hl)));
+  colorBtn.classList.add('rt-colorbtn');
+  hlBtn.classList.add('rt-colorbtn');
+  const bar = rtEl('div', { class: 'rt-bar', role: 'toolbar', 'aria-label': t('rt.toolbar') },
+    rtGrp(blk, size),
+    rtGrp(
+      rtBtn('bold', `${t('rt.bold')} (${rtKey('B')})`, RT_ICO.bold, () => rtCmd('bold')),
+      rtBtn('italic', `${t('rt.italic')} (${rtKey('I')})`, RT_ICO.italic, () => rtCmd('italic')),
+      rtBtn('underline', `${t('rt.underline')} (${rtKey('U')})`, RT_ICO.underline, () => rtCmd('underline')),
+      rtBtn('strike', `${t('rt.strike')} (${rtKey('X', true)})`, RT_ICO.strike, () => rtCmd('strike')),
+      rtBtn('sup', `${t('rt.sup')} (${rtKey('.')})`, RT_ICO.sup, () => rtCmd('sup')),
+      rtBtn('sub', `${t('rt.sub')} (${rtKey(',')})`, RT_ICO.sub, () => rtCmd('sub')),
+      rtBtn('code', t('rt.code'), RT_ICO.code, () => rtCmd('code'))),
+    rtGrp(colorBtn, hlBtn),
+    rtGrp(
+      rtBtn('alignleft', t('rt.align.left'), RT_ICO.alignleft, () => rtCmd('align', 'left'), 'rich'),
+      rtBtn('aligncenter', t('rt.align.center'), RT_ICO.aligncenter, () => rtCmd('align', 'center'), 'rich'),
+      rtBtn('alignright', t('rt.align.right'), RT_ICO.alignright, () => rtCmd('align', 'right'), 'rich'),
+      rtBtn('alignjustify', t('rt.align.justify'), RT_ICO.alignjustify, () => rtCmd('align', 'justify'), 'rich')),
+    rtGrp(
+      rtBtn('ul', `${t('rt.ul')} (${rtKey('8', true)})`, RT_ICO.ul, () => rtCmd('ul'), 'rich'),
+      rtBtn('ol', `${t('rt.ol')} (${rtKey('7', true)})`, RT_ICO.ol, () => rtCmd('ol'), 'rich'),
+      rtBtn('outdent', `${t('rt.outdent')} (Shift+Tab)`, RT_ICO.outdent, () => rtCmd('outdent'), 'rich'),
+      rtBtn('indent', `${t('rt.indent')} (Tab)`, RT_ICO.indent, () => rtCmd('indent'), 'rich')),
+    rtGrp(
+      rtBtn('link', `${t('rt.link')} (${rtKey('K')})`, RT_ICO.link, () => rtCmd('link'), 'single'),
+      rtBtn('unlink', t('rt.unlink'), RT_ICO.unlink, () => rtCmd('unlink'), 'single'),
+      rtBtn('clear', `${t('rt.clear')} (${rtKey('\\')})`, RT_ICO.clear, () => rtCmd('clear')),
+      rtBtn('chars', t('rt.chars'), RT_ICO.chars, (b) => rtPopOpen(b, rtCharsPop()), 'text')),
+    rtGrp(rtBtn('table', t('rt.insertTable'), RT_ICO.table + RT_ICO.caret, (b) => rtPopOpen(b, rtTablePop()), 'any')));
+  ui.bar = bar;
+  if (old) old.replaceWith(bar); else host.prepend(bar);
+  rtUpdateBar();
+}
+
+// Measured placement: append, read offsetWidth/Height, then clamp inside the viewport with an 8 px margin and flip
+// above the anchor when there is no room below. A second click on the same anchor toggles the popover closed.
+function rtPopOpen(anchor, content) {
+  const same = RT_S.pop && RT_S.pop.anchor === anchor;
+  rtPopClose();
+  if (same) return; // second click on the same button closes it
+  const p = rtEl('div', { class: 'rt-pop', role: 'dialog', 'aria-label': anchor.getAttribute('aria-label') || '' }, content);
+  document.body.append(p);
+  const r = anchor.getBoundingClientRect();
+  const w = p.offsetWidth;
+  const h = p.offsetHeight;
+  let x = Math.min(r.left, innerWidth - w - 8);
+  let y = r.bottom + 4;
+  if (y + h > innerHeight - 8 && r.top - h - 4 > 8) y = r.top - h - 4;
+  p.style.left = Math.max(8, x) + 'px';
+  p.style.top = Math.max(8, y) + 'px';
+  anchor.setAttribute('aria-expanded', 'true');
+  RT_S.pop = { el: p, anchor };
+  // Opened from the keyboard (the toolbar button has focus; mouse clicks never focus it): enter the picker.
+  if (document.activeElement === anchor) {
+    const first = p.querySelector('[tabindex="0"]') || p.querySelector('button, input, select');
+    if (first) first.focus();
+  }
+}
+function rtPopClose() {
+  const p = RT_S.pop;
+  if (!p) return;
+  p.el.remove();
+  p.anchor.setAttribute('aria-expanded', 'false');
+  RT_S.pop = null;
+}
+/** Colour palette popover body. onPick('') = automatic / none. */
+function rtPalette(onPick, noneLabel, current) {
+  const pick = (c) => { rtPopClose(); onPick(c); };
+  const none = rtNoFocus(rtEl('button', { type: 'button', class: 'rt-pal-none', text: noneLabel }));
+  none.addEventListener('click', () => pick(''));
+  const grid = rtEl('div', { class: 'rt-pal-grid' });
+  for (const c of RT_PALETTE) {
+    const sw = rtNoFocus(rtEl('button', { type: 'button', class: 'rt-sw', title: c, 'aria-label': c, style: `background:${c}` }));
+    if (c === current) sw.setAttribute('aria-current', 'true');
+    sw.addEventListener('click', () => pick(c));
+    grid.append(sw);
+  }
+  gridRoving(grid, '.rt-sw', (b) => b.getAttribute('aria-current') === 'true');
+  const inp = rtEl('input', { type: 'color', value: /^#[0-9a-f]{6}$/i.test(current || '') ? current : '#c00000' });
+  inp.addEventListener('change', () => pick(inp.value.toLowerCase()));
+  const custom = rtEl('label', { class: 'rt-pal-custom' }, rtEl('span', { text: t('rt.customColor') }), inp);
+  return rtEl('div', { class: 'rt-pal' }, none, grid, custom);
+}
+function rtCharsPop() {
+  const grid = rtEl('div', { class: 'rt-chars' });
+  for (const ch of RT_CHARS) {
+    const label = ch === '\u00a0' ? t('rt.nbsp') : ch;
+    const b = rtNoFocus(rtEl('button', { type: 'button', class: 'rt-ch', title: label, 'aria-label': label, text: ch === '\u00a0' ? '⍽' : ch }));
+    b.addEventListener('click', (e) => {
+      rtInsertText(ch); // popover stays open for several characters
+      if (e.detail === 0 && b.isConnected) b.focus(); // keyboard: stay in the grid for the next character
+    });
+    grid.append(b);
+  }
+  gridRoving(grid, '.rt-ch');
+  return grid;
+}
+// Size picker grid: hover/focus paints the rectangle and the label, so both mouse and keyboard (roving tabindex
+// through gridRoving) show the size before inserting.
+function rtTablePop() {
+  const R = 8;
+  const C = 10;
+  const lab = rtEl('div', { class: 'tbl-pick-label', text: t('rt.insertTable') });
+  const grid = rtEl('div', { class: 'tbl-pick', role: 'grid' });
+  const cells = [];
+  const paint = (r, c) => {
+    for (const el of cells) el.classList.toggle('on', +el.dataset.r <= r && +el.dataset.c <= c);
+    lab.textContent = t('rt.tableSize', { r: r + 1, c: c + 1 });
+  };
+  for (let r = 0; r < R; r++) {
+    for (let c = 0; c < C; c++) {
+      const b = rtNoFocus(rtEl('button', { type: 'button', class: 'tbl-pc', 'data-r': r, 'data-c': c,
+        'aria-label': t('rt.tableSize', { r: r + 1, c: c + 1 }) }));
+      b.addEventListener('mouseenter', () => paint(r, c));
+      b.addEventListener('focus', () => paint(r, c));
+      b.addEventListener('click', () => { rtPopClose(); rtInsertTable(r + 1, c + 1); });
+      cells.push(b);
+      grid.append(b);
+    }
+  }
+  gridRoving(grid, '.tbl-pc');
+  return rtEl('div', { class: 'tbl-pickbox' }, grid, lab);
+}
+/** Insert a new table block after the selected block (or at the end of the main region). */
+// Focus the first cell on the next frame: render:'all' rebuilds the canvas synchronously inside commit, but focus
+// must wait until the new cell element is laid out and connected.
+function rtInsertTable(rows, cols) {
+  rtFlush();
+  const nb = newBlock('table', tblCreate(rows, cols));
+  commit(t('rt.h.table'), (d) => {
+    const fb = S.sel && S.sel.bid ? findBlock(S.sel.bid) : null;
+    if (fb) fb.list.splice(fb.index + 1, 0, nb); else d.regions.main.push(nb);
+  }, { render: 'all', select: nb.id });
+  select(nb.id);
+  requestAnimationFrame(() => tblFocusCell(nb.id, 0, 0));
+}
+
+/** Toolbar states: enabled controls per field kind, pressed states from the selection. */
+// Pressed states come from the DOM ancestry of the selection start (fast and engine-independent). For a collapsed
+// caret the native queryCommandState is consulted too, because a pending style set by execCommand ("typing will be
+// bold") exists only inside the engine. Inside headings bold is skipped: headings render bold, and the engine would
+// report bold for every caret there.
+function rtUpdateBar() {
+  const ui = RT_S.ui;
+  if (!ui.bar || !ui.bar.isConnected) { tblUpdateBar(); return; }
+  const f = rtActive();
+  const kind = f ? rtKind(f) : null;
+  const multi = !!tblMultiCells();
+  const okInline = multi || kind === 'rich' || kind === 'inline';
+  const okRich = multi || kind === 'rich';
+  const single = !multi && (kind === 'rich' || kind === 'inline');
+  for (const el of ui.bar.querySelectorAll('[data-need]')) {
+    const n = el.dataset.need;
+    el.disabled = n === 'any' ? false : n === 'rich' ? !okRich : n === 'single' ? !single : n === 'text' ? !f : !okInline;
+  }
+  const r = f ? rtCurRange(f) : null;
+  const node = r ? r.startContainer : null;
+  const up = (pred) => (node ? rtUp(node, f, pred) : null);
+  const press = (id, on) => { if (ui[id]) ui[id].setAttribute('aria-pressed', on ? 'true' : 'false'); };
+  const inHead = !!up((a) => /^(h3|h4|th)$/.test(a.localName));
+  for (const [id, [tag, native]] of Object.entries(RT_TOGGLES)) {
+    let on = !!(node && rtInTag(node, f, tag));
+    if (!on && r && r.collapsed && native && !(tag === 'strong' && inHead) && okInline && !multi) on = rtQState(native);
+    press(id, okInline && !multi && on);
+  }
+  const leaf = up((a) => /^(p|h3|h4|pre|li|blockquote)$/.test(a.localName));
+  const quote = up((a) => a.localName === 'blockquote');
+  ui.blk.value = quote ? 'blockquote' : leaf && /^(h3|h4|pre)$/.test(leaf.localName) ? leaf.localName : 'p';
+  const sp = up((a) => a.localName === 'span' && !!a.style.fontSize);
+  const fz = sp ? sp.style.fontSize : '';
+  const pt = /^(\d+)pt$/.exec(fz);
+  const val = pt ? pt[1] : '';
+  if (val && ![...ui.size.options].some((o) => o.value === val)) ui.size.append(rtEl('option', { value: val, text: val + ' pt' }));
+  ui.size.value = val;
+  const al = (leaf && leaf.style.textAlign) || 'left';
+  for (const a of ['left', 'center', 'right', 'justify']) press('align' + a, okRich && !multi && kind === 'rich' && al === a);
+  const li = up((a) => a.localName === 'li');
+  press('ul', !!li && li.parentNode.localName === 'ul');
+  press('ol', !!li && li.parentNode.localName === 'ol');
+  const a = up((x) => x.localName === 'a');
+  press('link', !!a);
+  ui.link.title = a ? `${t('rt.link')}: ${a.getAttribute('href')}` : `${t('rt.link')} (${rtKey('K')})`;
+  if (!a && ui.unlink && !ui.unlink.disabled) ui.unlink.disabled = !(r && !r.collapsed && [...f.querySelectorAll('a')].some((x) => r.intersectsNode(x)));
+  for (const [id, c] of [['color', RT_S.color], ['hl', RT_S.hl]]) {
+    const bar = ui[id] && ui[id].querySelector('.rt-cbar');
+    if (bar) bar.style.background = c;
+  }
+  tblUpdateBar();
+}
+// Coalesced to one update per animation frame: selectionchange and input fire many times per keystroke.
+function rtSchedUpdate() {
+  if (RT_S.raf) return;
+  RT_S.raf = requestAnimationFrame(() => { RT_S.raf = 0; rtUpdateBar(); });
+}
+
+export {
+  RT_ICO,
+  rtBtn,
+  rtBuildBar,
+  rtGrp,
+  rtHost,
+  rtPalette,
+  rtPopClose,
+  rtPopOpen,
+  rtSchedUpdate,
+  rtUpdateBar
+};

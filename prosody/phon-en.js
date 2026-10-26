@@ -1,0 +1,237 @@
+// prosody/phon-en.js - English words: pronunciation (dictionary, then suffix rules, then letter-to-sound rules),
+// stress and syllables.
+//
+//   analyzeEn(word, { overrides }) -> W          pronounceEn(word) -> { ph: [{ p: ARPAbet, s: 0|1|2 }], src }
+//   EN_FUNCTION    arpaToIpa(p, stress)    wordsEn() -> Map(word -> codes)    knownEn(word)    decodeEn(codes)
+//
+// W as in phon-ru.js (lang 'en'); src: 'user' | 'dict' (dict-en.js, from CMUdict) | 'suffix' (a dictionary stem with
+// an inflection or an archaic form: dimm'd, owest, wander'st, doth) | 'rule' (spelling rules) | 'mono'; elide: the
+// unstressed syllables a poet may drop (ev'ry, heav'n, pow'r).
+import { EN_DICT } from './dict-en.js';
+import { ARPA_IPA, CODE_ARPA, VOWELS_ARPA } from './dict-codes.js';
+import { decodeFront } from './frontcode.js';
+
+export const EN_FUNCTION = new Set(('a an the and but or nor for so yet of to in on at by with from as than that if is am are was were be been ' +
+  'do does did has have had i me my we us our you your he him his she her it its they them their this these those not no ' +
+  'shall will would can could may might must thou thee thy thine art hath doth o oh ah who whom which what when where then ' +
+  'there here up down out off all some such too ere \'tis it\'s i\'m don\'t').split(' '));
+
+let DICT = null;
+const dict = () => DICT || (DICT = decodeFront(EN_DICT, (rest) => { const k = rest.indexOf(':'); return [rest.slice(0, k), rest.slice(k + 1)]; }));
+
+// the dictionary as a Map(word -> codes) and a check of a word
+export const wordsEn = () => dict();
+export const knownEn = (w) => dict().has(w);
+
+export function decodeEn(code) { return decode(code); }
+function decode(code) {
+  const out = [];
+  for (let i = 0; i < code.length; i++) {
+    const c = code[i];
+    if (c === '1' || c === '2') { out[out.length - 1].s = Number(c); continue; }
+    const p = CODE_ARPA[c];
+    if (p) out.push({ p, s: 0 });
+  }
+  return out;
+}
+
+export function arpaToIpa(p, s) {
+  if (p === 'AH' && !s) return 'ə';
+  if (p === 'ER' && !s) return 'ɚ';
+  return ARPA_IPA[p];
+}
+
+export const normEn = (w) => String(w || '').toLowerCase().replace(/[’‘`]/g, '\'').replace(/[^a-z'-]/g, '').replace(/^['-]+|['-]+$/g, (m) => (m === '\'' && /^'(tis|twas|gainst|neath|bout|cause|em)/.test(w.toLowerCase()) ? m : ''));
+const look = (w) => { const c = dict().get(w); return c ? decode(c) : null; };
+const isVow = (x) => VOWELS_ARPA.has(x.p);
+const VOICELESS_END = new Set(['P', 'T', 'K', 'F', 'TH', 'S', 'SH', 'CH']);
+const SIBILANT = new Set(['S', 'Z', 'SH', 'ZH', 'CH', 'JH']);
+
+// -ed / -s / -est / -eth / -ing … on a dictionary stem
+function bySuffix(w) {
+  const stem = (s) => look(s) || (s.length > 2 ? look(s + 'e') : null) || (/(.)\1$/.test(s) ? look(s.slice(0, -1)) : null) || (/i$/.test(s) ? look(s.slice(0, -1) + 'y') : null);
+  const ed = (base) => { const last = base[base.length - 1].p; return last === 'T' || last === 'D' ? [...base, { p: 'IH', s: 0 }, { p: 'D', s: 0 }] : [...base, { p: VOICELESS_END.has(last) ? 'T' : 'D', s: 0 }]; };
+  let m;
+  // dimm'd, damask'd, wander'st: the stem (or its spelling rules) and a consonant without a vowel
+  if ((m = /^(.+)'d$/.exec(w))) { const b = stem(m[1]) || pronounceEn(m[1]).ph; if (b.length) return ed(b); }
+  if ((m = /^(.+)'st$/.exec(w))) { const b = stem(m[1]) || pronounceEn(m[1]).ph; if (b.length) return [...b, { p: 'S', s: 0 }, { p: 'T', s: 0 }]; }
+  if ((m = /^(un|re|in|dis|mis)([a-z']{3,})$/.exec(w))) { const b = look(m[2]) || bySuffix(m[2]); if (b) return [...{ un: 'AH N', re: 'R IY', in: 'IH N', dis: 'D IH S', mis: 'M IH S' }[m[1]].split(' ').map((p) => ({ p, s: 0 })), ...b]; }
+  if ((m = /^(.+)'s$/.exec(w)) || (m = /^(.+s)'$/.exec(w))) { const b = look(m[1]); if (b) { if (w.endsWith('s\'')) return b; const last = b[b.length - 1].p; return SIBILANT.has(last) ? [...b, { p: 'IH', s: 0 }, { p: 'Z', s: 0 }] : [...b, { p: VOICELESS_END.has(last) ? 'S' : 'Z', s: 0 }]; } }
+  if ((m = /^(.+?)e?(st|th)$/.exec(w)) && /e(st|th)$/.test(w)) { const b = stem(m[1]); if (b) return [...b, { p: 'IH', s: 0 }, ...(m[2] === 'st' ? [{ p: 'S', s: 0 }, { p: 'T', s: 0 }] : [{ p: 'TH', s: 0 }])]; }
+  if ((m = /^(.+?)ed$/.exec(w))) { const b = stem(m[1]); if (b) return ed(b); }
+  if ((m = /^(.+?)(e?s)$/.exec(w))) { const b = stem(m[1]) || look(w.slice(0, -1)); if (b) { const last = b[b.length - 1].p; return SIBILANT.has(last) ? [...b, { p: 'IH', s: 0 }, { p: 'Z', s: 0 }] : [...b, { p: VOICELESS_END.has(last) ? 'S' : 'Z', s: 0 }]; } }
+  const SUF = [['ing', [['IH', 0], ['NG', 0]]], ['ly', [['L', 0], ['IY', 0]]], ['ness', [['N', 0], ['AH', 0], ['S', 0]]], ['less', [['L', 0], ['AH', 0], ['S', 0]]], ['ful', [['F', 0], ['AH', 0], ['L', 0]]], ['ment', [['M', 0], ['AH', 0], ['N', 0], ['T', 0]]], ['er', [['ER', 0]]], ['est', [['AH', 0], ['S', 0], ['T', 0]]], ['y', [['IY', 0]]]];
+  for (const [suf, ph] of SUF) if (w.endsWith(suf) && w.length > suf.length + 2) { const b = stem(w.slice(0, -suf.length)); if (b) return [...b, ...ph.map(([p, s]) => ({ p, s }))]; }
+  return null;
+}
+
+// Spelling rules for words neither the dictionary nor a stem knows.
+const G2P = [
+  ['tion', 'SH AH N'], ['sion', 'ZH AH N'], ['igh', 'AY'], ['ough', 'AO'], ['augh', 'AO'], ['eigh', 'EY'], ['tch', 'CH'], ['dge', 'JH'],
+  ['sh', 'SH'], ['ch', 'CH'], ['th', 'TH'], ['ph', 'F'], ['wh', 'W'], ['ck', 'K'], ['ng', 'NG'], ['qu', 'K W'], ['kn', 'N'], ['wr', 'R'],
+  ['ee', 'IY'], ['ea', 'IY'], ['oo', 'UW'], ['ou', 'AW'], ['ow', 'OW'], ['ai', 'EY'], ['ay', 'EY'], ['oa', 'OW'], ['oi', 'OY'], ['oy', 'OY'],
+  ['au', 'AO'], ['aw', 'AO'], ['ew', 'UW'], ['ie', 'IY'], ['ei', 'EY'], ['ey', 'IY'], ['ue', 'UW'], ['ar', 'AA R'], ['or', 'AO R'], ['er', 'ER'], ['ir', 'ER'], ['ur', 'ER'],
+  ['a', 'AE'], ['e', 'EH'], ['i', 'IH'], ['o', 'AA'], ['u', 'AH'], ['y', 'IH'], ['b', 'B'], ['c', 'K'], ['d', 'D'], ['f', 'F'], ['g', 'G'], ['h', 'HH'],
+  ['j', 'JH'], ['k', 'K'], ['l', 'L'], ['m', 'M'], ['n', 'N'], ['p', 'P'], ['q', 'K'], ['r', 'R'], ['s', 'S'], ['t', 'T'], ['v', 'V'], ['w', 'W'], ['x', 'K S'], ['z', 'Z'],
+];
+const MAGIC = { a: 'EY', e: 'IY', i: 'AY', o: 'OW', u: 'UW', y: 'AY' };
+const PREFIX_UNSTRESSED = /^(a|be|de|re|un|ex|pre|con|com|dis|mis|in|im|en|em|ob|per|pro|sub|sup|sur|trans)(?=[a-z]{3})/;
+
+export function byRules(w) {
+  const s = w.replace(/'/g, '');
+  const out = [];
+  let i = 0;
+  while (i < s.length) {
+    // a vowel + consonant + final e (or + consonant + e + s / d): the long vowel, the e is silent
+    if ('aeiouy'.includes(s[i]) && /^[^aeiouy]e(s|d)?$/.test(s.slice(i + 1)) && !(i === 0 && s.length <= 3 && s[i] === 'e')) {
+      out.push(...MAGIC[s[i]].split(' ').map((p) => ({ p, s: 0 })));
+      const c = s[i + 1];
+      out.push(...(c === 'c' ? 'S' : c === 'g' ? 'JH' : (G2P.find(([g]) => g === c) || [0, 'T'])[1]).split(' ').map((p) => ({ p, s: 0 })));
+      if (s.endsWith('s')) out.push({ p: 'Z', s: 0 }); else if (s.endsWith('d')) out.push({ p: 'D', s: 0 });
+      break;
+    }
+    if (s[i] === 'e' && i === s.length - 1 && i > 1) { if (s[i - 1] === 'l' && !'aeiou'.includes(s[i - 2])) out.splice(out.length - 1, 0, { p: 'AH', s: 0 }); break; }
+    if (s[i] === 'c' && 'eiy'.includes(s[i + 1] || '')) { out.push({ p: 'S', s: 0 }); i++; continue; }
+    if (s[i] === 'g' && 'eiy'.includes(s[i + 1] || '') && i > 0) { out.push({ p: 'JH', s: 0 }); i++; continue; }
+    if (s[i] === 'y' && i === s.length - 1 && i > 0) { out.push({ p: s.length <= 3 ? 'AY' : 'IY', s: 0 }); i++; continue; }
+    if (s[i] === 'y' && i === 0) { out.push({ p: 'Y', s: 0 }); i++; continue; }
+    const g = G2P.find(([gr]) => s.startsWith(gr, i));
+    if (!g) { i++; continue; }
+    if (!(g[0].length === 1 && s[i] === s[i - 1] && !'aeiou'.includes(s[i]))) out.push(...g[1].split(' ').map((p) => ({ p, s: 0 })));
+    i += g[0].length;
+  }
+  const vi = out.map((x, k) => (isVow(x) ? k : -1)).filter((k) => k >= 0);
+  if (vi.length) {
+    let k = 0;
+    if (vi.length >= 2 && PREFIX_UNSTRESSED.test(s)) k = 1;
+    else if (vi.length >= 3 && /(tion|sion|ic|ical|ity|ian|ial|ious)$/.test(s)) k = vi.length - (/(ical|ity|ian|ial|ious)$/.test(s) ? 3 : 2);
+    out[vi[Math.max(0, k)]].s = 1;
+    for (const j of vi) if (!out[j].s && out[j].p === 'AE' || !out[j].s && out[j].p === 'EH' && vi.length > 1) out[j].p = 'AH';
+  }
+  return out;
+}
+
+// archaic and poetic forms CMUdict may lack (dict-codes.js codes)
+const ARCHAIC = { doth: 'du1T', hath: 'hx1T', thou: 'DA1', thee: 'DI1', thy: 'DY1', thine: 'DY1n', ere: 'e1r', "o'er": 'O1r', "e'en": 'I1n', "ne'er": 'ne1r', "'tis": 'ti1z', "'twas": 'twu1z', oft: 'o1ft', wouldst: 'wU1dst', canst: 'kx1nst', dost: 'du1st', hast: 'hx1st', wilt: 'wi1lt', shalt: 'Sx1lt', whilst: 'wY1lst' };
+
+export function pronounceEn(word) {
+  const w = normEn(word);
+  if (!w) return { ph: [], src: 'none' };
+  const d = look(w) || look(w.replace(/'/g, ''));
+  if (d) return { ph: d, src: 'dict' };
+  const s = bySuffix(w);
+  if (s) return { ph: s, src: 'suffix' };
+  if (ARCHAIC[w]) return { ph: decode(ARCHAIC[w]), src: 'suffix' };
+  return { ph: byRules(w), src: 'rule' };
+}
+
+const ONSETS = new Set(['P L', 'P R', 'P Y', 'B L', 'B R', 'B Y', 'T R', 'T W', 'D R', 'D W', 'K L', 'K R', 'K W', 'K Y', 'G L', 'G R', 'G W', 'F L', 'F R', 'F Y', 'TH R', 'SH R',
+  'S P', 'S T', 'S K', 'S M', 'S N', 'S L', 'S W', 'S F', 'S P L', 'S P R', 'S T R', 'S K R', 'S K W', 'S K Y', 'M Y', 'N Y', 'HH Y', 'V Y']);
+
+// Phonemes into syllables (maximal legal onsets) and the letters of each syllable (an approximation by vowel groups).
+// Maximal onset principle: consonants between two vowels go to the following syllable as far as they form a legal
+// English onset (ONSETS, up to 3 consonants), the rest stay as the coda of the previous one; NG never starts a
+// syllable. Gives "ex-tra", "con-struct" as dictionaries do.
+function syllabify(ph) {
+  const vi = ph.map((x, k) => (isVow(x) ? k : -1)).filter((k) => k >= 0);
+  if (!vi.length) return [ph];
+  const cuts = [0];
+  for (let k = 0; k + 1 < vi.length; k++) {
+    const cl = ph.slice(vi[k] + 1, vi[k + 1]).map((x) => x.p);
+    let on = cl.length ? 1 : 0;
+    for (let n = Math.min(3, cl.length); n >= 2; n--) if (ONSETS.has(cl.slice(-n).join(' '))) { on = n; break; }
+    if (cl.length === 1 && cl[0] === 'NG') on = 0;
+    cuts.push(vi[k + 1] - on);
+  }
+  cuts.push(ph.length);
+  return cuts.slice(0, -1).map((c, k) => ph.slice(c, cuts[k + 1]));
+}
+
+const DIGRAPH = /^(ch|sh|th|ph|wh|ck|ng|qu|gh|tch)/;
+function letterGroups(w, n) {
+  const s = w;
+  // vowel letter groups; a final silent e joins the group before it
+  const groups = [];
+  const re = /[aeiouy]+/g;
+  let m;
+  while ((m = re.exec(s))) {
+    if (m.index === 0 && m[0][0] === 'y' && m[0].length > 1) { groups.push([m.index + 1, m.index + m[0].length]); continue; }
+    groups.push([m.index, m.index + m[0].length]);
+  }
+  if (groups.length > 1) {
+    const last = groups[groups.length - 1];
+    if (last[0] === s.length - 1 && s.endsWith('e') && !/[^aeiou]le$/.test(s)) groups.pop();
+    else if (/[^aeiouy]e[sd]$/.test(s) && last[0] === s.length - 2 && groups.length > n) groups.pop();
+  }
+  while (groups.length > n && groups.length > 1) { const b = groups.pop(); groups[groups.length - 1][1] = b[1]; }
+  while (groups.length < n) {
+    const k = groups.findIndex((g) => g[1] - g[0] >= 2);
+    if (k < 0) break;
+    const g = groups[k];
+    groups.splice(k, 1, [g[0], g[0] + 1], [g[0] + 1, g[1]]);
+  }
+  if (!groups.length) return [s];
+  const cuts = [0];
+  for (let k = 0; k + 1 < groups.length; k++) {
+    const a = groups[k][1], b = groups[k + 1][0];
+    const cl = s.slice(a, b);
+    let cut = b;
+    if (cl.length >= 2) {
+      const dg = DIGRAPH.exec(cl.slice(-2)) || DIGRAPH.exec(cl.slice(-3));
+      cut = dg && cl.endsWith(dg[0]) ? b - dg[0].length : cl === 'ck' || cl === 'x' ? b : a + (cl.length >= 3 ? cl.length - 2 : 1);
+      if (cl.slice(0, 2) === 'ck') cut = a + 2;
+    }
+    if (cl === 'x') cut = b;
+    cuts.push(Math.max(cut, cuts[cuts.length - 1] + 1));
+  }
+  cuts.push(s.length);
+  return cuts.slice(0, -1).map((c, k) => s.slice(c, cuts[k + 1])).filter(Boolean);
+}
+
+export function analyzeEn(word, { overrides = null } = {}) {
+  const text = String(word || '');
+  const norm = normEn(text);
+  const W = { text, norm, lang: 'en', syl: [], stress: -1, src: 'none', alt: [], fn: EN_FUNCTION.has(norm), elide: [] };
+  if (!norm) return W;
+  const pr = pronounceEn(norm);
+  W.src = pr.src;
+  const groups = syllabify(pr.ph);
+  const letters = letterGroups(norm.replace(/'/g, ''), groups.length);
+  // fewer letter groups than syllables (fi-re, ho-ur): halve the longest group
+  while (letters.length < groups.length) {
+    let k = 0;
+    letters.forEach((x, j) => { if (x.length > letters[k].length) k = j; });
+    if (letters[k].length < 2) break;
+    const x = letters[k], c = Math.ceil(x.length / 2);
+    letters.splice(k, 1, x.slice(0, c), x.slice(c));
+  }
+  W.syl = groups.map((g, k) => {
+    const vk = g.findIndex(isVow);
+    const st = vk >= 0 ? g[vk].s : 0;
+    return { t: letters[k] !== undefined ? letters[k] : '', ph: g.map((x) => arpaToIpa(x.p, x.s)), v: vk, st };
+  });
+  // letters left over (fewer groups than syllables in the spelling) go to the last syllable
+  if (letters.length > W.syl.length && W.syl.length) W.syl[W.syl.length - 1].t += letters.slice(W.syl.length).join('');
+  if (W.syl.length === 1) { W.syl[0].st = W.fn ? 0 : 1; if (!W.fn && W.src === 'dict') W.src = 'mono'; }
+  if (overrides && overrides.has(norm) && W.syl.length > 1) {
+    const k = Math.min(W.syl.length - 1, overrides.get(norm));
+    W.syl.forEach((s, j) => { s.st = j === k ? 1 : s.st === 1 ? 2 : s.st; });
+    W.src = 'user';
+  }
+  W.stress = W.syl.findIndex((s) => s.st === 1);
+  // a second primary stress (straightfórward) counts as secondary
+  W.syl.forEach((s, k) => { if (s.st === 1 && k !== W.stress) s.st = 2; });
+  if (W.stress < 0 && W.syl.length > 1) { const k = W.syl.findIndex((s) => s.st === 2); if (k >= 0) { W.syl[k].st = 1; W.stress = k; } }
+  // ev'ry, heav'n, pow'r: an unstressed ə / ɚ / ɪ that a poet may drop
+  W.syl.forEach((s, k) => {
+    if (s.st || k === 0 || s.v < 0) return;
+    const v = s.ph[s.v], next = W.syl[k + 1], prev = W.syl[k - 1];
+    if (!['ə', 'ɚ', 'ɪ'].includes(v)) return;
+    const onset = s.ph.slice(0, s.v), coda = s.ph.slice(s.v + 1);
+    const beforeVowel = next && (next.v === 0 || /^[ɹl]$/.test(next.ph[0]));      // ev-er-y, dif-fer-ent
+    const finalN = !next && /^[nl]$/.test(coda.join('')) && /^[vðzs]$/.test(onset.join(''));   // heav-en, e-ven
+    const finalR = !next && v === 'ɚ' && !onset.length && /[ʊɪ]$/.test(prev.ph[prev.v] || '');  // pow-er, fi-re
+    if ((beforeVowel && (v === 'ɚ' || coda.length === 0)) || finalN || finalR) W.elide.push(k);
+  });
+  return W;
+}

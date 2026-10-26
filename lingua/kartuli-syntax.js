@@ -1,0 +1,362 @@
+// lingua/kartuli-syntax.js - Georgian sentences: a sentence builder that puts the arguments of a verb into the case
+// its class and series demand (and says why), and a sentence analyser: tokens with their readings, clauses split on
+// conjunctions and relative words, the predicate and who does what to whom by case and verb agreement, agreement
+// errors, participle and masdar constructions, quotative particles of reported speech.
+//
+//   buildSentence({ verb, screeve, subj, obj, io, extras, neg, question }) -> { text, words, frame, issues }
+//       arg: { pron: '1sg' … '3pl' } | { noun: lex | word, pl?, adj? } | { q: 'who' | 'what' }
+//       extras: [{ noun, post: 'shi' …, adj? }]       neg: null | 'არ' | 'ვერ'
+//   tokenize(text) -> [{ t, kind: 'word' | 'punct' | 'space' | 'quote' | 'dash', i }]
+//   analyzeKa(sentence) -> { tokens, clauses: [{ type, conj, words, pred, args, adjuncts, issues, constructions }] }
+//   WHY: { key: { ru, en } }   ROLE_NAMES   CLAUSE_TYPES
+//
+// Key decisions:
+// - Case is decided by the verb, not the noun: caseFrame(verb, screeve) from kartuli-grammar.js returns which case
+//   subject / object / indirect object take for this verb class and series (I: nom-dat, II: erg-nom, III: inversion
+//   dat-nom with -თვის for the IO; class II always nom; class IV dat subject). Builder and analyser share that one
+//   function, so they cannot disagree about Georgian split ergativity.
+// - Every produced word carries `why` (a WHY entry): the builder is a teaching tool, each case choice is explained.
+// - The analyser is a deterministic pipeline: tokenize -> per-word readings (analyzeWord) -> attribute linking ->
+//   clause segmentation -> role assignment by case frame + agreement scoring. No statistical model; ambiguity is
+//   resolved by scores from the morphology plus agreement bonuses, and remaining doubts surface as `issues`.
+
+import { POSTS, PRONOUNS, PERSON_PRONOUN, adjAgree, analyzeWord, caseFrame, conjugate, declineNoun, postBase, SERIES } from './kartuli-grammar.js';
+import { lexByWord } from './kartuli-lexicon.js';
+
+// Explanation texts keyed '<frame note>.<role>' (s1/s2/s3 = series of a class I verb, c2/c4 = verb classes whose
+// frame does not change with series) plus topic keys. Lookups fall back to the s1 entry.
+export const WHY = {
+  's1.subj': { ru: 'Серия I (настоящее и будущее): подлежащее стоит в именительном падеже (-ი).', en: 'Series I (present, future): the subject is in the nominative (-ი).' },
+  's1.obj': { ru: 'Серия I: прямое дополнение — в дательном падеже (-ს).', en: 'Series I: the direct object is in the dative (-ს).' },
+  's1.io': { ru: 'Косвенное дополнение («кому») — в дательном (-ს); глагол показывает его версией (უ- / ი-) или префиксом (მ-, გ-, გვ-).', en: 'The indirect object ("to whom") is in the dative (-ს); the verb marks it by the version (უ- / ი-) or a prefix (მ-, გ-, გვ-).' },
+  's2.subj': { ru: 'Серия II (аорист, оптатив, повелительное): подлежащее переходного (класс I) и медиального (класс III) глагола — в эргативе (-მა после согласной, -მ после гласной).', en: 'Series II (aorist, optative, imperative): the subject of a transitive (class I) or medial (class III) verb is in the ergative (-მა / -მ).' },
+  's2.obj': { ru: 'Серия II: прямое дополнение — в именительном (-ი).', en: 'Series II: the direct object is in the nominative (-ი).' },
+  's2.io': { ru: 'Косвенное дополнение — по-прежнему в дательном (-ს).', en: 'The indirect object stays in the dative (-ს).' },
+  's3.subj': { ru: 'Серия III (перфект — «оказывается, сделал»): инверсия. Подлежащее — в дательном (-ს), а глагол согласуется с ним объектными префиксами (მ-, გ-, უ-): დამიწერია «я, оказывается, написал».', en: 'Series III (perfect, "apparently did"): inversion. The subject is in the dative (-ს) and the verb agrees with it through the object prefixes (მ-, გ-, უ-): დამიწერია "I have (apparently) written".' },
+  's3.obj': { ru: 'Серия III: прямое дополнение — в именительном (-ი).', en: 'Series III: the direct object is in the nominative (-ი).' },
+  's3.io': { ru: 'Серия III: косвенное дополнение уходит в послелог -თვის «для» с родительным.', en: 'Series III: the indirect object becomes -თვის "for" with the genitive.' },
+  'c2.subj': { ru: 'Непереходный глагол (класс II): подлежащее во всех сериях в именительном.', en: 'Intransitive verb (class II): the subject is nominative in every series.' },
+  'c2.io': { ru: 'Косвенное дополнение непереходного глагола — в дательном (-ს), глагол показывает его префиксом (ე- → მე-, გე-).', en: 'The indirect object of an intransitive verb is dative (-ს); the verb shows it with a prefix (ე- -> მე-, გე-).' },
+  'c4.subj': { ru: 'Глагол чувства, желания, обладания (класс IV): тот, кто любит / хочет / имеет, стоит в дательном (-ს), а глагол показывает его как «объект»: მიყვარს «мне любимо».', en: 'Verb of feeling, wanting, having (class IV): the one who loves / wants / has is in the dative (-ს); the verb shows it as an "object": მიყვარს "to me (it) is dear".' },
+  'c4.obj': { ru: 'Класс IV: то, что любят / имеют, — в именительном (-ი).', en: 'Class IV: what is loved / had is in the nominative (-ი).' },
+  'io.obj': { ru: 'Этот глагол управляет косвенным дополнением («смотреть на кого», «ждать кого», «помогать кому»): дательный в сериях I и II, -თვის в серии III.', en: 'This verb takes an indirect object ("look at", "wait for", "help"): dative in series I and II, -თვის in series III.' },
+  'pron': { ru: 'Местоимения 1-го и 2-го лица (მე, შენ, ჩვენ, თქვენ) не изменяются по падежам; ის -> მან (эрг.), მას (дат.).', en: '1st / 2nd person pronouns (მე, შენ, ჩვენ, თქვენ) do not change by case; ის -> მან (erg.), მას (dat.).' },
+  'adj': { ru: 'Прилагательное перед существительным: -ი в именительном, родительном и творительном, -მა в эргативе, без окончания в дательном и обстоятельственном; во множественном числе прилагательное остаётся в единственном.', en: 'An adjective before its noun: -ი in the nominative, genitive and instrumental, -მა in the ergative, no ending in the dative and adverbial; it stays singular with a plural noun.' },
+  'neg': { ru: 'Отрицание стоит прямо перед глаголом: არ «не», ვერ «не может, не смог».', en: 'Negation stands right before the verb: არ "not", ვერ "cannot".' },
+  'negImp': { ru: 'Запрет: ნუ + будущее время (ნუ დაწერ! «не пиши!»).', en: 'Prohibition: ნუ + the future (ნუ დაწერ! "don\'t write!").' },
+  'order': { ru: 'Обычный порядок: подлежащее – косвенное – прямое дополнение – глагол; порядок свободный, глагол чаще в конце.', en: 'Usual order: subject - indirect object - direct object - verb; the order is free, the verb is usually last.' },
+  'agree': { ru: 'Глагол согласуется по лицу и числу с подлежащим (в инверсии — через объектные префиксы); множественное число неодушевлённых подлежащих часто не отражается.', en: 'The verb agrees with the subject in person and number (in inversion through the object prefixes).' },
+  'post': { ru: 'Послелог присоединяется к определённому падежу: -ში, -ზე, -თან — к дательному, -თვის, -გან, -კენ — к родительному, -დან — к творительному, -მდე — к обстоятельственному.', en: 'A postposition takes a given case: -ში, -ზე, -თან the dative, -თვის, -გან, -კენ the genitive, -დან the instrumental, -მდე the adverbial.' },
+};
+export const ROLE_NAMES = {
+  subj: { ru: 'подлежащее', en: 'subject' }, obj: { ru: 'прямое дополнение', en: 'direct object' }, io: { ru: 'косвенное дополнение', en: 'indirect object' },
+  pred: { ru: 'сказуемое', en: 'predicate' }, adj: { ru: 'определение', en: 'attribute' }, adv: { ru: 'обстоятельство', en: 'adverbial' },
+  poss: { ru: 'принадлежность (род. п.)', en: 'possessor (genitive)' }, neg: { ru: 'отрицание', en: 'negation' }, q: { ru: 'вопрос', en: 'question' }, conj: { ru: 'союз', en: 'conjunction' },
+  other: { ru: 'прочее', en: 'other' },
+};
+export const CASE_NAMES = {
+  nom: { ru: 'именительный', en: 'nominative', ka: 'სახელობითი' }, erg: { ru: 'эргатив', en: 'ergative', ka: 'მოთხრობითი' }, dat: { ru: 'дательный', en: 'dative', ka: 'მიცემითი' },
+  gen: { ru: 'родительный', en: 'genitive', ka: 'ნათესაობითი' }, ins: { ru: 'творительный', en: 'instrumental', ka: 'მოქმედებითი' }, adv: { ru: 'обстоятельственный', en: 'adverbial', ka: 'ვითარებითი' },
+  voc: { ru: 'звательный', en: 'vocative', ka: 'წოდებითი' }, tvis: { ru: '-თვის (для) с родительным', en: '-თვის ("for") with the genitive', ka: '-თვის' },
+};
+
+// Pronoun + -თვის are suppletive (ჩემთვის, not *მეთვის), hence a table rather than generation. asLex accepts a bare
+// word and falls back to a stub entry so a word missing from the lexicon still declines regularly.
+const TVIS = { '1sg': 'ჩემთვის', '2sg': 'შენთვის', '3sg': 'მისთვის', '1pl': 'ჩვენთვის', '2pl': 'თქვენთვის', '3pl': 'მათთვის' };
+const Q = { who: 'ვინ', what: 'რა' };
+const pronOf = (person) => PRONOUNS.find((p) => p.w === PERSON_PRONOUN[person]);
+const asLex = (x) => (typeof x === 'string' ? lexByWord(x).find((l) => l.pos === 'n' || l.pos === 'np') || { w: x, flags: {}, pos: 'n', ru: '', en: '' } : x);
+
+// The form of one argument in a case ('tvis' = genitive + -თვის): { words: [{ ka, role, lemma, gloss, case }], person }
+function argForms(arg, caseId, role) {
+  if (!arg) return null;
+  if (arg.pron) {
+    const p = pronOf(arg.pron);
+    const ka = caseId === 'tvis' ? TVIS[arg.pron] : p.forms[caseId] || p.forms.nom;
+    return { person: arg.pron, words: [{ ka, role, lemma: p.w, gloss: { ru: p.ru, en: p.en }, case: caseId, pron: true }] };
+  }
+  if (arg.q) {
+    const p = PRONOUNS.find((x) => x.w === Q[arg.q]);
+    const ka = caseId === 'tvis' ? (arg.q === 'who' ? 'ვისთვის' : 'რისთვის') : p.forms[caseId] || p.forms.nom;
+    return { person: '3sg', words: [{ ka, role: 'q', lemma: p.w, gloss: { ru: p.ru, en: p.en }, case: caseId, ofRole: role }] };
+  }
+  const lex = asLex(arg.noun);
+  const d = declineNoun(lex);
+  const num = arg.pl && !d.noPlural && lex.pos !== 'np' ? 'pl' : 'sg';
+  const base = caseId === 'tvis' ? 'gen' : caseId;
+  let ka = (num === 'pl' ? d.pl : d.sg).find((c) => c.id === base).form;
+  if (caseId === 'tvis') ka = (num === 'pl' ? d.post.filter((p) => p.num === 'pl') : d.post.filter((p) => p.num === 'sg')).find((p) => p.id === 'tvis').form;
+  const words = [];
+  if (arg.adj) { const a = typeof arg.adj === 'string' ? { w: arg.adj, ru: '', en: '' } : arg.adj; words.push({ ka: adjAgree(a.w, base), role: 'adj', lemma: a.w, gloss: { ru: a.ru, en: a.en }, case: base, of: role }); }
+  words.push({ ka, role, lemma: lex.w, gloss: { ru: lex.ru, en: lex.en }, case: caseId, num });
+  return { person: num === 'pl' ? '3pl' : '3sg', words };
+}
+
+// A grammatical sentence from a verb and its arguments.
+// Steps: frame -> argument forms in the demanded cases -> verb agreement (subject person; the single object slot goes
+// to a 1st/2nd person IO, else to a 1st/2nd person direct object, as Georgian allows only one non-3rd object marker)
+// -> conjugation with graceful fallbacks (drop the objective version, then the object person) -> word order
+// S (extras) IO O [q] [neg] V. Invalid requests do not throw: they degrade to the closest valid sentence and add an
+// issue, because the UI builds sentences live from dropdowns.
+// Two vestiges, harmless: `key` is computed through an identity ternary; `text.charAt(0) + text.slice(1)` is a no-op
+// (Georgian script has no capitals, so there is nothing to capitalise).
+export function buildSentence({ verb, screeve = 'present', subj = null, obj = null, io = null, extras = [], neg = null, question = false } = {}) {
+  const issues = [];
+  // the imperative speaks to 'you'; a prohibition is ნუ + the future, so the cases are those of series I
+  if (screeve === 'imperative') {
+    if (!subj || !subj.pron || subj.pron[0] !== '2') subj = { pron: subj && subj.pl ? '2pl' : '2sg', drop: true };
+    else subj = { ...subj, drop: true };
+  }
+  const frame = caseFrame(verb, screeve === 'imperative' && neg ? 'future' : screeve);
+  const ioVerb = !!frame.objIsIO;
+  const key = frame.note === 'c2' || frame.note === 'c4' ? frame.note : frame.note; // s1 s2 s3 c2 c4
+  const sArg = argForms(subj || { pron: '3sg' }, frame.subj, 'subj');
+  // the second argument: a direct object, or the indirect object of verbs like უყურებს / ელოდება
+  const oCase = frame.cls === 2 ? frame.io : frame.obj;
+  const oArg = obj && (frame.obj || ioVerb || frame.cls === 2) ? argForms(obj, ioVerb || frame.cls === 2 ? (frame.series === 3 ? 'tvis' : 'dat') : oCase, ioVerb || frame.cls === 2 ? 'io' : 'obj') : null;
+  if (obj && !oArg) issues.push({ ru: 'У этого глагола нет прямого дополнения.', en: 'This verb has no direct object.' });
+  const iArg = io && frame.io && frame.cls !== 2 && !ioVerb ? argForms(io, frame.io, 'io') : null;
+  if (io && !iArg && !(frame.cls === 2 && !obj)) issues.push({ ru: 'Косвенное дополнение здесь не используется.', en: 'No indirect object here.' });
+  // verb agreement: the subject person; the object slot: an indirect object (1/2 person) or a 1/2 person object
+  const s = sArg.person;
+  let o = null, version = null;
+  const ioA = iArg || (oArg && (ioVerb || frame.cls === 2) ? oArg : null);
+  if (!frame.inverted) {
+    if (ioA && ioA.person[0] !== '3') o = ioA.person;
+    else if (oArg && !ioVerb && frame.cls !== 2 && oArg.person[0] !== '3') o = oArg.person;
+    // Verbs that carry their indirect object themselves (m3: მისცემს, სთხოვს) take it without the objective version.
+    if (iArg && verb.c === 1 && !ioVerb && !(verb.flags && verb.flags.m3) && SERIES[screeve] !== 3) version = 'objective';
+  } else if (oArg && oArg.person[0] !== '3') issues.push({ ru: 'В инверсии (серия III, класс IV) дополнение 1-го/2-го лица здесь не строится; выберите 3-е лицо.', en: 'In inversion (series III, class IV) a 1st / 2nd person object is not built here; choose the 3rd person.' });
+  if (iArg && oArg && iArg.person[0] !== '3' && oArg.person[0] !== '3') issues.push({ ru: 'Если косвенное дополнение — 1-е или 2-е лицо, прямое должно быть в 3-м лице.', en: 'With a 1st / 2nd person indirect object the direct object must be 3rd person.' });
+  let vf = conjugate(verb, screeve, s, o, { version });
+  if (!vf && version) { vf = conjugate(verb, screeve, s, o); }
+  if (!vf && o) { issues.push({ ru: 'Такое сочетание лиц невозможно (например, «я … меня» — это возвратная форма с თავს).', en: 'This combination of persons does not exist (e.g. "I … me" is the reflexive with თავს).' }); vf = conjugate(verb, screeve, s, null); }
+  if (!vf) return { text: '', words: [], frame, issues: [...issues, { ru: 'У этого глагола нет такой формы в словаре.', en: 'The verb has no such form in the dictionary.' }] };
+  let vka = vf.form, negWord = null;
+  if (neg) {
+    if (screeve === 'imperative') {
+      const fut = conjugate(verb, 'future', s, o, { version });
+      if (fut) { vka = fut.form; negWord = { ka: 'ნუ', role: 'neg', lemma: 'ნუ', gloss: { ru: 'не (запрет)', en: "don't" }, why: WHY.negImp }; }
+    } else negWord = { ka: neg, role: 'neg', lemma: neg, gloss: neg === 'ვერ' ? { ru: 'не (не может)', en: 'cannot' } : { ru: 'не', en: 'not' }, why: WHY.neg };
+  }
+  const vlex = verb;
+  const vword = { ka: vka, role: 'pred', lemma: vlex.w, gloss: { ru: vlex.ru, en: vlex.en }, parts: vf.parts, screeve, s, o, derived: vf.derived };
+  const why = (role, a) => {
+    if (a && a.words[a.words.length - 1].pron) return WHY.pron;
+    if (role === 'subj') return WHY[key + '.subj'] || WHY['s1.subj'];
+    if (role === 'obj') return WHY[key + '.obj'] || WHY['s1.obj'];
+    if (ioVerb) return WHY['io.obj'];
+    return WHY[(key === 'c2' ? 'c2' : key) + '.io'] || WHY['s1.io'];
+  };
+  const words = [];
+  const push = (a, role) => {
+    if (!a) return;
+    for (const w of a.words) words.push({ ...w, why: w.role === 'adj' ? WHY.adj : w.pron ? WHY.pron : why(w.role === 'q' ? w.ofRole : role, a) });
+  };
+  if (sArg && !(subj && subj.drop)) push(sArg, 'subj');
+  for (const x of extras) {
+    const lex = asLex(x.noun);
+    const d = declineNoun(lex);
+    const p = d.post.find((y) => y.id === x.post && y.num === (x.pl ? 'pl' : 'sg'));
+    if (!p) continue;
+    if (x.adj) words.push({ ka: adjAgree(typeof x.adj === 'string' ? x.adj : x.adj.w, postBase(x.post)), role: 'adj', lemma: typeof x.adj === 'string' ? x.adj : x.adj.w, gloss: typeof x.adj === 'string' ? { ru: '', en: '' } : { ru: x.adj.ru, en: x.adj.en }, why: WHY.adj });
+    const pp = POSTS.find((y) => y.id === x.post);
+    words.push({ ka: p.form, role: 'adv', lemma: lex.w, gloss: { ru: `${pp.ru} + ${lex.ru}`, en: `${pp.en} + ${lex.en}` }, case: pp.base, post: x.post, why: WHY.post });
+  }
+  if (iArg) push(iArg, 'io');
+  if (oArg) push(oArg, oArg.words[oArg.words.length - 1].role === 'io' ? 'io' : 'obj');
+  // a question word goes right before the verb
+  const qi = words.findIndex((w) => w.role === 'q');
+  if (qi >= 0) words.push(...words.splice(qi, 1));
+  if (negWord) words.push(negWord);
+  words.push({ ...vword, why: WHY.agree });
+  const text = words.map((w) => w.ka).join(' ') + (question || qi >= 0 ? '?' : screeve === 'imperative' ? '!' : '.');
+  return { text: text.charAt(0) + text.slice(1), words, frame, issues, verbForm: vf };
+}
+
+// --- analysis ----------------------------------------------------------------------------------------------------
+// Single sticky-free global regex with alternation groups; the matching group decides the kind. Georgian words
+// include Asomtavruli/Nuskhuri/Mkhedruli blocks and hyphenated compounds; a hyphen counts as a dash only when
+// followed by a space (otherwise it is word-internal or punctuation). `i` is the char offset for highlighting.
+// (QUOTES is unused; the quote class is inlined in the regex.)
+const QUOTES = '„“”«»"\'‘’‚';
+export function tokenize(text) {
+  const out = [];
+  const re = /([Ⴀ-ჿⴀ-⴯]+(?:-[Ⴀ-ჿ]+)*|[\p{L}\p{N}]+(?:['’-][\p{L}]+)*)|(\s+)|([—–]|-{1,2}(?=\s))|([„“”«»"‘’‚])|([^\s])/gu;
+  let m;
+  while ((m = re.exec(text))) {
+    const kind = m[1] ? 'word' : m[2] ? 'space' : m[3] ? 'dash' : m[4] ? 'quote' : 'punct';
+    out.push({ t: m[0], kind, i: m.index });
+  }
+  return out;
+}
+
+// Words that open a clause, with the type of clause they open.
+export const CLAUSE_TYPES = {
+  'და': 'coord', 'მაგრამ': 'coord', 'ხოლო': 'coord', 'ან': 'coord', 'თუმცა': 'concessive', 'ამიტომ': 'coord', 'არამედ': 'coord',
+  'რომ': 'complement', 'თუ': 'conditional', 'როცა': 'temporal', 'როდესაც': 'temporal', 'სანამ': 'temporal', 'რადგან': 'causal', 'რადგანაც': 'causal', 'ვინაიდან': 'causal', 'რის გამოც': 'causal',
+  'რომელიც': 'relative', 'რომელსაც': 'relative', 'რომელმაც': 'relative', 'რომლის': 'relative', 'რომლებიც': 'relative', 'რომლებსაც': 'relative', 'რომლებმაც': 'relative',
+  'ვინც': 'relative', 'ვისაც': 'relative', 'ვისიც': 'relative', 'რაც': 'relative', 'რასაც': 'relative', 'რამაც': 'relative', 'სადაც': 'relative', 'საიდანაც': 'relative', 'როგორც': 'comparative', 'თითქოს': 'comparative', 'ვიდრე': 'comparative',
+};
+const SAY = new Set(['თქმა', 'კითხვა', 'პასუხი', 'ყვირილი', 'ლაპარაკი', 'საუბარი', 'დაძახება', 'თხოვნა']);
+const PERSON_OF = { '1sg': '1sg', '2sg': '2sg', '3sg': '3sg', '1pl': '1pl', '2pl': '2pl', '3pl': '3pl' };
+const POST_ROLE = { shi: 'in', ze: 'on', tan: 'with', tvis: 'for', gan: 'from', ken: 'towards', vit: 'like', dan: 'from', mde: 'until', mebr: 'according' };
+
+function bestVerb(readings) { return readings.find((r) => r.kind === 'v') || null; }
+
+// One clause of words (tokens of kind 'word' with readings): predicate, arguments by case, issues.
+// Verb reading disambiguation: a Georgian form is often ambiguous across screeves/persons (წერს, დაწერა...). Each
+// reading is scored by morphology + bonuses for "the case this reading's frame wants for the subject is present"
+// (+2), "...for the object" (+1), and person agreement with that subject (+2, +1). The frame of the winner then
+// assigns roles greedily, first matching noun per case (word order is free, so position is not used).
+// Unassigned nouns become adjuncts by case/postposition or 'other'. Diagnostics: subject/verb person mismatch
+// (tolerating 3pl inanimate subjects with 3sg verbs, a real Georgian rule) and the classic learner error of using
+// the nominative for a series II subject (or the ergative in series I), with the corrected form suggested.
+function clauseRoles(words) {
+  const preds = words.filter((w) => w.verb);
+  // the predicate: the last finite verb (Georgian verbs tend to come last); the others become separate predicates
+  const pred = preds.length ? preds[preds.length - 1] : null;
+  const args = [], adjuncts = [], issues = [], constructions = [];
+  if (!pred) {
+    for (const w of words) if (w.noun) args.push({ w, role: 'other', case: w.noun.tags.case });
+    return { pred: null, args, adjuncts, issues, constructions };
+  }
+  // choose the verb reading that best agrees with the cases present
+  const cases = new Set(words.filter((w) => w !== pred && w.noun).flatMap((w) => [...w.cases]));
+  let vr = pred.verbReadings[0];
+  let bestScore = -Infinity;
+  for (const r of pred.verbReadings) {
+    const f = caseFrame(r.lex, r.tags.screeve);
+    let sc = r.score;
+    if (cases.has(f.subj)) sc += 2;
+    if (f.obj && cases.has(f.obj)) sc += 1;
+    const subjW = words.find((w) => w !== pred && w.noun && w.cases.has(f.subj));
+    if (subjW && personOf(subjW) === r.tags.s) sc += 2;
+    if (words.some((w) => w !== pred && w.noun && w.cases.has(f.subj) && personOf(w) === r.tags.s)) sc += 1;
+    if (sc > bestScore) { bestScore = sc; vr = r; }
+  }
+  pred.reading = vr;
+  const frame = caseFrame(vr.lex, vr.tags.screeve);
+  const taken = new Set();
+  const pick = (caseId, role) => {
+    const w = words.find((x) => x !== pred && x.noun && !taken.has(x) && !x.attrOf && !x.noun.tags.post && x.cases.has(caseId));
+    if (w) { taken.add(w); args.push({ w, role, case: caseId }); }
+    return w;
+  };
+  const subjW = pick(frame.subj, 'subj');
+  if (frame.cls !== 2 && !frame.objIsIO && frame.obj) pick(frame.obj, 'obj');
+  if (frame.io === 'dat' || frame.objIsIO) pick('dat', 'io');
+  if (frame.io === 'tvis') { const w = words.find((x) => x.noun && x.noun.tags.post === 'tvis' && !taken.has(x)); if (w) { taken.add(w); args.push({ w, role: 'io', case: 'tvis' }); } }
+  for (const w of words) {
+    if (w === pred || taken.has(w) || !w.noun) continue;
+    if (w.attrOf) continue;
+    if (w.noun.tags.post) adjuncts.push({ w, role: POST_ROLE[w.noun.tags.post] || 'adv', post: w.noun.tags.post });
+    else if (w.noun.tags.case === 'gen') adjuncts.push({ w, role: 'poss' });
+    else if (w.noun.tags.case === 'adv' || w.noun.tags.case === 'ins') adjuncts.push({ w, role: w.noun.tags.case === 'ins' ? 'by' : 'as' });
+    else { args.push({ w, role: 'other', case: w.noun.tags.case }); }
+  }
+  // agreement: the subject's person against the verb's
+  if (subjW) {
+    const p = personOf(subjW);
+    const vs = vr.tags.s;
+    if (p && vs && p !== vs && !(p === '3pl' && vs === '3sg' && !subjW.human)) issues.push({ kind: 'agree', ru: `Глагол ${pred.t} — ${vs}, а подлежащее ${subjW.t} — ${p}.`, en: `The verb ${pred.t} is ${vs} but the subject ${subjW.t} is ${p}.` });
+  }
+  // wrong case of the subject for the series
+  const wrong = { erg: 'nom', nom: 'erg', dat: 'nom' };
+  if (!subjW && frame.subj) {
+    const alt = words.find((x) => x !== pred && x.noun && x.noun.tags.case === wrong[frame.subj] && !x.noun.tags.post && (x.noun.pos === 'n' || x.noun.pos === 'np' || x.noun.tags.pronoun));
+    if (alt && (frame.subj === 'erg' || frame.subj === 'nom' && alt.noun.tags.case === 'erg')) {
+      const right = suggestCase(alt, frame.subj);
+      issues.push({ kind: 'case', word: alt.t, right, ru: `${frame.series === 2 ? 'В серии II (аорист)' : 'В серии I'} подлежащее глагола ${pred.t} стоит в падеже «${CASE_NAMES[frame.subj].ru}»: ${right || ''}`, en: `${frame.series === 2 ? 'In series II (aorist)' : 'In series I'} the subject of ${pred.t} is ${CASE_NAMES[frame.subj].en}: ${right || ''}` });
+    }
+  }
+  for (const w of words) {
+    if (w.clitic) constructions.push({ kind: w.clitic, w: w.t });
+    if (w.verb) continue;
+    if (w.noun && w.noun.tags.masdar) constructions.push({ kind: 'masdar', w: w.t, lemma: w.noun.lemma });
+    if (w.noun && w.noun.tags.participle) constructions.push({ kind: 'participle', w: w.t, lemma: w.noun.lemma });
+  }
+  return { pred, reading: vr, frame, args, adjuncts, issues, constructions };
+}
+
+function personOf(w) {
+  if (!w.noun) return null;
+  if (w.noun.tags.person) return PERSON_OF[w.noun.tags.person];
+  return w.noun.tags.num === 'pl' ? '3pl' : '3sg';
+}
+function suggestCase(w, caseId) {
+  const r = w.noun;
+  if (r.tags.pronoun) { const p = PRONOUNS.find((x) => x.w === r.lemma); return p ? p.forms[caseId] : null; }
+  const d = declineNoun(r.lex);
+  const g = r.tags.num === 'pl' ? d.pl : d.sg;
+  const c = g.find((x) => x.id === caseId);
+  return c ? c.form : null;
+}
+
+// A sentence (no dialogue markup; see discourse.js for texts) -> tokens with readings and clauses.
+// A word is a verb only if it is not a conjunction and its best verb reading is within 0.5 of its best noun reading
+// (stricter against attributive participles). Clause segmentation mirrors discourse.js simpleClauses: a comma
+// closes a clause only after a verb, და splits only when the left side already has a verb. Relative words open a
+// relative clause whose antecedent is the last noun of the previous segment. Finally a main clause interrupted by
+// relative clauses is stitched back together (ქალმა, რომელიც ..., მითხრა), else its subject and verb would sit in
+// different clauses.
+export function analyzeKa(sentence) {
+  const tokens = tokenize(sentence);
+  const words = [];
+  for (const tk of tokens) {
+    if (tk.kind !== 'word') continue;
+    const rs = analyzeWord(tk.t);
+    const verbReadings = rs.filter((r) => r.kind === 'v');
+    const nounR = rs.find((r) => r.kind !== 'v' && r.kind !== 'x' && (r.pos === 'n' || r.pos === 'np' || r.pos === 'a' || r.tags.pronoun || r.kind === 'm' || r.kind === 't' || r.kind === 'p')) || null;
+    const other = rs.find((r) => r.kind === 'x') || null;
+    const w = { t: tk.t, i: tk.i, readings: rs, verbReadings, noun: nounR, other, known: rs.length > 0, human: !!(nounR && nounR.lex && nounR.lex.flags && nounR.lex.flags.h), clitic: rs[0] && rs[0].clitic };
+    // a word that reads both ways: conjunctions and particles first, then the verb if it is the clause's only one
+    w.cases = new Set(rs.filter((r) => r.kind !== 'v' && r.tags.case && !r.tags.post && !r.tags.attr).map((r) => r.tags.case));
+    w.conj = other && (other.pos === 'cj' || CLAUSE_TYPES[tk.t]) ? tk.t : CLAUSE_TYPES[tk.t] ? tk.t : null;
+    w.verb = !w.conj && verbReadings.length > 0 && (!nounR || verbReadings[0].score >= nounR.score - 0.5);
+    if (w.verb && nounR && nounR.tags.attr) w.verb = verbReadings[0].score > nounR.score;
+    words.push(w);
+  }
+  // attributes: an adjective (or genitive) right before a noun belongs to it
+  for (let k = 0; k + 1 < words.length; k++) {
+    const a = words[k], b = words[k + 1];
+    if (a.noun && b.noun && !a.verb && !b.verb && (a.noun.tags.attr || a.noun.pos === 'a' && a.readings.some((r) => r.tags.attr))) { a.attrOf = b; a.role = 'adj'; }
+  }
+  // clause boundaries: punctuation and clause words; "და" splits only when both sides have a verb
+  const segs = [];
+  let cur = { conj: null, type: 'main', words: [] };
+  const flush = () => { if (cur.words.length || cur.conj) segs.push(cur); };
+  let wi = 0;
+  for (const tk of tokens) {
+    if (tk.kind === 'word') {
+      const w = words[wi++];
+      if (w.conj && CLAUSE_TYPES[w.conj]) {
+        const type = CLAUSE_TYPES[w.conj];
+        if (type === 'coord' && w.conj === 'და' && !cur.words.some((x) => x.verb)) { w.role = 'conj'; cur.words.push(w); continue; }
+        flush();
+        cur = { conj: w.conj, type, words: [], conjWord: w };
+        if (type === 'relative') { const prev = segs[segs.length - 1]; const ante = prev && [...prev.words].reverse().find((x) => x.noun && !x.verb); cur.antecedent = ante || null; cur.words.push(w); w.relative = true; w.noun = w.noun || (w.readings.find((r) => r.tags.case) || null); }
+        continue;
+      }
+      cur.words.push(w);
+    } else if (tk.kind === 'punct' && /[,;:]/.test(tk.t)) {
+      if (cur.words.some((x) => x.verb)) { flush(); cur = { conj: null, type: 'coord', words: [] }; }
+    }
+  }
+  flush();
+  // a main clause interrupted by relative clauses continues after them (ქალმა, რომელიც …, მითხრა)
+  for (let k = segs.length - 1; k > 0; k--) {
+    if (segs[k].type !== 'coord' || segs[k].conj) continue;
+    let j = k - 1;
+    while (j >= 0 && segs[j].type === 'relative') j--;
+    if (j >= 0 && j < k - 1 && !segs[j].words.some((x) => x.verb)) { segs[j].words.push(...segs[k].words); segs.splice(k, 1); }
+  }
+  const clauses = segs.map((sg) => ({ type: sg.type, conj: sg.conj, antecedent: sg.antecedent || null, words: sg.words, ...clauseRoles(sg.words) }));
+  // a clause after "რომ" / a reported -ო verb next to a verb of saying: speech
+  for (let k = 0; k < clauses.length; k++) {
+    const c = clauses[k];
+    if (c.reading && SAY.has(c.reading.lemma)) c.saying = true;
+    if (c.words.some((w) => w.clitic === 'quote' || w.clitic === 'quoteSelf' || w.clitic === 'quoteRelay')) c.reported = c.words.find((w) => w.clitic).clitic;
+  }
+  return { tokens, words, clauses };
+}

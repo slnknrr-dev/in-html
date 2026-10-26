@@ -1,0 +1,4 @@
+const BEST=5;const emptyStats=()=>({v:1,games:{}});function normalizeStats(s){if(!s||typeof s!=='object'||s.v!==1||typeof s.games!=='object'||!s.games)return emptyStats();return s;}
+function entry(stats,key){return stats.games[key]||{played:0,won:0,streak:0,bestStreak:0,wonMs:0,best:[]};}
+function recordGame(stats,key,r){const e={...entry(stats,key)};e.best=(e.best||[]).slice();e.played++;let rank=0;if(r.won){e.won++;e.streak++;e.bestStreak=Math.max(e.bestStreak,e.streak);e.wonMs+=r.ms;if(!r.assisted){const item={ms:r.ms,date:r.date,bbbv:r.bbbv,clicks:r.clicks};if(r.seed!=null)item.seed=r.seed;if(r.replay)item.replay=r.replay;e.best.push(item);e.best.sort((a,b)=>a.ms-b.ms);const at=e.best.indexOf(item);e.best=e.best.slice(0,BEST);rank=at<BEST?at+1:0;}}else e.streak=0;stats.games[key]=e;return rank;}
+export{entry,normalizeStats,recordGame};

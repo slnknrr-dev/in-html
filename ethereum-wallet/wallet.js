@@ -1,0 +1,608 @@
+// ethereum-wallet/wallet.js - the wallet section: the wallets (of every chain: an account address is the same on all
+// EVM chains), creating (new phrase with the backup check), restoring, importing a private key or a keystore file,
+// watch-only addresses and ENS names; per wallet the overview (ether and token balances of its accounts, adding
+// tokens and accounts), receive (EIP-681 QR), send (send.js), history (the transactions sent from here with their
+// receipts, and the backend's watch index when the page is served by it), message signing and verification
+// (EIP-191, EIP-712), keystore export, backup; the address book.
+//
+// Route shape: #/wallet[/<id>|new/<kind>|book][/<sub>][?a=<account id>]. Wallet-level views receive (ctx, w); each
+// keeps local state in closures and repaints its own box, so a refresh never rebuilds the whole tab.
+// Secret handling rules applied below: private keys are fetched with privateKeyOf only at the moment of use and wiped
+// in finally; the recovery phrase and an imported key are shown only after re-entering the vault password.
+import { h } from '../ui/dom.js';
+import { t } from '../ui/i18n.js';
+import { button, copyText, download, field, seg, select, textInput } from '../ui/app.js';
+import { confirmDialog, openDialog, promptDialog, toast } from '../ui/overlays.js';
+import { contextMenu } from '../ui/contextmenu.js';
+import { iconEl } from '../ui/icons.js';
+import { pickFiles } from '../ui/files.js';
+import { generateMnemonic } from '../hdkey/bip39.js';
+import { wipe } from '../crypto/encoding.js';
+import { randomUUID } from '../crypto/random.js';
+import { openVault } from '../walletui/vault.js';
+import { mnemonicGrid, backupCheck, mnemonicInput } from '../walletui/mnemonic.js';
+import { qrElement, showQr, scanQr } from '../walletui/qr.js';
+import { addressBookView } from '../walletui/addressbook.js';
+import { backendCall } from '../walletui/net.js';
+import { section, kv, go, busy, statusLine, linkTo, mono, copyable, OFFLINE } from '../walletui/shell.js';
+import { short, ago } from '../walletui/format.js';
+import { isAddress, getAddress, equalAddress } from '../ethereum/address.js';
+import { isEnsName } from '../ethereum/ens.js';
+import { ethPath } from '../ethereum/hd.js';
+import { formatEthereumURI, erc20TransferURI } from '../ethereum/uri.js';
+import { signMessage, verifyMessage, recoverMessageAddress, signTypedData, recoverTypedDataAddress, hashTypedData } from '../ethereum/message.js';
+import { decryptKeystoreAsync, encryptKeystoreAsync, keystoreAddress } from '../ethereum/keystore.js';
+import { decodeFunctionResult } from '../ethereum/abi.js';
+import { fromHex } from '../ethereum/units.js';
+import { isValidPrivateKey } from '../crypto/secp256k1.js';
+import {
+  settings, vault, wallets, walletById, createHdWallet, createKeyWallet, createWatchWallet, deleteWallet, addHdAccount,
+  saveVault, rpc, chain, tokensOf, addToken, removeToken, sentOf, privateKeyOf, canSign, accountLabel, backendInfo,
+} from './state.js';
+import { fmtEth, fmtToken, balanceOf, refreshBalances, resolveRecipient, lang, parseAmountText } from './common.js';
+import { renderSend, speedUpDialog, cancelDialog, refreshSent } from './send.js';
+
+// Derivation schemes: BIP-44 varies the last index (MetaMask/Trezor), Ledger Live varies the account level. Same
+// mnemonic, different addresses - restoring with the wrong scheme shows an empty wallet, hence the explicit choice.
+const SCHEMES = [{ v: 'bip44', l: "=BIP-44 (m/44'/60'/0'/0/i) · MetaMask, Trezor" }, { v: 'ledger-live', l: "=Ledger Live (m/44'/60'/i'/0/0)" }];
+
+// The chosen account of each wallet (runtime only).
+// Selected account per wallet; ?a=<id> in the route wins so links can target an account. Runtime only: which account
+// is selected is UI state, not worth a vault write.
+const current = new Map();
+export function currentAccount(w, ctx = null) {
+  const q = ctx && ctx.route.query.get('a');
+  if (q && w.accounts.some((a) => a.id === q)) current.set(w.id, q);
+  return w.accounts.find((a) => a.id === current.get(w.id)) || w.accounts[0];
+}
+export const setCurrent = (w, acc) => current.set(w.id, acc.id);
+
+export function accountSelect(w, acc, onChange) {
+  if (w.accounts.length < 2) return null;
+  const s = select(w.accounts.map((a) => ({ v: a.id, l: '=' + accountLabel(w, a) + ' · ' + short(a.address, 6, 4) })), acc.id, (v) => { const a = w.accounts.find((x) => x.id === v); setCurrent(w, a); onChange(a); });
+  return field('eth.account', s);
+}
+
+// One wallet -> open it directly (skip a one-item list); unknown id -> back to the list with replace (no dead history
+// entry). The keystore tab exists only for key-holding wallets.
+export async function renderWallet(ctx) {
+  const [, id, sub] = ctx.route.parts;
+  if (id === 'new') return renderNew(ctx, sub);
+  if (id === 'book') return renderBook(ctx);
+  const list = wallets();
+  if (!id) {
+    if (list.length === 1) { go('wallet/' + list[0].id, { replace: true }); return; }
+    return renderList(ctx, list);
+  }
+  const w = walletById(id);
+  if (!w) { go('wallet', { replace: true }); return; }
+  const subs = [['', 'eth.overview'], ['receive', 'eth.receive'], ['send', 'eth.send'], ['history', 'eth.history'], ['sign', 'eth.messages'], canSign(w) ? ['keystore', 'eth.keystore'] : null, ['backup', 'eth.backupExport']].filter(Boolean);
+  const c = chain();
+  ctx.view.append(h('div', { class: 'ap-row' }, h('h2', { class: 'wu-h' }, w.name), h('span', { class: 'wu-pill' }, c.name),
+    w.kind === 'watch' ? h('span', { class: 'wu-pill wu-warnc' }, t('eth.watchOnly')) : w.kind === 'key' ? h('span', { class: 'wu-pill' }, t('eth.importedKey')) : null,
+    h('span', { class: 'ed-spacer' }), linkTo('wallet', t('eth.allWallets'))),
+  h('nav', { class: 'wu-subtabs' }, subs.map(([k, l]) => h('a', { href: '#/wallet/' + w.id + (k ? '/' + k : ''), class: (sub || '') === k ? 'wu-on' : '' }, t(l)))));
+  const fn = { receive: renderReceive, send: renderSend, history: renderHistory, sign: renderSign, keystore: renderKeystore, backup: renderBackup }[sub] || renderOverview;
+  return fn(ctx, w);
+}
+
+function newButtons() {
+  return h('div', { class: 'ap-row wu-mt' }, button('eth.newWallet', 'plus', () => go('wallet/new/create'), 'primary'), button('eth.restoreWallet', 'key', () => go('wallet/new/restore')),
+    button('eth.importKey', 'upload', () => go('wallet/new/import')), button('eth.watchWallet', 'eye', () => go('wallet/new/watch')));
+}
+
+function renderList(ctx, list) {
+  const c = chain();
+  if (!list.length) {
+    ctx.view.append(section(t('eth.welcome'), h('p', null, t('eth.welcomeText', { chain: c.name })), newButtons(),
+      c.testnet ? null : h('div', { class: 'wu-warn-box wu-mt' }, iconEl('warn'), t('eth.mainnetWarn'))));
+    return;
+  }
+  const box = h('div', { class: 'wu-list' });
+  const paint = () => {
+    box.textContent = '';
+    for (const w of list) {
+      const known = w.accounts.map((a) => balanceOf(a.address)).filter((b) => b && b.wei != null);
+      const total = known.length ? known.reduce((s, b) => s + b.wei, 0n) : null;
+      box.append(h('a', { class: 'wu-item', href: '#/wallet/' + w.id }, iconEl(w.kind === 'watch' ? 'eye' : w.kind === 'key' ? 'key' : 'wallet'),
+        h('div', { class: 'wu-item-main' }, h('b', null, w.name), h('span', { class: 'wu-small wu-muted' }, t('eth.accountsN', { n: w.accounts.length }) + ' · ' + t('eth.kind.' + w.kind))),
+        h('span', { class: 'wu-item-side' }, total !== null ? fmtEth(total) : '—')));
+    }
+  };
+  paint();
+  ctx.view.append(section(t('eth.wallets'), box, newButtons(), h('div', { class: 'ap-row' }, button('wu.addressBook', 'users', () => go('wallet/book')))));
+  if (rpc()) refreshBalances(list.flatMap((w) => w.accounts.map((a) => a.address))).then(() => ctx.alive() && paint()).catch(() => ctx.alive() && paint());
+}
+
+// --- new wallets ---
+
+function nameField(def) {
+  const i = h('input', { class: 'ed-input', value: def, maxlength: 60 });
+  return { el: field('eth.walletName', i), value: () => i.value.trim() || def };
+}
+
+// Duplicate of tools.js progressBar (kept local to avoid a cross-view import for six lines).
+function progressBar() {
+  const bar = h('i');
+  const el = h('div', { class: 'ap-progress', hidden: true }, bar);
+  el.set = (f) => { el.hidden = false; bar.style.width = Math.round(f * 100) + '%'; };
+  el.done = () => { el.hidden = true; bar.style.width = '0'; };
+  return el;
+}
+
+async function readTextFile(accept = '.json,application/json,text/plain') {
+  const [f] = await pickFiles({ accept });
+  return f ? (await f.text()).trim() : null;
+}
+
+// Wallet creation flows. Create: the phrase is generated locally (CSPRNG via hdkey/bip39), shown, and must pass the
+// backup check (re-typing chosen words) before the wallet exists - a wallet whose phrase was never written down is
+// the most common cause of lost funds. The phrase variable and grid are cleared after creation.
+// Restore: an invalid checksum may still be accepted after confirmation (non-standard wallets exist), never silently.
+// Import: JSON starting with "{" is treated as a keystore, anything else as a 32-byte hex key validated against the
+// secp256k1 order (isValidPrivateKey: 0 < k < n).
+// Watch: entries split on whitespace/comma/semicolon; ENS names resolved once at import (the stored address does not
+// follow later ENS changes - intentional, a watched address should not silently change).
+function renderNew(ctx, kind) {
+  const back = linkTo('wallet', '← ' + t('eth.allWallets'));
+  if (kind === 'create') {
+    let words = 12;
+    let phrase = generateMnemonic(words);
+    const grid = h('div');
+    const paint = () => { grid.textContent = ''; grid.append(mnemonicGrid(phrase)); };
+    paint();
+    const name = nameField(t('eth.defaultName'));
+    const pass = h('input', { class: 'ed-input', type: 'password', autocomplete: 'off' });
+    let scheme = 'bip44';
+    const create = h('button', { type: 'button', class: 'ed-btn ed-primary' }, iconEl('check'), t('eth.backupDone'));
+    create.addEventListener('click', async () => {
+      if (!(await backupCheck(phrase))) return;
+      const w = await busy(create, createHdWallet({ name: name.value(), mnemonic: phrase, passphrase: pass.value, scheme }));
+      phrase = ''; grid.textContent = '';
+      toast(t('eth.walletCreated'), 'ok');
+      go('wallet/' + w.id + '/receive');
+    });
+    ctx.view.append(back, section(t('eth.newWallet'), h('p', null, t('eth.newText')),
+      seg([{ v: 12, l: '=12' }, { v: 24, l: '=24' }], words, (v) => { words = v; phrase = generateMnemonic(words); paint(); }, 'eth.words'),
+      grid, name.el, field('eth.scheme', select(SCHEMES, scheme, (v) => { scheme = v; })),
+      field('eth.passphrase', pass, 'eth.passphraseHint'), h('div', { class: 'ap-row' }, create)));
+    return;
+  }
+  if (kind === 'restore') {
+    const input = mnemonicInput();
+    const name = nameField(t('eth.restoredName'));
+    const pass = h('input', { class: 'ed-input', type: 'password', autocomplete: 'off' });
+    let scheme = 'bip44', count = 1;
+    const btn = h('button', { type: 'button', class: 'ed-btn ed-primary' }, iconEl('key'), t('eth.restore'));
+    btn.addEventListener('click', async () => {
+      const st = input.state();
+      if (!st.words.length) return;
+      if (!st.ok && !(await confirmDialog(t('eth.invalidPhrase'), t('eth.invalidPhraseText'), t('eth.restoreAnyway'), true))) return;
+      const w = await busy(btn, createHdWallet({ name: name.value(), mnemonic: st.phrase, passphrase: pass.value, scheme, count }));
+      go('wallet/' + w.id);
+    });
+    ctx.view.append(back, section(t('eth.restoreWallet'), h('p', null, t('eth.restoreText')), input, name.el,
+      field('eth.scheme', select(SCHEMES, scheme, (v) => { scheme = v; })),
+      field('eth.accountCount', select([1, 2, 3, 5, 10].map((n) => ({ v: n, l: '=' + n })), count, (v) => { count = +v; })),
+      field('eth.passphrase', pass, 'eth.passphraseHint'), h('div', { class: 'ap-row' }, btn)));
+    return;
+  }
+  if (kind === 'import') {
+    const ta = textInput('', () => {}, { multiline: true, rows: 5, class: 'ed-input ed-textarea wu-mono', placeholder: t('eth.importHint'), 'aria-label': t('eth.importInput'), autocomplete: 'off' });
+    const pw = h('input', { class: 'ed-input', type: 'password', autocomplete: 'off', 'aria-label': t('eth.keystorePassword') });
+    const name = nameField(t('eth.importedName'));
+    const prog = progressBar();
+    const err = h('div', { class: 'wu-error', role: 'alert' });
+    const btn = h('button', { type: 'button', class: 'ed-btn ed-primary' }, iconEl('key'), t('eth.import'));
+    btn.addEventListener('click', () => busy(btn, (async () => {
+      err.textContent = '';
+      const text = ta.value.trim();
+      let key = null;
+      try {
+        if (text.startsWith('{')) key = await decryptKeystoreAsync(text, pw.value, { onProgress: prog.set });
+        else {
+          const hex = text.replace(/^0x/i, '');
+          if (!/^[0-9a-fA-F]{64}$/.test(hex)) throw new Error(t('eth.badKey'));
+          key = fromHex(hex);
+          if (!isValidPrivateKey(key)) throw new Error(t('eth.badKey'));
+        }
+        const w = createKeyWallet({ name: name.value(), privateKey: key });
+        ta.value = ''; pw.value = '';
+        toast(t('eth.walletCreated'), 'ok');
+        go('wallet/' + w.id);
+      } catch (e) {
+        err.textContent = e.code === 'password' ? t('wu.wrongPassword') : e.message;
+      } finally { prog.done(); if (key) wipe(key); }
+    })()));
+    const fromFile = button('eth.fromFile', 'upload', async () => { const v = await readTextFile(); if (v) { ta.value = v; const a = keystoreAddress(v); if (a) toast(t('eth.keystoreFor', { a }), 'info'); } });
+    ctx.view.append(back, section(t('eth.importKey'), h('p', null, t('eth.importText')), field('eth.importInput', ta), h('div', { class: 'ap-row' }, fromFile),
+      field('eth.keystorePassword', pw, 'eth.keystorePasswordHint'), name.el, prog, err, h('div', { class: 'ap-row' }, btn)));
+    return;
+  }
+  // watch-only
+  const ta = textInput('', () => {}, { multiline: true, rows: 4, class: 'ed-input ed-textarea wu-mono', placeholder: '0x… / name.eth', 'aria-label': t('eth.watchInput') });
+  const name = nameField(t('eth.watchName'));
+  const err = h('div', { class: 'wu-error', role: 'alert' });
+  const btn = h('button', { type: 'button', class: 'ed-btn ed-primary' }, iconEl('eye'), t('eth.addWatch'));
+  btn.addEventListener('click', () => busy(btn, (async () => {
+    err.textContent = '';
+    try {
+      const items = ta.value.split(/[\s,;]+/).filter(Boolean);
+      if (!items.length) throw new Error(t('eth.badAddress', { a: '' }));
+      const entries = [];
+      for (const it of items) entries.push(await resolveRecipient(it));
+      const w = createWatchWallet({ name: name.value(), entries });
+      go('wallet/' + w.id);
+    } catch (e) { err.textContent = e.message; }
+  })()));
+  ctx.view.append(back, section(t('eth.watchWallet'), h('p', null, t('eth.watchText')), field('eth.watchInput', ta), name.el, err, h('div', { class: 'ap-row' }, btn)));
+}
+
+// --- overview ---
+
+// Wallet total is shown only when every account's balance is known: a partial sum would understate the balance.
+// Context menus (right click / long press) carry secondary actions; the list stays clean. Token sums follow the
+// same "all known or unknown" rule.
+async function renderOverview(ctx, w) {
+  const box = h('div', { class: 'wu-col' });
+  ctx.view.append(box);
+  const tokens = tokensOf();
+  const paint = () => {
+    box.textContent = '';
+    const client = rpc();
+    const bs = w.accounts.map((a) => balanceOf(a.address));
+    const known = bs.filter((b) => b && b.wei != null);
+    const total = known.length === w.accounts.length ? known.reduce((s, b) => s + b.wei, 0n) : null;
+    const errors = bs.filter((b) => b && b.error).map((b) => b.error);
+    const refresh = h('button', { type: 'button', class: 'ed-btn' }, iconEl('refresh'), t('eth.refresh'));
+    refresh.addEventListener('click', () => busy(refresh, refreshBalances(w.accounts.map((a) => a.address), { force: true }).then(paint).catch((e) => { paint(); toast(e.message, 'error'); })));
+    box.append(section(t('eth.balance'),
+      h('div', { class: 'wu-amount', 'data-balance': '' }, total !== null ? fmtEth(total) : '—'),
+      !client ? statusLine('info', OFFLINE ? t('eth.offlineNoSync') : t('eth.noEndpointText')) : null,
+      errors.length ? statusLine('error', errors[0]) : null,
+      h('div', { class: 'ap-row wu-mt' }, client ? refresh : null, button('eth.receive', 'download', () => go('wallet/' + w.id + '/receive'), 'primary'), button('eth.send', 'send', () => go('wallet/' + w.id + '/send')),
+        !client && !OFFLINE ? button('eth.chooseEndpoint', 'globe', () => go('settings')) : null)));
+    // accounts
+    const accList = h('div', { class: 'wu-list' }, w.accounts.map((a, i) => h('div', { class: 'wu-item', tabindex: '0', dataset: { id: a.id } },
+      h('div', { class: 'wu-item-main' }, h('b', null, accountLabel(w, a)), h('span', { class: 'wu-mono wu-small wu-break' }, a.address),
+        w.kind === 'hd' ? h('span', { class: 'wu-small wu-muted' }, ethPath(a.index, w.scheme || 'bip44')) : a.ens ? h('span', { class: 'wu-small wu-muted' }, a.ens) : null),
+      h('span', { class: 'wu-item-side' }, bs[i] && bs[i].wei != null ? fmtEth(bs[i].wei) : '—'))));
+    contextMenu(accList, (el) => {
+      const a = w.accounts.find((x) => x.id === el.dataset.id);
+      if (!a) return null;
+      return [
+        { label: t('eth.copyAddress'), icon: 'copy', action: () => copyText(a.address) },
+        { label: t('eth.receive'), icon: 'download', action: () => { setCurrent(w, a); go('wallet/' + w.id + '/receive'); } },
+        { label: t('eth.send'), icon: 'send', action: () => { setCurrent(w, a); go('wallet/' + w.id + '/send'); } },
+        OFFLINE ? null : { label: t('eth.openExplorer'), icon: 'search', action: () => go('explorer/address/' + a.address) },
+        { label: t('eth.editLabel'), icon: 'tag', action: async () => { const v = await promptDialog(t('eth.editLabel'), t('eth.label'), a.label); if (v !== null) { a.label = v.trim(); saveVault(); paint(); } } },
+        canSign(w) ? { label: t('eth.exportKeystore'), icon: 'key', action: () => { setCurrent(w, a); go('wallet/' + w.id + '/keystore'); } } : null,
+        w.accounts.length > 1 ? { sep: true } : null,
+        w.accounts.length > 1 ? { label: t('eth.removeAccount'), icon: 'trash', danger: true, action: async () => {
+          if (await confirmDialog(t('eth.removeAccount'), t('eth.removeAccountText', { a: a.address }), t('dlg.delete'), true)) { w.accounts.splice(w.accounts.indexOf(a), 1); saveVault(); paint(); }
+        } } : null,
+      ].filter(Boolean);
+    }, { selector: '.wu-item', label: t('eth.accounts') });
+    accList.addEventListener('dblclick', (e) => { const el = e.target.closest('.wu-item'); const a = el && w.accounts.find((x) => x.id === el.dataset.id); if (a) { setCurrent(w, a); go('wallet/' + w.id + '/receive'); } });
+    box.append(section(t('eth.accounts'), accList, h('div', { class: 'ap-row wu-mt' },
+      w.kind === 'hd' ? button('eth.addAccount', 'plus', async () => { const r = await addHdAccount(w); if (!r) toast(t('eth.accountExists'), 'warn'); paint(); if (r && rpc()) refreshBalances([r.address]).then(paint).catch(() => {}); }) : null,
+      w.kind === 'watch' ? button('eth.addAddress', 'plus', async () => {
+        const v = await promptDialog(t('eth.addAddress'), t('eth.addressOrEns'), '');
+        if (!v) return;
+        try { const r = await resolveRecipient(v); if (w.accounts.some((x) => equalAddress(x.address, r.address))) return; w.accounts.push({ id: randomUUID(), address: r.address, label: r.ens || '', ens: r.ens }); saveVault(); paint(); } catch (e) { toast(e.message, 'error'); }
+      }) : null,
+      h('span', { class: 'wu-small wu-muted' }, t('eth.sameOnAllChains')))));
+    // tokens
+    const tokList = h('div', { class: 'wu-list' }, tokens.length ? tokens.map((tk) => {
+      const vals = bs.map((b) => (b && b.tokens ? b.tokens[tk.address] : null));
+      const sum = vals.every((v) => v != null) ? vals.reduce((s, v) => s + v, 0n) : null;
+      return h('div', { class: 'wu-item', tabindex: '0', dataset: { token: tk.address } },
+        h('div', { class: 'wu-item-main' }, h('b', null, tk.symbol + (tk.name ? ' · ' + tk.name : '')), h('span', { class: 'wu-mono wu-small wu-break wu-muted' }, tk.address)),
+        h('span', { class: 'wu-item-side', 'data-token-balance': tk.symbol }, sum !== null ? fmtToken(sum, tk) : '—'));
+    }) : [h('div', { class: 'ap-empty' }, t('eth.noTokens'))]);
+    contextMenu(tokList, (el) => {
+      const tk = tokens.find((x) => x.address === el.dataset.token);
+      if (!tk) return null;
+      return [
+        { label: t('eth.sendToken', { sym: tk.symbol }), icon: 'send', action: () => go('wallet/' + w.id + '/send?token=' + tk.address) },
+        { label: t('eth.copyContract'), icon: 'copy', action: () => copyText(tk.address) },
+        OFFLINE ? null : { label: t('eth.openExplorer'), icon: 'search', action: () => go('explorer/address/' + tk.address) },
+        { sep: true },
+        { label: t('eth.removeToken'), icon: 'trash', danger: true, action: () => { removeToken(tk.address); ctx.rerender(); } },
+      ].filter(Boolean);
+    }, { selector: '.wu-item', label: t('eth.tokens') });
+    box.append(section(t('eth.tokensOn', { chain: chain().name }), tokList, h('div', { class: 'ap-row wu-mt' }, button('eth.addToken', 'plus', async () => { if (await addTokenDialog()) { ctx.rerender(); } }))));
+    const pend = sentOf().filter((p) => p.status === 'pending' && w.accounts.some((a) => equalAddress(a.address, p.from)));
+    if (pend.length) box.append(section(t('eth.pendingN', { n: pend.length }), h('div', { class: 'wu-list' }, pend.slice(0, 5).map((p) => sentItem(p))), h('div', { class: 'ap-row wu-mt' }, linkTo('wallet/' + w.id + '/history', t('eth.history') + ' →'))));
+  };
+  paint();
+  if (rpc()) refreshBalances(w.accounts.map((a) => a.address)).then(() => ctx.alive() && paint()).catch(() => ctx.alive() && paint());
+}
+
+// Adds an ERC-20 token by its contract address: symbol, decimals and name are read with eth_call when connected,
+// typed by hand otherwise.
+// Hardcoded 4-byte selectors (symbol 0x95d89b41, decimals 0x313ce567, name 0x06fdde03) avoid encoding at runtime.
+// name() is optional (some early tokens lack it). decimals limited to 0..255: it is a uint8 by ERC-20.
+export async function addTokenDialog(preset = '') {
+  const addr = h('input', { class: 'ed-input wu-mono', value: preset, placeholder: '0x…', autocomplete: 'off', spellcheck: 'false' });
+  const sym = h('input', { class: 'ed-input', placeholder: 'USDC', maxlength: 16 });
+  const dec = h('input', { class: 'ed-input', value: '18', inputmode: 'numeric' });
+  const nm = h('input', { class: 'ed-input', maxlength: 60 });
+  const msg = h('div', { class: 'wu-small' });
+  const client = rpc();
+  const lookup = async () => {
+    if (!client || !isAddress(addr.value.trim())) return;
+    msg.textContent = t('eth.loading'); msg.className = 'wu-small wu-muted';
+    const to = getAddress(addr.value.trim());
+    const read = async (sig, data) => decodeFunctionResult(sig, await client.call({ to, data }))[0];
+    try {
+      const [s, d, n] = await Promise.all([
+        read('function symbol() view returns (string)', '0x95d89b41'),
+        read('function decimals() view returns (uint8)', '0x313ce567'),
+        read('function name() view returns (string)', '0x06fdde03').catch(() => ''),
+      ]);
+      sym.value = s; dec.value = String(d); nm.value = n;
+      msg.textContent = t('eth.tokenFound', { sym: s, dec: String(d) }); msg.className = 'wu-small wu-ok';
+    } catch (e) { msg.textContent = t('eth.tokenNotRead', { msg: e.message }); msg.className = 'wu-small wu-error'; }
+  };
+  addr.addEventListener('change', lookup);
+  const v = await openDialog({
+    title: t('eth.addToken'), className: 'ew-token-dlg',
+    body: h('div', { class: 'wu-col' }, h('p', { class: 'wu-small wu-muted' }, client ? t('eth.addTokenText') : t('eth.addTokenManual')), field('eth.contract', addr), msg,
+      field('eth.symbol', sym), field('eth.decimals', dec), field('eth.tokenName', nm)),
+    onMount: () => { if (preset) lookup(); },
+    buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('eth.addToken'), primary: true, value: 'ok', onClick: () => {
+      if (!isAddress(addr.value.trim())) { msg.textContent = t('eth.badAddress', { a: addr.value }); msg.className = 'wu-small wu-error'; return false; }
+      if (!sym.value.trim() || !(+dec.value >= 0 && +dec.value <= 255)) { msg.textContent = t('eth.tokenFieldsNeeded'); msg.className = 'wu-small wu-error'; return false; }
+      return true;
+    } }],
+  });
+  if (v !== 'ok') return false;
+  const ok = addToken({ address: addr.value.trim(), symbol: sym.value.trim(), decimals: +dec.value, name: nm.value.trim() });
+  if (!ok) toast(t('eth.tokenExists'), 'warn');
+  return ok;
+}
+
+// --- receive ---
+
+// EIP-681 request URI: chain id omitted for mainnet (the default per spec, shorter QR), token requests use the
+// transfer(address,uint256) form. A bad amount shows an error but still renders the plain address QR.
+function renderReceive(ctx, w) {
+  let acc = currentAccount(w, ctx);
+  let amount = '', token = '';
+  const out = h('div', { class: 'wu-col wu-center' });
+  const err = h('div', { class: 'wu-error' });
+  const c = chain();
+  const paint = () => {
+    out.textContent = '';
+    err.textContent = '';
+    const tk = token ? tokensOf().find((x) => x.address === token) : null;
+    let value = null;
+    try { value = amount ? parseAmountText(amount, tk ? tk.decimals : 18) : null; } catch (e) { err.textContent = e.message; }
+    const uri = tk ? erc20TransferURI(tk.address, acc.address, value ?? 0n, c.id) : formatEthereumURI({ target: acc.address, chainId: c.id === 1 ? null : c.id, value });
+    out.append(qrElement(uri, { size: 240, label: acc.address }),
+      h('div', { class: 'wu-mono wu-break wu-center', 'data-address': '', style: { fontSize: '15px' } }, acc.address),
+      h('div', { class: 'wu-small wu-muted' }, accountLabel(w, acc) + ' · ' + c.name),
+      h('div', { class: 'ap-row' }, button('ap.copy', 'copy', () => copyText(acc.address)), button('eth.copyUri', 'link', () => copyText(uri)), button('eth.enlarge', 'qr', () => showQr(uri, { title: t('eth.receive'), caption: acc.address }))),
+      h('div', { class: 'wu-small wu-muted wu-break' }, uri),
+      h('p', { class: 'wu-small wu-muted' }, t('eth.receiveNote', { chain: c.name })));
+  };
+  const tokSel = select([{ v: '', l: '=' + c.currency.symbol }, ...tokensOf().map((x) => ({ v: x.address, l: '=' + x.symbol }))], '', (v) => { token = v; paint(); });
+  const amountIn = textInput('', (v) => { amount = v; paint(); }, { inputmode: 'decimal', placeholder: '0.0', 'aria-label': t('eth.amount') });
+  ctx.view.append(h('div', { class: 'wu-grid2' }, section(t('eth.receive'), out),
+    section(t('eth.request'), accountSelect(w, acc, (a) => { acc = a; paint(); }), field('eth.asset', tokSel), field('eth.amountOptional', amountIn), err)));
+  paint();
+}
+
+// --- history ---
+
+// Shared row for pending lists (overview) and history. Stored quantities are decimal strings (JSON has no bigint).
+export function sentItem(p) {
+  const icon = p.kind === 'cancel' ? 'close' : p.kind === 'speedup' ? 'zap' : 'send';
+  return h('div', { class: 'wu-item', tabindex: '0', dataset: { hash: p.hash } }, iconEl(icon),
+    h('div', { class: 'wu-item-main' }, h('span', null, t('eth.sent.' + p.kind), ' ', h('span', { class: 'wu-pill' + (p.status === 'confirmed' ? ' wu-okc' : p.status === 'failed' ? ' wu-warnc' : '') }, t('eth.st.' + p.status))),
+      h('span', { class: 'wu-small wu-muted wu-mono wu-break' }, `${short(p.hash, 10, 8)} · nonce ${p.nonce} · ${ago(Math.floor(p.at / 1000), lang())}`)),
+    h('span', { class: 'wu-item-side' }, p.token ? fmtToken(BigInt(p.token.amount), p.token) : fmtEth(BigInt(p.value || '0'), p.chainId), p.fee ? h('div', { class: 'wu-small wu-muted' }, t('eth.feeShort', { fee: fmtEth(BigInt(p.fee), p.chainId, 8) })) : null));
+}
+
+// Local history = transactions sent from this browser only (no indexer). Pending entries are re-checked on open.
+async function renderHistory(ctx, w) {
+  const box = h('div', { class: 'wu-col' });
+  const server = h('div', { class: 'wu-col' });
+  ctx.view.append(box, server);
+  const mine = () => sentOf().filter((p) => w.accounts.some((a) => equalAddress(a.address, p.from)));
+  const paint = () => {
+    box.textContent = '';
+    const list = mine();
+    const el = h('div', { class: 'wu-list' }, list.length ? list.map(sentItem) : [h('div', { class: 'ap-empty' }, t('eth.noSent'))]);
+    contextMenu(el, (it) => {
+      const p = list.find((x) => x.hash === it.dataset.hash);
+      if (!p) return null;
+      const acc = w.accounts.find((a) => equalAddress(a.address, p.from));
+      const live = p.status === 'pending' && canSign(w) && rpc();
+      return [
+        OFFLINE ? null : { label: t('eth.openExplorer'), icon: 'search', action: () => go('explorer/tx/' + p.hash) },
+        { label: t('eth.copyHash'), icon: 'copy', action: () => copyText(p.hash) },
+        live ? { label: t('eth.speedUp'), icon: 'zap', action: () => speedUpDialog(w, acc, p).then(paint) } : null,
+        live ? { label: t('eth.cancelTx'), icon: 'close', action: () => cancelDialog(w, acc, p).then(paint) } : null,
+        { sep: true },
+        { label: t('eth.forget'), icon: 'trash', danger: true, action: () => { vault.data.pending.splice(vault.data.pending.indexOf(p), 1); saveVault(); paint(); } },
+      ].filter(Boolean);
+    }, { selector: '.wu-item', label: t('eth.history') });
+    el.addEventListener('dblclick', (e) => { const it = e.target.closest('.wu-item'); if (it && it.dataset.hash && !OFFLINE) go('explorer/tx/' + it.dataset.hash); });
+    const check = h('button', { type: 'button', class: 'ed-btn' }, iconEl('refresh'), t('eth.checkStatus'));
+    check.addEventListener('click', () => busy(check, refreshSent(mine()).then(paint).catch((e) => toast(e.message, 'error'))));
+    box.append(section(t('eth.sentFromHere', { chain: chain().name }), el, h('div', { class: 'ap-row wu-mt' }, rpc() ? check : null),
+      h('p', { class: 'wu-small wu-muted' }, t('eth.historyNote'))));
+  };
+  paint();
+  if (rpc() && mine().some((p) => p.status === 'pending')) refreshSent(mine()).then(() => ctx.alive() && paint()).catch(() => {});
+  if (backendInfo) serverHistory(w, server).catch((e) => server.append(statusLine('error', e.message)));
+}
+
+// The backend's watch index (transactions from and to the watched addresses since watching started).
+// A watch entry matches this wallet when it covers every account address on the backend's chain. Adding one needs
+// the backend token, remembered in the vault (encrypted) after the first successful use.
+async function serverHistory(w, box) {
+  const list = await backendCall('watch');
+  const entry = list.find((x) => x.chainId === backendInfo.chainId && w.accounts.every((a) => x.addresses.some((b) => equalAddress(a.address, b))));
+  const addBtn = button('eth.watchOnServer', 'eye', async () => {
+    let token = (vault.data.server && vault.data.server.token) || '';
+    if (!token) { token = await promptDialog(t('eth.watchOnServer'), t('eth.serverToken'), ''); if (!token) return; }
+    try {
+      await backendCall('watch', { method: 'POST', token, body: { label: w.name, addresses: w.accounts.map((a) => a.address), tokens: tokensOf(backendInfo.chainId).map((x) => x.address) } });
+      vault.data.server = { ...(vault.data.server || {}), token }; saveVault();
+      toast(t('eth.watchAdded'), 'ok');
+      // KNOWN DEFECT: this re-run is neither awaited nor caught; a failing backend call becomes an unhandled rejection
+      // instead of the inline error the first call gets. Fix: serverHistory(w, box).catch((e) => box.append(statusLine('error', e.message))).
+      box.textContent = ''; serverHistory(w, box);
+    } catch (e) { toast(e.message, 'error'); }
+  });
+  if (!entry) { box.append(section(t('eth.serverIndex'), h('p', { class: 'wu-small wu-muted' }, t('eth.serverIndexText')), h('div', { class: 'ap-row' }, addBtn))); return; }
+  const d = await backendCall('watch/' + entry.id);
+  const txs = d.transactions || [];
+  box.append(section(t('eth.serverIndex'), h('p', { class: 'wu-small wu-muted' }, t('eth.serverSince', { block: String(entry.fromBlock) })),
+    h('div', { class: 'wu-list' }, txs.length ? txs.slice(0, 200).map((x) => {
+      const tk = x.token ? tokensOf(backendInfo.chainId).find((y) => equalAddress(y.address, x.token)) : null;
+      const out = w.accounts.some((a) => equalAddress(a.address, x.from));
+      return h('a', { class: 'wu-item', href: '#/explorer/tx/' + x.hash }, iconEl(out ? 'send' : 'download'),
+        h('div', { class: 'wu-item-main' }, h('span', null, x.kind === 'erc20' ? (tk ? tk.symbol : 'ERC-20') : chain(backendInfo.chainId).currency.symbol), h('span', { class: 'wu-small wu-muted wu-mono' }, `${short(x.hash, 10, 8)} · ${t('eth.blockN', { n: x.blockNumber })}`)),
+        h('span', { class: 'wu-item-side' + (out ? '' : ' wu-pos') }, (out ? '−' : '+') + (x.kind === 'erc20' ? (tk ? fmtToken(BigInt(x.amount), tk) : x.amount) : fmtEth(BigInt(x.value), backendInfo.chainId))));
+    }) : [h('div', { class: 'ap-empty' }, t('eth.noTx'))])));
+}
+
+// --- messages ---
+
+// EIP-712 example prefilled for the typed-data mode, with the current chain id in its domain (wallets reject a domain
+// chainId that differs from the active chain).
+const EXAMPLE_712 = () => JSON.stringify({
+  types: { EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }, { name: 'chainId', type: 'uint256' }], Mail: [{ name: 'from', type: 'address' }, { name: 'contents', type: 'string' }] },
+  primaryType: 'Mail', domain: { name: 'Example', version: '1', chainId: settings.chainId }, message: { from: '0x0000000000000000000000000000000000000000', contents: 'Hello' },
+}, null, 1);
+
+// EIP-191 personal_sign and EIP-712 typed data. The typed-data hash is shown beside the signature so it can be
+// compared with what a dapp or hardware wallet displays. Verify recovers the signer; with an expected address the
+// result is a match/mismatch, without one it just reports who signed.
+function renderSign(ctx, w) {
+  let acc = currentAccount(w, ctx);
+  let mode = 'personal';
+  const msgIn = textInput('', () => {}, { multiline: true, rows: 5, 'aria-label': t('eth.message') });
+  const out = textInput('', () => {}, { multiline: true, rows: 3, class: 'ed-input ed-textarea wu-mono', readonly: true, 'aria-label': t('eth.signature') });
+  const hashOut = h('div', { class: 'wu-small wu-muted wu-mono wu-break' });
+  const signBtn = h('button', { type: 'button', class: 'ed-btn ed-primary', disabled: !canSign(w) }, iconEl('edit'), t('eth.sign'));
+  signBtn.addEventListener('click', () => busy(signBtn, (async () => {
+    let key = null;
+    try {
+      key = await privateKeyOf(w, acc);
+      if (mode === 'personal') out.value = signMessage(msgIn.value, key);
+      else { const td = JSON.parse(msgIn.value); hashOut.textContent = 'hash ' + hashTypedData(td); out.value = signTypedData(td, key); }
+    } catch (e) { toast(e.message, 'error'); } finally { if (key) wipe(key); }
+  })()));
+  const modeSeg = seg([{ v: 'personal', l: 'eth.personalSign' }, { v: 'typed', l: 'eth.typedData' }], mode, (v) => { mode = v; if (v === 'typed' && !msgIn.value.trim()) msgIn.value = EXAMPLE_712(); hashOut.textContent = ''; });
+  const vAddr = textInput('', () => {}, { class: 'ed-input wu-mono', 'aria-label': t('eth.address') });
+  const vMsg = textInput('', () => {}, { multiline: true, rows: 4, 'aria-label': t('eth.message') });
+  const vSig = textInput('', () => {}, { multiline: true, rows: 2, class: 'ed-input ed-textarea wu-mono', 'aria-label': t('eth.signature') });
+  let vMode = 'personal';
+  const vOut = h('div');
+  const verifyBtn = button('eth.verify', 'check', () => {
+    vOut.textContent = '';
+    try {
+      const sig = vSig.value.trim();
+      const signer = vMode === 'personal' ? recoverMessageAddress(vMsg.value, sig) : recoverTypedDataAddress(JSON.parse(vMsg.value), sig);
+      const want = vAddr.value.trim();
+      const ok = want ? (vMode === 'personal' ? verifyMessage(vMsg.value, sig, want) : equalAddress(signer, want)) : true;
+      vOut.append(statusLine(ok ? 'ok' : 'error', ok ? t('eth.sigValid', { a: signer }) : t('eth.sigOther', { a: signer })));
+    } catch (e) { vOut.append(statusLine('error', t('eth.sigInvalid', { error: e.message }))); }
+  });
+  const paintAddr = h('div', { class: 'wu-small' });
+  const showAcc = () => { paintAddr.textContent = ''; paintAddr.append(copyable(acc.address)); };
+  showAcc();
+  ctx.view.append(h('div', { class: 'wu-grid2' },
+    section(t('eth.signMessage'), !canSign(w) ? statusLine('info', t('eth.watchCannotSign')) : null, accountSelect(w, acc, (a) => { acc = a; showAcc(); }), paintAddr, modeSeg,
+      field('eth.message', msgIn), h('div', { class: 'ap-row' }, signBtn), field('eth.signature', out), hashOut),
+    section(t('eth.verifyMessage'), seg([{ v: 'personal', l: 'eth.personalSign' }, { v: 'typed', l: 'eth.typedData' }], vMode, (v) => { vMode = v; }),
+      field('eth.addressOptional', vAddr), field('eth.message', vMsg), field('eth.signature', vSig), h('div', { class: 'ap-row' }, verifyBtn), vOut)));
+}
+
+// --- keystore export ---
+
+// Keystore export per account. Password fields are cleared as soon as encryption is done.
+function renderKeystore(ctx, w) {
+  let acc = currentAccount(w, ctx);
+  const a = h('input', { type: 'password', class: 'ed-input', autocomplete: 'new-password' });
+  const b = h('input', { type: 'password', class: 'ed-input', autocomplete: 'new-password' });
+  const prog = progressBar();
+  const err = h('div', { class: 'wu-error', role: 'alert' });
+  const btn = h('button', { type: 'button', class: 'ed-btn ed-primary' }, iconEl('download'), t('eth.exportKeystore'));
+  const addr = h('div');
+  const showAcc = () => { addr.textContent = ''; addr.append(copyable(acc.address)); };
+  showAcc();
+  btn.addEventListener('click', () => busy(btn, (async () => {
+    err.textContent = '';
+    if (a.value.length < 8) { err.textContent = t('wu.pwShort'); return; }
+    if (a.value !== b.value) { err.textContent = t('wu.pwMismatch'); return; }
+    let key = null;
+    try {
+      key = await privateKeyOf(w, acc);
+      const json = await encryptKeystoreAsync(key, a.value, { onProgress: prog.set });
+      a.value = b.value = '';
+      const name = `UTC--${new Date().toISOString().replace(/:/g, '-')}--${json.address}.json`;
+      download(JSON.stringify(json), name, 'application/json');
+      toast(t('eth.keystoreSaved'), 'ok');
+    } catch (e) { err.textContent = e.message; } finally { prog.done(); if (key) wipe(key); }
+  })()));
+  ctx.view.append(section(t('eth.keystore'), h('p', null, t('eth.keystoreText')), accountSelect(w, acc, (x) => { acc = x; showAcc(); }), addr,
+    field('wu.newPassword', a), field('wu.repeatPassword', b), prog, err, h('div', { class: 'ap-row' }, btn)));
+}
+
+// --- address book ---
+
+function renderBook(ctx) {
+  ctx.view.append(linkTo('wallet', '← ' + t('eth.allWallets')), section(t('wu.addressBook'), addressBookView({
+    entries: vault.data.book,
+    validate: (a) => { try { getAddress(a); return null; } catch { return isEnsName(a) ? null : t('eth.badAddress', { a }); } },
+    onChange: () => saveVault(),
+    onSend: (e) => { const w = wallets().find(canSign); if (w) go('wallet/' + w.id + '/send?to=' + encodeURIComponent(e.address)); else toast(t('eth.noSigningWallet'), 'warn'); },
+  })));
+}
+
+// --- backup ---
+
+// Re-authentication: the password is checked by actually opening a copy of the encrypted envelope, so there is no
+// separate password hash to compare against (one less secret derivative to store).
+async function askVaultPassword(title) {
+  const pw = h('input', { type: 'password', class: 'ed-input', autocomplete: 'current-password' });
+  const ok = await openDialog({ title, body: field('wu.password', pw), buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('dlg.ok'), primary: true, value: 'ok' }] });
+  if (ok !== 'ok') return false;
+  try { await openVault(vault.exportEnvelope(), pw.value); return true; } catch { toast(t('wu.wrongPassword'), 'error'); return false; }
+}
+
+// Secrets are revealed in a dialog, not inline, so they disappear from the DOM when the dialog closes. A wallet with a
+// BIP-39 passphrase gets a warning: the phrase alone does not restore it.
+function renderBackup(ctx, w) {
+  if (w.kind === 'hd') {
+    const reveal = button('eth.showPhrase', 'eye', async () => {
+      if (!(await askVaultPassword(t('eth.showPhrase')))) return;
+      await openDialog({ title: t('eth.recoveryPhrase'), body: h('div', { class: 'wu-col' }, mnemonicGrid(w.mnemonic, { hidden: false }), w.passphrase ? statusLine('warn', t('eth.hasPassphrase')) : null), wide: true });
+    });
+    ctx.view.append(section(t('eth.recoveryPhrase'), h('p', null, t('eth.phraseBackupText')), h('div', { class: 'ap-row' }, reveal),
+      kv([[t('eth.scheme'), (SCHEMES.find((s) => s.v === (w.scheme || 'bip44')) || SCHEMES[0]).l.slice(1)], [t('eth.accounts'), String(w.accounts.length)]])));
+  }
+  if (w.kind === 'key') {
+    const reveal = button('eth.showKey', 'eye', async () => {
+      if (!(await askVaultPassword(t('eth.showKey')))) return;
+      await openDialog({ title: t('eth.privateKey'), body: h('div', { class: 'wu-col' }, h('div', { class: 'wu-warn-box' }, iconEl('warn'), t('eth.keyWarn')), h('div', { class: 'wu-mono wu-break' }, w.key)), wide: true });
+    });
+    ctx.view.append(section(t('eth.privateKey'), h('p', null, t('eth.keyBackupText')), h('div', { class: 'ap-row' }, reveal)));
+  }
+  ctx.view.append(section(t('eth.addressesTitle'), h('div', { class: 'wu-col' }, w.accounts.map((a) => h('div', { class: 'ap-row wu-nowrap' }, h('span', { class: 'wu-mono wu-break wu-small' }, a.address), button('', 'copy', () => copyText(a.address)), button('', 'qr', () => showQr(a.address, { title: accountLabel(w, a) }))))),
+    h('p', { class: 'wu-small wu-muted' }, t('eth.watchExportNote'))));
+  const rename = button('eth.rename', 'edit', async () => { const v = await promptDialog(t('eth.rename'), t('eth.walletName'), w.name); if (v) { w.name = v; saveVault(); ctx.rerender(); } });
+  const del = button('eth.deleteWallet', 'trash', async () => {
+    if (await confirmDialog(t('eth.deleteWallet'), w.kind === 'watch' ? t('eth.deleteWatchText') : t('eth.deleteText'), t('dlg.delete'), true)) { deleteWallet(w.id); go('wallet'); }
+  }, 'danger');
+  ctx.view.append(section(t('eth.manage'), h('div', { class: 'ap-row' }, rename, del)));
+}
+
+// Re-exports used by send.js and tests.
+export { scanQr, mono };

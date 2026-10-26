@@ -1,0 +1,41 @@
+<!doctype html>
+<!-- battleship-game/index.html - Sea Battle page. A shell, not a document: main.js builds every screen (home, setup,
+     table, online, replays, profile, constructor) into <main>. One render path for content, i18n and state; static
+     markup would duplicate it and drift. Cost accepted: nothing without JS but the noscript notice. The build
+     (singlefile.js) inlines styles and modules into the html@5 artifacts and strips these comments. -->
+<html lang="en">
+<!-- lang="en" is the static default; ui/i18n.js rewrites it on a language switch (screen readers, hyphenation). -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: it must sit in the first 1024 bytes, before any non-ASCII byte, or the parser re-decodes. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- viewport-fit=cover lets the full-screen game table draw under phone notches; app.css then pads the bar and the
+     status line with env(safe-area-inset-*). Without the viewport meta, phones lay out at about 980px and no
+     @media (max-width) rule would fire. -->
+<title>Sea Battle</title>
+<meta name="description" content="Sea Battle (Battleship): the classic school game, the Hasbro rules, Salvo, fog of war, islands, polyomino fleets and special weapons on a data-driven rules engine; bots with personalities and four levels (ratings from simulations); replays with the information of every shot in bits; style profile and achievements; online rooms with passwords and invite links; a constructor for your own seas, shapes, fleets, rules and bots.">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0b2a45">
+<!-- color-scheme: native controls follow the site theme. theme-color = --bs-bg of the ocean skin, so the mobile
+     browser bar blends with the full-screen sea. -->
+<!-- Favicon as an inline SVG data: URI (zero requests, works from file:// and offline). URL-encoded, not base64
+     (shorter for SVG); the hash sign must be %23 or it would start a fragment and cut the URI. A grey ship on blue
+     water with an orange hit, the colours of the ocean skin. -->
+<!-- Cascade order is a contract: base.css (tokens, .ed-*), shell app.css (.ap-*), then ./app.css (.bs-*), which
+     overrides the first two by source order at equal specificity. Reordering breaks overrides silently. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231d5f8f'/%3E%3Cpath d='M5 19h22l-3 5H8z' fill='%23e8eef4'/%3E%3Cpath d='M10 19v-6h9l3 6' fill='%239aa7b4'/%3E%3Cpath d='M14 13V8h3v5' fill='%23e8eef4'/%3E%3Ccircle cx='24' cy='9' r='3' fill='%23ff6b35'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- .ap: shell hook of ui/app.css. The game adds body.bs-playing during a battle (play.js), which hides the shell. -->
+<!-- id="main": the mount point main.js looks up. Not .ap-wide here: main.js toggles .ap-wide per screen (the
+     constructor, replays and setup need the width; home and profile read better narrow). -->
+<main class="ap-main" id="main"></main>
+<!-- noscript: .ed-noscript (ui/base.css) is a fixed full-screen overlay above everything. -->
+<!-- type="module": deferred (runs after parsing, so #main exists), strict mode, native ES imports in development. -->
+<noscript><div class="ed-noscript">Sea Battle needs JavaScript.</div></noscript>
+<script type="module" src="./main.js"></script>
+</body>
+</html>

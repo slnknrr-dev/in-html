@@ -1,0 +1,5 @@
+import{cleanCurrency,roundNumber}from"./minor.js";import{minorUnits}from"../payments/money.js";function normalizeRates(raw){const o=raw&&typeof raw==='object'?raw:{};const base=cleanCurrency(o.base)||'GEL';const rates={};const src=o.rates&&typeof o.rates==='object'?o.rates:{};for(const[k,v]of Object.entries(src)){const c=cleanCurrency(k);const n=Number(v);if(c.length===3&&Number.isFinite(n)&&n>0)rates[c]=n;}
+rates[base]=1;const out={base,rates};if(/^\d{4}-\d{2}-\d{2}$/.test(String(o.day||'')))out.day=o.day;return out;}
+const perBase=(cur,t)=>(cur===t.base?1:t.rates[cur]>0?t.rates[cur]:null);function crossRate(from,to,table){const t=table&&table.rates?table:normalizeRates(table);const f=cleanCurrency(from)||t.base,g=cleanCurrency(to)||t.base;if(f===g)return 1;const a=perBase(f,t),b=perBase(g,t);return a==null||b==null?null:b/a;}
+function convertMinor(minor,from,to,table,{rounding='half-up'}={}){const k=crossRate(from,to,table);if(k==null)return null;const shift=minorUnits(cleanCurrency(to)||'XXX')-minorUnits(cleanCurrency(from)||'XXX');return roundNumber((Math.trunc(Number(minor))||0)*k*10**shift,rounding);}
+export{normalizeRates,convertMinor,crossRate};

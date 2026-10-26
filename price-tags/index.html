@@ -1,0 +1,40 @@
+<!doctype html>
+<!-- price-tags/index.html - products page (table, promotions, markdown rules, import/export, tag preview).
+     A shell, not a document: main.js builds all UI into <main>, so content, i18n and state share one render path.
+     The designer (design.html) is a sibling page with the same shell; both read the same localStorage keys.
+     Build (singlefile.js) strips every comment of this file from artifacts. -->
+<html lang="en">
+<!-- lang="en" is only the static default; ui/i18n.js rewrites it on language switch (screen readers, hyphenation). -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: must be within the first 1024 bytes, before the non-ASCII icon/title, or the parser re-decodes. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Without viewport, mobile browsers lay out at ~980px and every @media (max-width) in app.css never fires. -->
+<title>Price Tags</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23d61f26'/%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.4' stroke-linejoin='round' d='M6 15V7h8l12 12-8 8z'/%3E%3Ccircle cx='10.5' cy='11' r='1.8' fill='%23fff'/%3E%3C/svg%3E">
+<!-- Icon as a URL-encoded data: URI: zero requests, works from file:// and offline. '#' must be %23 or it starts a
+     fragment and truncates the URI. Red #d61f26 = the promo colour of the printed tags (app.css CONTRACT). -->
+
+<!-- Cascade order is a contract (equal specificity: later file wins):
+       1. ui/base.css  tokens (--ed-*), reset, shared primitives (.ed-*)
+       2. ui/app.css   app shell (.ap-*)
+       3. ./app.css    this app (.pt-*), overrides 1-2 without !important (e.g. body.pt-printing beats body.ap). -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- .ap opts the document into the ui/app.css shell layout (flex column, sticky header). -->
+
+<!-- Page registry as hidden anchors, read by common.js pageHref(id). The build renames pages and rewrites <a href>
+     reliably; string literals in JS would not be. `hidden`: works before CSS, excluded from the a11y tree. -->
+<a id="pg-products" href="index.html" hidden></a>
+<a id="pg-design" href="design.html" hidden></a>
+
+<!-- Mount point. <main> landmark for assistive tech; id="main" is the hook main.js renders into. -->
+<main class="ap-main" id="main"></main>
+
+<!-- type="module": deferred by spec (runs after parsing, so <main> exists), strict mode, ES imports. -->
+<script type="module" src="./main.js"></script>
+</body>
+</html>

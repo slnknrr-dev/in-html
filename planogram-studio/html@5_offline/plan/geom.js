@@ -1,0 +1,9 @@
+import{area as signedArea,dist,segDist,inside,bbox as ptsBBox}from"../garment/geom.js";const mm=(v)=>Math.round(v*1000)/1000;const RAD=Math.PI/180;const polygonArea=(pts)=>Math.abs(signedArea(pts));const edgeLengths=(pts)=>pts.map((p,i)=>dist(p,pts[(i+1)%pts.length]));const perimeter=(pts)=>edgeLengths(pts).reduce((a,b)=>a+b,0);const rectOutline=(w,h,x=0,y=0)=>[[x,y],[x+w,y],[x+w,y+h],[x,y+h]];function centroid(pts){let a=0,cx=0,cy=0;for(let i=0;i<pts.length;i++){const[x1,y1]=pts[i],[x2,y2]=pts[(i+1)%pts.length];const c=x1*y2-x2*y1;a+=c;cx+=(x1+x2)*c;cy+=(y1+y2)*c;}
+if(Math.abs(a)<1e-12)return[pts.reduce((s,p)=>s+p[0],0)/pts.length,pts.reduce((s,p)=>s+p[1],0)/pts.length];return[cx/(3*a),cy/(3*a)];}
+function pointInPolygon(pts,p,tol=1e-9){for(let i=0;i<pts.length;i++)if(segDist(p,pts[i],pts[(i+1)%pts.length])<=tol)return true;return inside(pts,p);}
+const edgeMidpoints=(pts)=>pts.map((p,i)=>{const q=pts[(i+1)%pts.length];return{i,at:[(p[0]+q[0])/2,(p[1]+q[1])/2],length:dist(p,q)};});const snap=(v,step=0)=>mm(step>0?Math.round(v/step)*step:v);function rotatePoint(p,deg,c=[0,0]){const a=deg*RAD,cs=Math.cos(a),sn=Math.sin(a),dx=p[0]-c[0],dy=p[1]-c[1];return[c[0]+dx*cs-dy*sn,c[1]+dx*sn+dy*cs];}
+const center=(sh)=>[sh.x+sh.w/2,sh.y+sh.h/2];function corners(sh){const c=center(sh);return rectOutline(sh.w,sh.h,sh.x,sh.y).map((p)=>(sh.rot?rotatePoint(p,sh.rot,c):p));}
+function shapeBox(sh){if(!sh.rot)return{x:sh.x,y:sh.y,w:sh.w,h:sh.h};const a=sh.rot*RAD,c=Math.abs(Math.cos(a)),s=Math.abs(Math.sin(a));const w=sh.w*c+sh.h*s,h=sh.w*s+sh.h*c;return{x:sh.x+(sh.w-w)/2,y:sh.y+(sh.h-h)/2,w,h};}
+function bounds(shapes=[],outlines=[]){const pts=[];for(const s of shapes){const b=shapeBox(s);pts.push([b.x,b.y],[b.x+b.w,b.y+b.h]);}
+for(const o of outlines)pts.push(...o);if(!pts.length)return null;const b=ptsBBox(pts);return{x:b.x0,y:b.y0,w:b.w,h:b.h};}
+export{polygonArea,mm,bounds,snap,corners,pointInPolygon,centroid,edgeMidpoints,perimeter,rectOutline};

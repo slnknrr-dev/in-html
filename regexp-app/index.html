@@ -1,0 +1,34 @@
+<!doctype html>
+<!-- regexp-app/index.html — Regex Studio. A shell, not a document: main.js builds the whole UI into <main>.
+     Why an empty shell: one render path (JS) for content, i18n and state; static markup would duplicate it and
+     drift. Cost accepted: nothing without JS (hence <noscript>, where present). The build (singlefile.js) strips these
+     comments and inlines CSS/JS into the html@5* artifacts. -->
+<html lang="en">
+<!-- lang="en" is only the static default; ui/app.js rewrites documentElement.lang on language switch. -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: must sit in the first 1024 bytes, before any non-ASCII byte, or the parser re-decodes. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Without it mobile browsers lay out at ~980px and zoom out: every @media (max-width) in the CSS would never fire. -->
+<title>Regex Studio</title>
+<meta name="description" content="Regular expression workbench: live syntax colours, match and group highlighting, replace and split previews, explanations, railroad diagrams, warnings and code in 7 languages. Works offline.">
+<meta name="color-scheme" content="light dark">
+<!-- Lets the UA paint form controls, scrollbars and the pre-CSS canvas dark in dark mode: no white flash before base.css. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%232563eb'/%3E%3Cstop offset='1' stop-color='%237c3aed'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Cpath d='M19 6.5v11M14.2 9.2l9.6 5.6M23.8 9.2l-9.6 5.6' stroke='%23fff' stroke-width='2.6' stroke-linecap='round'/%3E%3Ccircle cx='10' cy='23' r='3.2' fill='%23fde68a'/%3E%3C/svg%3E">
+<!-- Icon as URL-encoded SVG data: URI: zero requests, works from file:// and offline. "#" must be %23 or it starts a fragment. -->
+<!-- Cascade order is a contract: base.css (tokens, ed-* primitives) then app.css (ap-* shell) then this app. Equal
+     specificity: the later file wins, so app rules override shared ones without !important. Reordering breaks silently. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- .ap: root hook of the ui/app.css shell; a class rather than bare `body` keeps the shared sheet opt-in. -->
+<!-- <main> landmark = mount point. ap-main: shell width/padding (ui/app.css); ap-wide lifts its max-width for
+     wide tools where present; the app class scopes this app's own layout. id: stable hook for the entry script. -->
+<main class="ap-main" id="main"></main>
+<!-- type="module" is deferred by spec: it runs after parsing even from <head>, so the mount point already exists.
+     Also strict mode and ES imports. The build bundles the module graph into one inline script. -->
+<script type="module" src="./main.js"></script>
+</body>
+</html>

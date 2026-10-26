@@ -1,0 +1,9 @@
+import{formatYearMonth}from"../i18n/dates.js";import{UI_STATE}from"./i18n.js";import{langName}from"../i18n/lang.js";const LANG_RE=/^[a-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/;const SUGGESTED_LANGS=['en','ru','de','fr','es','uk','ka'];const intlHas=(lang)=>{try{return Intl.DateTimeFormat.supportedLocalesOf([lang]).length>0;}catch{return false;}};const pad2=(n)=>String(n).padStart(2,'0');function fmtDate(iso){const d=new Date(iso);if(Number.isNaN(d.getTime()))return String(iso||'');if(!intlHas(UI_STATE.lang)){return`${d.getDate()} ${formatYearMonth(d.getFullYear(),d.getMonth()+1,UI_STATE.lang,'month')}, ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;}
+try{return new Intl.DateTimeFormat(UI_STATE.lang,{dateStyle:'medium',timeStyle:'short'}).format(d);}catch{return String(iso||'');}}
+function monthShort(m){if(intlHas(UI_STATE.lang)){try{return new Intl.DateTimeFormat(UI_STATE.lang,{month:'short'}).format(new Date(2000,m-1,15));}catch{}}
+const s=formatYearMonth(2000,m,UI_STATE.lang,'month').replace(/\s*2000\s*/,'').trim();return s||String(m);}
+function canonLang(code){try{return Intl.getCanonicalLocales(String(code).trim().replace(/_/g,'-'))[0]||null;}catch{return null;}}
+let langNamesEn=null;function contentLangCode(raw){const c=canonLang(raw);if(!c||!LANG_RE.test(c))return null;const parts=c.split('-');if(parts[0]==='und'||parts.some((p)=>p.length===1))return null;try{langNamesEn=langNamesEn||new Intl.DisplayNames(['en'],{type:'language',fallback:'code'});if(langNamesEn.of(parts[0])===parts[0])return null;}catch{}
+return c;}
+function langLabel(code){try{return langName(code,'native')||code;}catch{return code;}}
+export{canonLang,langLabel,LANG_RE,pad2,monthShort,SUGGESTED_LANGS,fmtDate,contentLangCode};

@@ -1,0 +1,694 @@
+// qr-tool/main.js - the QR generator page: content types with their forms, a live styled preview, version and
+// capacity info, error correction, colours with contrast checks, shapes, a logo with a live scan check (the preview is
+// rasterised and decoded with qr/decode.js), exports (SVG, PNG, clipboard) and a print sheet.
+//
+// Pipeline per change (debounced 60 ms): form fields -> buildPayload (qr/payload.js: WIFI:, BEGIN:VCARD, MATMSG,
+// geo:, BEGIN:VEVENT, bitcoin: ...) -> capacity check (qrInfo) -> matrix -> styled SVG. Then an asynchronous scan
+// check (debounced 320 ms) rasterises the *styled* code and decodes it with the built-in decoder. Styling (dots,
+// rounded finders, gradients, a logo over the centre) eats into the error-correction budget, so "it renders" does
+// not imply "it scans"; the badge reports the latter. A token discards results of superseded inputs.
+// Logo maths: the logo hides modules; qrLogoCover estimates the damage per Reed-Solomon block against the level's
+// recovery capacity (L 7 %, M 15 %, Q 25 %, H 30 %), which is why adding a logo switches EC to H (with Undo).
+import { TYPES, canvasBlob, chipGrid, group, loadImage, snippet, startShell, svgToCanvas } from './common.js';
+import { button, card, colorInput, copyText, download, dropZone, field, range, seg, select, t, textInput, toast, toggle } from '../ui/app.js';
+import { $, $$, debounce, h, lsGet, lsSet } from '../ui/dom.js';
+import { safeFileName } from '../ui/files.js';
+import { icon, iconEl } from '../ui/icons.js';
+import { openDialog } from '../ui/overlays.js';
+import { qrMatrix } from '../qr/qr.js';
+import { EC_RECOVERY, qrInfo } from '../qr/spec.js';
+import { EYE_STYLES, FINDER_STYLES, MODULE_STYLES, qrLogoCover, qrStyledSVG } from '../qr/style.js';
+import { COINS, buildPayload, parsePayload, payloadIssues } from '../qr/payload.js';
+import { decodeQR } from '../qr/decode.js';
+import { contrastRatio } from '../color/color.js';
+
+// ---------------------------------------------------------------------------------------------------------------
+// State (persisted in localStorage 'qr-create')
+
+// One field set per content type, all kept: switching types and back restores what was typed in each.
+const DEF = {
+  type: 'url',
+  fields: {
+    url: { url: 'https://example.com' },
+    text: { text: '' },
+    wifi: { ssid: '', password: '', auth: 'WPA', hidden: false },
+    contact: { format: 'vcard', first: '', last: '', phone: '', workPhone: '', email: '', org: '', title: '', url: '', street: '', city: '', region: '', zip: '', country: '', note: '' },
+    email: { to: '', subject: '', body: '' },
+    sms: { number: '', message: '', uri: false },
+    phone: { number: '' },
+    geo: { lat: '', lon: '' },
+    event: { title: '', location: '', allDay: false, start: '', end: '', description: '' },
+    crypto: { coin: 'bitcoin', address: '', amount: '', label: '', message: '' },
+  },
+  ec: 'M',
+  design: {
+    fg: '#111827', bg: '#ffffff', transparent: false, gradient: false, gradType: 'linear', fg2: '#2563eb', angle: 135,
+    quiet: 4, moduleStyle: 'square', finderStyle: 'square', eyeStyle: 'square',
+  },
+  // The logo is stored as a downscaled PNG data URL (<= 256 px, see setLogo): small enough for localStorage, and
+  // self-contained, so exported SVG embeds it without external references.
+  logo: null,                       // { href (PNG data URL), name, size (fraction), plate }
+  pngSize: 1024,
+  print: { copies: 4, size: 5, caption: '' },
+  showPayload: false,
+};
+const SKEY = 'qr-create';
+
+// Every saved section is validated against the defaults (pickKnown); the logo must be a data:image URL, so a
+// tampered entry cannot make the SVG reference a remote resource.
+// KNOWN DEFECT (privacy): the Wi-Fi password (and contact details) are persisted in plain text in localStorage
+// with the rest of the form. Fix: exclude S.fields.wifi.password from save() (or make persistence opt-in).
+function loadState() {
+  const saved = lsGet(SKEY, null) || {};
+  const s = structuredClone(DEF);
+  if (TYPES.some(([k]) => k === saved.type)) s.type = saved.type;
+  for (const k of Object.keys(s.fields)) if (saved.fields && typeof saved.fields[k] === 'object') Object.assign(s.fields[k], pickKnown(s.fields[k], saved.fields[k]));
+  if (['L', 'M', 'Q', 'H'].includes(saved.ec)) s.ec = saved.ec;
+  if (saved.design && typeof saved.design === 'object') Object.assign(s.design, pickKnown(s.design, saved.design));
+  if (saved.logo && typeof saved.logo.href === 'string' && /^data:image\//.test(saved.logo.href)) s.logo = { size: 0.22, plate: true, name: '', ...saved.logo };
+  if ([256, 512, 1024, 2048, 4096].includes(saved.pngSize)) s.pngSize = saved.pngSize;
+  if (saved.print && typeof saved.print === 'object') Object.assign(s.print, pickKnown(s.print, saved.print));
+  s.showPayload = !!saved.showPayload;
+  return s;
+}
+// Keys of `base` taken from `obj` when the value has the same type.
+function pickKnown(base, obj) {
+  const out = {};
+  for (const k of Object.keys(base)) if (obj[k] != null && typeof obj[k] === typeof base[k]) out[k] = obj[k];
+  return out;
+}
+
+const S = loadState();
+const save = debounce(() => lsSet(SKEY, S), 400);
+
+// Derived results of the last update.
+const R = { payload: '', info: null, matrix: null, svg: '', cover: null, verify: 'idle', token: 0 };
+
+// ---------------------------------------------------------------------------------------------------------------
+// Small helpers
+
+const F = () => S.fields[S.type];
+const pad2 = (n) => String(n).padStart(2, '0');
+// datetime-local format "YYYY-MM-DDTHH:MM" in local time (toISOString would convert to UTC and shift the hour).
+const localDT = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+
+function input(key, attrs = {}) {
+  const el = textInput(F()[key] ?? '', (v) => { F()[key] = v; changed(); }, attrs);
+  return el;
+}
+const row = (...kids) => h('div', { class: 'ed-grid2' }, ...kids);
+const fmt = (n) => Number(n).toLocaleString(document.documentElement.lang || 'en');
+
+// Style pickers show tiny SVG drawings of each option instead of names only: the visual difference is the point.
+// Mini artwork of the style options (24x24, currentColor).
+const ART = {
+  square: '<path d="M3 3h6v6H3zM9 9h6v6H9zM15 3h6v6h-6zM3 15h6v6H3zM15 15h6v6h-6z"/>',
+  rounded: '<path d="M6 3a3 3 0 0 0-3 3v0a3 3 0 0 0 3 3h3v3a3 3 0 0 0 3 3h0a3 3 0 0 0 3-3V9a3 3 0 0 0-3-3H9a3 3 0 0 0-3-3zM18 3a3 3 0 1 1 0 6 3 3 0 0 1 0-6zM6 15a3 3 0 1 1 0 6 3 3 0 0 1 0-6zM18 15a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/>',
+  dots: '<circle cx="6" cy="6" r="2.6"/><circle cx="12" cy="12" r="2.6"/><circle cx="18" cy="6" r="2.6"/><circle cx="6" cy="18" r="2.6"/><circle cx="18" cy="18" r="2.6"/><circle cx="12" cy="6" r="2.6"/>',
+  diamond: '<path d="M6 2.5 9.5 6 6 9.5 2.5 6zM12 8.5l3.5 3.5-3.5 3.5L8.5 12zM18 2.5 21.5 6 18 9.5 14.5 6zM6 14.5 9.5 18 6 21.5 2.5 18zM18 14.5l3.5 3.5-3.5 3.5-3.5-3.5z"/>',
+  bars: '<rect x="3.5" y="3" width="5" height="12" rx="2.5"/><rect x="9.5" y="9" width="5" height="12" rx="2.5"/><rect x="15.5" y="3" width="5" height="7" rx="2.5"/><rect x="15.5" y="14" width="5" height="7" rx="2.5"/>',
+  'f-square': '<path fill-rule="evenodd" d="M3 3h18v18H3zM6 6v12h12V6z"/><path d="M9 9h6v6H9z"/>',
+  'f-rounded': '<path fill-rule="evenodd" d="M9 3h6a6 6 0 0 1 6 6v6a6 6 0 0 1-6 6H9a6 6 0 0 1-6-6V9a6 6 0 0 1 6-6zM9.5 6A3.5 3.5 0 0 0 6 9.5v5A3.5 3.5 0 0 0 9.5 18h5a3.5 3.5 0 0 0 3.5-3.5v-5A3.5 3.5 0 0 0 14.5 6z"/><path d="M9 9h6v6H9z"/>',
+  'f-circle': '<path fill-rule="evenodd" d="M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zm0 3a6 6 0 1 0 0 12 6 6 0 0 0 0-12z"/><path d="M9 9h6v6H9z"/>',
+  'e-square': '<path fill-rule="evenodd" opacity=".35" d="M3 3h18v18H3zM6 6v12h12V6z"/><path d="M8.5 8.5h7v7h-7z"/>',
+  'e-rounded': '<path fill-rule="evenodd" opacity=".35" d="M3 3h18v18H3zM6 6v12h12V6z"/><rect x="8.5" y="8.5" width="7" height="7" rx="2.2"/>',
+  'e-circle': '<path fill-rule="evenodd" opacity=".35" d="M3 3h18v18H3zM6 6v12h12V6z"/><circle cx="12" cy="12" r="3.8"/>',
+};
+const art = (k) => `<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true">${ART[k]}</svg>`;
+
+// Presets are full colour schemes (foreground, optional gradient, background) picked for safe scan contrast.
+const PRESETS = [
+  { k: 'classic', fg: '#111827', bg: '#ffffff', gradient: false },
+  { k: 'ink', fg: '#1e3a8a', bg: '#ffffff', gradient: false },
+  { k: 'forest', fg: '#14532d', bg: '#f0fdf4', gradient: false },
+  { k: 'ocean', fg: '#0e7490', fg2: '#1d4ed8', bg: '#ffffff', gradient: true, gradType: 'linear', angle: 135 },
+  { k: 'sunset', fg: '#be123c', fg2: '#7c3aed', bg: '#fff7ed', gradient: true, gradType: 'linear', angle: 45 },
+  { k: 'aurora', fg: '#047857', fg2: '#4338ca', bg: '#ffffff', gradient: true, gradType: 'radial', angle: 135 },
+];
+
+// ---------------------------------------------------------------------------------------------------------------
+// Layout
+
+const main = $('#main');
+main.classList.add('qr-create');
+let els = {};
+
+function render() {
+  main.textContent = '';
+  els = {};
+  els.preview = h('div', { class: 'qr-paper', id: 'qr-preview' });
+  els.badge = h('div', { class: 'qr-badge', role: 'status', 'aria-live': 'polite' });
+  els.chips = h('div', { class: 'qr-stage-meta' });
+  const stage = h('div', { class: 'qr-stage ap-surface ap-plain' }, h('div', { class: 'qr-stage-in' }, els.preview, h('div', { class: 'qr-stage-foot' }, els.badge, els.chips)));
+  els.form = h('div', { class: 'ed-fields qr-form' });
+  els.issues = h('div', { class: 'qr-issues' });
+  els.info = h('div', { class: 'qr-info' });
+  els.payload = h('pre', { class: 'ap-pre qr-payload', id: 'qr-payload' });
+  els.warn = h('div', { class: 'qr-warn' });
+  els.logoBox = h('div', { class: 'ed-fields' });
+  els.coverage = h('div', { class: 'qr-coverage' });
+
+  // Content type picker: radio chips with roving focus (common.js chipGrid).
+  const typeGrid = chipGrid(TYPES.map(([k, ic]) => ({ v: k, icon: ic, label: t('qr.type.' + k) })), S.type, (v) => { S.type = v; prepareType(); renderForm(); changed(); }, 'qr-types');
+  typeGrid.setAttribute('aria-label', t('qr.content'));
+  const content = card('qr.content', typeGrid, els.form, els.issues);
+  content.classList.add('qr-content-card');
+
+  const details = h('details', { class: 'qr-details', open: S.showPayload || null },
+    h('summary', {}, iconEl('chevRight'), h('span', {}, t('qr.payload')), h('span', { class: 'ed-spacer' })), els.payload);
+  details.addEventListener('toggle', () => { S.showPayload = details.open; save(); });
+
+  const ecHint = h('div', { class: 'ed-hint qr-ec-hint', id: 'qr-ec-hint' });
+  // Each EC option shows its recovery share (7/15/25/30 %), the trade-off users actually choose by.
+  const ec = seg(['L', 'M', 'Q', 'H'].map((k) => ({ v: k, l: `=${k} · ${Math.round(EC_RECOVERY[k] * 100)}%` })), S.ec, (v) => { S.ec = v; paintEcHint(ecHint); changed(); }, 'qr.ec');
+  ec.classList.add('qr-ec');
+  ec.id = 'qr-ec';
+  paintEcHint(ecHint);
+  const codeCard = card('qr.code', group('qr.ec', ec), ecHint, els.info, details);
+
+  const exportCard = card('qr.export', renderExport());
+
+  // Grid areas: content (a), stage (s, sticky on wide screens), code info (c), design (d).
+  codeCard.classList.add('qr-c');
+  content.classList.add('qr-a');
+  const stageCol = h('div', { class: 'qr-col qr-s' }, stage, els.warn, exportCard);
+  const right = h('div', { class: 'qr-col qr-d' }, renderColors(), renderShapes(), renderLogo());
+  main.append(h('div', { class: 'qr-work' }, content, stageCol, codeCard, right));
+  renderForm();
+  renderLogoBox();
+  update();
+}
+
+function paintEcHint(el) { el.textContent = t('qr.ec.' + S.ec); }
+
+// --- content forms -------------------------------------------------------------------------------------------
+
+// Defaults that depend on "now" (event times) are filled when the type is first shown.
+function prepareType() {
+  // Event times default to the next full hour and one hour long, computed when the type is first shown (not at
+  // import, so a page left open overnight still proposes a sensible time).
+  if (S.type === 'event' && !S.fields.event.start) {
+    const d = new Date(); d.setMinutes(0, 0, 0); d.setHours(d.getHours() + 1);
+    S.fields.event.start = localDT(d);
+    d.setHours(d.getHours() + 1);
+    S.fields.event.end = localDT(d);
+  }
+}
+
+function renderForm() {
+  const f = F(), box = els.form;
+  box.textContent = '';
+  const add = (...kids) => box.append(...kids);
+  switch (S.type) {
+    case 'text':
+      add(field('qr.f.text', input('text', { multiline: true, rows: 6, placeholder: t('qr.ph.text'), dir: 'auto' })));
+      break;
+    case 'url':
+      add(field('qr.f.url', input('url', { type: 'url', inputmode: 'url', placeholder: 'https://example.com', autocomplete: 'url' }), 'qr.h.url'));
+      break;
+    case 'wifi': {
+      // Show/hide password: aria-pressed reflects the state; the field is type=password by default so the password is not
+      // shoulder-surfed while composing the code.
+      const pw = input('password', { type: 'password', autocomplete: 'off' });
+      const eye = h('button', { type: 'button', class: 'ed-iconbtn', title: t('qr.showPw'), 'aria-label': t('qr.showPw'), 'aria-pressed': 'false', html: icon('eye') });
+      eye.addEventListener('click', () => { const on = pw.type === 'password'; pw.type = on ? 'text' : 'password'; eye.setAttribute('aria-pressed', String(on)); eye.innerHTML = icon(on ? 'eyeOff' : 'eye'); });
+      const authSeg = seg([{ v: 'WPA', l: '=WPA/WPA2/WPA3' }, { v: 'WEP', l: '=WEP' }, { v: 'nopass', l: 'qr.f.open' }], f.auth, (v) => { f.auth = v; renderForm(); changed(); }, 'qr.f.security');
+      add(field('qr.f.ssid', input('ssid', { autocomplete: 'off', placeholder: t('qr.ph.ssid') })), group('qr.f.security', authSeg));
+      if (f.auth !== 'nopass') add(field('qr.f.password', h('div', { class: 'ed-row' }, pw, eye)));
+      add(field('qr.f.hidden', toggle(f.hidden, (v) => { f.hidden = v; changed(); })));
+      add(h('div', { class: 'ed-hint' }, t('qr.h.wifi')));
+      break;
+    }
+    case 'contact':
+      // vCard 3.0 is the most widely understood by phone cameras; MeCard is shorter (a smaller code) but less portable.
+      add(group('qr.f.format', seg([{ v: 'vcard', l: '=vCard 3.0' }, { v: 'mecard', l: '=MeCard' }], f.format, (v) => { f.format = v; changed(); }, 'qr.f.format'), t('qr.h.format')));
+      add(row(field('qr.f.first', input('first', { autocomplete: 'given-name' })), field('qr.f.last', input('last', { autocomplete: 'family-name' }))));
+      add(row(field('qr.f.phone', input('phone', { type: 'tel', autocomplete: 'tel' })), field('qr.f.workPhone', input('workPhone', { type: 'tel' }))));
+      add(field('qr.f.email', input('email', { type: 'email', autocomplete: 'email' })));
+      add(row(field('qr.f.org', input('org', { autocomplete: 'organization' })), field('qr.f.title', input('title', { autocomplete: 'organization-title' }))));
+      add(field('qr.f.website', input('url', { type: 'url', placeholder: 'example.com' })));
+      add(field('qr.f.street', input('street', { autocomplete: 'street-address' })));
+      add(row(field('qr.f.city', input('city')), field('qr.f.zip', input('zip', { autocomplete: 'postal-code' }))));
+      add(row(field('qr.f.region', input('region')), field('qr.f.country', input('country', { autocomplete: 'country-name' }))));
+      add(field('qr.f.note', input('note', { multiline: true, rows: 2 })));
+      break;
+    case 'email':
+      add(field('qr.f.to', input('to', { type: 'email', placeholder: 'name@example.com' })));
+      add(field('qr.f.subject', input('subject')));
+      add(field('qr.f.body', input('body', { multiline: true, rows: 4 })));
+      break;
+    case 'sms':
+      add(field('qr.f.number', input('number', { type: 'tel', placeholder: '+1 555 0100' })));
+      add(field('qr.f.message', input('message', { multiline: true, rows: 3 })));
+      // SMSTO: is the classic QR form; sms: URIs are the standard form some newer scanners prefer.
+      add(group('qr.f.format', seg([{ v: 'smsto', l: '=SMSTO:' }, { v: 'uri', l: '=sms:' }], f.uri ? 'uri' : 'smsto', (v) => { f.uri = v === 'uri'; changed(); }, 'qr.f.format'), t('qr.h.sms')));
+      break;
+    case 'phone':
+      add(field('qr.f.number', input('number', { type: 'tel', placeholder: '+1 555 0100' }), 'qr.h.phone'));
+      break;
+    case 'geo': {
+      const lat = input('lat', { inputmode: 'decimal', placeholder: '48.858370' });
+      // Pasting "lat, lon" into the latitude splits it.
+      // Pasting "48.85, 2.29" (from a map) into the latitude field fills both fields.
+      lat.addEventListener('paste', (e) => {
+        const s = e.clipboardData?.getData('text') || '';
+        const m = /^\s*(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)\s*$/.exec(s);
+        if (!m) return;
+        e.preventDefault();
+        f.lat = m[1]; f.lon = m[2];
+        renderForm(); changed();
+      });
+      add(row(field('qr.f.lat', lat), field('qr.f.lon', input('lon', { inputmode: 'decimal', placeholder: '2.294481' }))));
+      add(h('div', { class: 'ed-hint' }, t('qr.h.geo')));
+      break;
+    }
+    case 'event': {
+      const type = f.allDay ? 'date' : 'datetime-local';
+      add(field('qr.f.eventTitle', input('title')));
+      add(field('qr.f.location', input('location')));
+      add(field('qr.f.allDay', toggle(f.allDay, (v) => {
+        f.allDay = v;
+        // Toggling all-day converts the stored values between date and datetime-local formats, so inputs never hold a
+        // value of the wrong type (which the browser would silently drop).
+        f.start = v ? String(f.start).slice(0, 10) : (f.start ? f.start.slice(0, 10) + 'T09:00' : '');
+        f.end = v ? String(f.end).slice(0, 10) : (f.end ? f.end.slice(0, 10) + 'T10:00' : '');
+        renderForm(); changed();
+      })));
+      add(row(field('qr.f.start', input('start', { type })), field('qr.f.end', input('end', { type }))));
+      add(field('qr.f.description', input('description', { multiline: true, rows: 3 })));
+      add(h('div', { class: 'ed-hint' }, t(f.allDay ? 'qr.h.allDay' : 'qr.h.event')));
+      break;
+    }
+    case 'crypto': {
+      const coin = select(Object.entries(COINS).map(([k, c]) => ({ v: k, l: `=${k[0].toUpperCase() + k.slice(1)} (${c.symbol})` })), f.coin, (v) => { f.coin = v; changed(); });
+      add(field('qr.f.coin', coin));
+      add(field('qr.f.address', input('address', { autocomplete: 'off', class: 'ed-input qr-mono' })));
+      add(row(field('qr.f.amount', input('amount', { inputmode: 'decimal', placeholder: '0.001' })), field('qr.f.label', input('label'))));
+      add(field('qr.f.message', input('message')));
+      add(h('div', { class: 'ed-hint' }, t('qr.h.crypto')));
+      break;
+    }
+    default: break;
+  }
+}
+
+// --- design ----------------------------------------------------------------------------------------------------
+
+function colorField(label, key) {
+  const d = S.design;
+  const code = h('code', { class: 'qr-hex' }, d[key]);
+  const c = colorInput(d[key], (v) => { d[key] = v; code.textContent = v; changed(); });
+  c.setAttribute('aria-label', t(label));
+  return h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t(label)), h('label', { class: 'qr-color' }, c, code));
+}
+
+function renderColors() {
+  const d = S.design;
+  const presets = h('div', { class: 'qr-presets', role: 'group', 'aria-label': t('qr.presets') }, PRESETS.map((p) => h('button', {
+    type: 'button', class: 'qr-preset', title: t('qr.preset.' + p.k), 'aria-label': t('qr.preset.' + p.k),
+    style: { '--a': p.fg, '--b': p.gradient ? p.fg2 : p.fg, '--bg': p.bg },
+    // Applying a preset overwrites only colour keys (gradient/transparent reset first); `k` is the preset's own name
+    // field and is removed so it does not pollute the design state.
+    onclick: () => { Object.assign(d, { gradient: false, transparent: false }, p); delete d.k; rerenderDesign(); changed(); },
+  }, h('i', {}))));
+  const swap = button('', 'swap', () => { [d.fg, d.bg] = [d.bg, d.fg]; d.transparent = false; rerenderDesign(); changed(); });
+  swap.classList.add('ed-sm', 'qr-swap');
+  swap.title = t('qr.swap');
+  swap.setAttribute('aria-label', t('qr.swap'));
+  const colors = h('div', { class: 'qr-colors' }, colorField(d.gradient ? 'qr.color.from' : 'qr.color.fg', 'fg'), swap, d.transparent ? h('div', { class: 'ed-field qr-transparent-note' }, h('span', { class: 'ed-label' }, t('qr.color.bg')), h('span', { class: 'ed-hint' }, t('qr.transparentNote'))) : colorField('qr.color.bg', 'bg'));
+  const kids = [presets, colors,
+    field('qr.transparent', toggle(d.transparent, (v) => { d.transparent = v; rerenderDesign(); changed(); })),
+    field('qr.gradient', toggle(d.gradient, (v) => { d.gradient = v; rerenderDesign(); changed(); }))];
+  if (d.gradient) {
+    kids.push(h('div', { class: 'qr-sub ed-fields' },
+      group('qr.gradType', seg([{ v: 'linear', l: 'qr.grad.linear' }, { v: 'radial', l: 'qr.grad.radial' }], d.gradType, (v) => { d.gradType = v; rerenderDesign(); changed(); }, 'qr.gradType')),
+      colorField('qr.color.to', 'fg2'),
+      d.gradType === 'linear' ? field('qr.angle', range({ min: 0, max: 360, step: 5, value: d.angle, unit: '°', onInput: (v) => { d.angle = v; changed(); } })) : null));
+  }
+  const c = card('qr.colors', ...kids);
+  c.id = 'qr-colors';
+  return c;
+}
+
+function renderShapes() {
+  const d = S.design;
+  const c = card('qr.shapes',
+    group('qr.moduleStyle', chipGrid(MODULE_STYLES.map((k) => ({ v: k, html: art(k), title: t('qr.ms.' + k), label: t('qr.ms.' + k) })), d.moduleStyle, (v) => { d.moduleStyle = v; changed(); }, 'qr-styles')),
+    group('qr.finderStyle', chipGrid(FINDER_STYLES.map((k) => ({ v: k, html: art('f-' + k), title: t('qr.fs.' + k), label: t('qr.fs.' + k) })), d.finderStyle, (v) => { d.finderStyle = v; changed(); }, 'qr-styles qr-styles-3')),
+    group('qr.eyeStyle', chipGrid(EYE_STYLES.map((k) => ({ v: k, html: art('e-' + k), title: t('qr.fs.' + k), label: t('qr.fs.' + k) })), d.eyeStyle, (v) => { d.eyeStyle = v; changed(); }, 'qr-styles qr-styles-3')),
+    field('qr.quiet', range({ min: 0, max: 10, step: 1, value: d.quiet, onInput: (v) => { d.quiet = v; changed(); } }), 'qr.h.quiet'));
+  c.id = 'qr-shapes';
+  return c;
+}
+
+// Only the colour card is rebuilt on toggles that change its structure; the other design cards keep focus/state.
+function rerenderDesign() {
+  const old = $('#qr-colors');
+  if (old) old.replaceWith(renderColors());
+}
+
+function renderLogo() {
+  const c = card('qr.logo', els.logoBox, els.coverage);
+  c.id = 'qr-logo';
+  return c;
+}
+
+function renderLogoBox() {
+  const box = els.logoBox;
+  box.textContent = '';
+  if (!S.logo) {
+    const dz = dropZone({ accept: 'image/*', label: 'qr.logo.drop', onFiles: (files) => setLogo(files[0]) });
+    dz.classList.add('qr-logo-drop');
+    dz.id = 'qr-logo-drop';
+    box.append(dz, h('div', { class: 'ed-hint' }, t('qr.h.logo')));
+    return;
+  }
+  const lg = S.logo;
+  const rm = button('qr.logo.remove', 'trash', () => { S.logo = null; renderLogoBox(); changed(); }, 'danger');
+  rm.classList.add('ed-sm');
+  box.append(
+    h('div', { class: 'qr-logo-row' }, h('img', { class: 'qr-logo-thumb', src: lg.href, alt: '' }), h('div', { class: 'qr-logo-meta' }, h('b', {}, lg.name || t('qr.logo')), h('span', { class: 'ed-hint' }, t('qr.logo.ready'))), rm),
+    field('qr.logo.size', range({ min: 10, max: 30, step: 1, value: Math.round(lg.size * 100), unit: '%', onInput: (v) => { lg.size = v / 100; changed(); } })),
+    field('qr.logo.plate', toggle(lg.plate, (v) => { lg.plate = v; changed(); })));
+}
+
+async function setLogo(file) {
+  // Accept by MIME type or by extension (some systems report SVG files without a type).
+  if (!file || !/^image\//.test(file.type || '') && !/\.(svg|png|jpe?g|gif|webp|avif|bmp)$/i.test(file.name || '')) { toast(t('qr.logo.bad'), 'warn'); return; }
+  try {
+    const src = await new Promise((resolve, reject) => { const fr = new FileReader(); fr.onload = () => resolve(fr.result); fr.onerror = () => reject(fr.error); fr.readAsDataURL(file); });
+    const img = await loadImage(src);
+    // Downscale to at most 256 px (PNG data URL), keeping transparency.
+    // Rasterised and downscaled to <= 256 px: an embedded photo of several MB would bloat every export and the stored
+    // state; 256 px is more than the logo area of any practical QR size.
+    const k = Math.min(1, 256 / Math.max(img.naturalWidth || img.width || 256, img.naturalHeight || img.height || 256));
+    const w = Math.max(1, Math.round((img.naturalWidth || 256) * k)), hh = Math.max(1, Math.round((img.naturalHeight || 256) * k));
+    const c = document.createElement('canvas');
+    c.width = w; c.height = hh;
+    c.getContext('2d').drawImage(img, 0, 0, w, hh);
+    S.logo = { href: c.toDataURL('image/png'), name: file.name || '', size: 0.22, plate: true };
+    if (S.ec !== 'H') {
+      const prev = S.ec;
+      S.ec = 'H';
+      syncEc();
+      // Switching to EC level H is offered with Undo in the toast rather than asked up front: it is almost always right.
+      toast(t('qr.logo.ecH'), 'info', { label: t('dlg.undo'), fn: () => { S.ec = prev; syncEc(); changed(); } });
+    }
+    renderLogoBox();
+    changed();
+  } catch {
+    toast(t('qr.logo.bad'), 'warn');
+  }
+}
+
+function syncEc() {
+  const g = $('#qr-ec');
+  if (g) for (const b of g.children) { const on = b.dataset.v === S.ec; b.classList.toggle('ed-on', on); b.setAttribute('aria-checked', String(on)); }
+  const hint = $('#qr-ec-hint');
+  if (hint) paintEcHint(hint);
+}
+
+// --- export ------------------------------------------------------------------------------------------------------
+
+function renderExport() {
+  const sizeSel = select([256, 512, 1024, 2048, 4096].map((v) => ({ v, l: `=${v} × ${v}` })), S.pngSize, (v) => { S.pngSize = +v; save(); });
+  sizeSel.setAttribute('aria-label', t('qr.pngSize'));
+  sizeSel.classList.add('qr-size-sel');
+  const b = (label, ic, fn, kind) => { const x = button(label, ic, fn, kind); x.dataset.act = label.split('.').pop(); return x; };
+  return h('div', { class: 'qr-export' },
+    h('div', { class: 'qr-export-row' }, b('qr.dlPng', 'download', exportPNG, 'primary'), sizeSel, b('qr.dlSvg', 'download', exportSVG)),
+    h('div', { class: 'qr-export-row' }, b('qr.copySvg', 'copy', () => R.svg && copyText(exportMarkup())), b('qr.copyImg', 'image', copyImage), b('qr.print', 'print', printDialog)));
+}
+
+const baseName = () => {
+  const f = F();
+  // File name from the most identifying field of the type (URL host, SSID, name ...); safeFileName strips characters
+  // that are illegal on common file systems.
+  const hint = { url: f.url, wifi: f.ssid, contact: [f.first, f.last].join(' '), email: f.to, sms: f.number, phone: f.number, event: f.title, crypto: f.coin }[S.type] || '';
+  const slug = String(hint).replace(/^https?:\/\//i, '').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 32);
+  return safeFileName('qr-' + S.type + (slug ? '-' + slug : ''), 'qr');
+};
+
+function svgOpts(extra = {}) {
+  const d = S.design;
+  return {
+    fg: d.fg, bg: d.transparent ? 'transparent' : d.bg, quiet: d.quiet,
+    gradient: d.gradient ? { type: d.gradType, from: d.fg, to: d.fg2, angle: d.angle } : null,
+    moduleStyle: d.moduleStyle, finderStyle: d.finderStyle, eyeStyle: d.eyeStyle,
+    logo: S.logo ? { href: S.logo.href, size: S.logo.size, pad: 1, plate: S.logo.plate } : null,
+    ...extra,
+  };
+}
+const exportMarkup = (size) => (R.matrix ? qrStyledSVG(R.matrix, svgOpts({ title: snippet(R.payload, 120), size: size || 1024 })) : '');
+
+function exportSVG() {
+  if (!R.matrix) return;
+  download(exportMarkup(), baseName() + '.svg', 'image/svg+xml');
+}
+async function renderPNG(size) {
+  // PNG through SVG rasterisation at the target size (sharp at any size); unique ids avoid gradient id clashes with
+  // the preview SVG in the same document.
+  const svg = qrStyledSVG(R.matrix, svgOpts({ size, id: 'qrx' }));
+  return canvasBlob(await svgToCanvas(svg, size, S.design.transparent ? null : S.design.bg));
+}
+async function exportPNG() {
+  if (!R.matrix) return;
+  try { download(await renderPNG(S.pngSize), baseName() + '.png', 'image/png'); } catch (e) { toast(t('err.generic', { msg: e.message }), 'error'); }
+}
+async function copyImage() {
+  if (!R.matrix) return;
+  if (!(navigator.clipboard && navigator.clipboard.write && typeof ClipboardItem !== 'undefined')) { toast(t('qr.copyImgNo'), 'warn'); return; }
+  try {
+    // ClipboardItem receives a Promise of the PNG: Safari requires the write to start synchronously in the gesture.
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': renderPNG(1024) })]);
+    toast(t('qr.copiedImg'), 'ok');
+  } catch {
+    toast(t('qr.copyImgNo'), 'warn');
+  }
+}
+
+// --- print sheet ---------------------------------------------------------------------------------------------------
+
+function defaultCaption() {
+  const f = F();
+  switch (S.type) {
+    case 'wifi': return f.ssid ? t('qr.cap.wifi', { ssid: f.ssid }) : '';
+    case 'url': return R.payload.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+    case 'contact': return [f.first, f.last].filter(Boolean).join(' ');
+    case 'event': return f.title || '';
+    default: return '';
+  }
+}
+
+function printDialog() {
+  if (!R.matrix) return;
+  const p = S.print;
+  if (!p.caption) p.caption = defaultCaption();
+  const body = h('div', { class: 'ed-fields' },
+    group('qr.print.copies', seg([1, 4, 6, 12].map((v) => ({ v, l: '=' + v })), p.copies, (v) => { p.copies = v; save(); }, 'qr.print.copies')),
+    field('qr.print.size', select([3, 4, 5, 6, 8, 10, 12, 15].map((v) => ({ v, l: `=${v} cm` })), p.size, (v) => { p.size = +v; save(); })),
+    field('qr.print.caption', textInput(p.caption, (v) => { p.caption = v; save(); }, { placeholder: t('qr.print.captionPh') })),
+    h('div', { class: 'ed-hint' }, t('qr.print.hint')));
+  openDialog({
+    title: t('qr.print.title'), body,
+    buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('qr.print.go'), value: 'go', primary: true, icon: 'print' }],
+  }).then((v) => { if (v === 'go') printSheet(); });
+}
+
+function printSheet() {
+  const p = S.print;
+  // Grid by copy count (1, 2x2, 2x3, 3x4). Code size: the requested size, shrunk to fit its cell minus caption room
+  // and an 8 mm margin, never below 15 mm (smaller QR codes become hard to scan from a phone at arm's length).
+  const cols = { 1: 1, 4: 2, 6: 2, 12: 3 }[p.copies] || 2, rows = Math.ceil(p.copies / cols);
+  // Printable area of A4 / Letter with 12 mm margins (the smaller of both), minus room for captions.
+  const cellW = 186 / cols, cellH = 250 / rows, cap = p.caption ? 10 : 0;
+  const mm = Math.max(15, Math.min(p.size * 10, cellW - 8, cellH - cap - 8));
+  const svg = qrStyledSVG(R.matrix, svgOpts({ title: snippet(R.payload, 120), id: 'qrp' }));
+  let sheet = $('#qr-print');
+  if (sheet) sheet.remove();
+  sheet = h('div', { id: 'qr-print', class: 'qr-print', style: { gridTemplateColumns: `repeat(${cols}, 1fr)`, gridAutoRows: cellH + 'mm' } });
+  for (let i = 0; i < p.copies; i++) {
+    sheet.append(h('figure', { class: 'qr-print-cell' }, h('div', { class: 'qr-print-code', style: { width: mm + 'mm', height: mm + 'mm' }, html: svg }),
+      p.caption ? h('figcaption', {}, p.caption) : null));
+  }
+  document.body.append(sheet);
+  document.body.classList.add('qr-printing');
+  // Same print strategy as the other studios. KNOWN DEFECT: done() also runs 1 s after print() returns; where
+  // print() does not block (some mobile browsers) the sheet may be removed before capture. Fix: rely on 'afterprint'.
+  const done = () => { document.body.classList.remove('qr-printing'); sheet.remove(); window.removeEventListener('afterprint', done); };
+  window.addEventListener('afterprint', done);
+  setTimeout(() => { window.print(); setTimeout(done, 1000); }, 50);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Update: payload -> info -> matrix -> SVG preview, warnings, verification
+
+const changed = () => { save(); updateSoon(); };
+const updateSoon = debounce(() => update(), 60);
+const verifySoon = debounce(() => verify(), 320);
+
+function update() {
+  const f = F();
+  R.payload = buildPayload(S.type, f);
+  const issues = payloadIssues(S.type, f);
+  els.issues.textContent = '';
+  // The 'empty' issue is not shown as an error: an empty form is the normal starting state.
+  for (const k of issues.filter((x) => x !== 'empty')) els.issues.append(h('div', { class: 'ed-hint ed-hint-warn' }, t('qr.issue.' + k)));
+  const empty = !R.payload || issues.includes('empty');
+  R.info = qrInfo(R.payload, S.ec);
+  R.matrix = null;
+  // Capacity is checked before encoding: qrMatrix on oversized content would throw, and the info panel can explain
+  // how far over the limit the text is.
+  if (R.payload && R.info.fits) {
+    try { R.matrix = qrMatrix(R.payload, S.ec); } catch { R.matrix = null; }
+  }
+  // Preview.
+  if (R.matrix && !empty) {
+    R.svg = qrStyledSVG(R.matrix, svgOpts({ title: t('qr.previewAlt') }));
+    els.preview.className = 'qr-paper' + (S.design.transparent ? ' qr-transparent' : '');
+    // innerHTML of SVG generated locally by qr/style.js; the title goes through its escaping.
+    els.preview.innerHTML = R.svg;
+  } else {
+    R.svg = '';
+    els.preview.className = 'qr-paper qr-empty';
+    els.preview.innerHTML = '';
+    els.preview.append(h('div', { class: 'qr-empty-art', html: icon('qrcode') }),
+      h('p', {}, t(R.info.fits || empty ? 'qr.empty' : 'qr.tooLong')));
+    R.matrix = null;
+  }
+  R.cover = R.matrix && S.logo ? qrLogoCover(R.matrix, svgOpts().logo, S.ec) : null;
+  paintInfo();
+  paintWarnings();
+  els.payload.textContent = R.payload || '—';
+  paintCoverage();
+  // Verification of the rendered code.
+  R.token++;
+  if (R.matrix) { setBadge('checking'); verifySoon(); } else setBadge('idle');
+  for (const b of $$('.qr-export button')) b.disabled = !R.matrix;
+}
+
+function paintInfo() {
+  const i = R.info, box = els.info;
+  box.textContent = '';
+  const modeName = t('qr.mode.' + i.mode);
+  const unit = i.mode === 'byte' ? 'qr.bytes' : 'qr.chars';
+  const pct = Math.min(100, Math.round(i.fill * 100));
+  // Capacity bar as an ARIA progressbar with explicit min/max/now; turns amber above 92 % (the next character may
+  // force a larger version).
+  const bar = h('div', { class: 'ap-progress qr-fill' + (i.fill > 0.92 ? ' qr-full' : '') }, h('i', { style: { width: pct + '%' } }));
+  bar.setAttribute('role', 'progressbar');
+  bar.setAttribute('aria-valuenow', String(pct));
+  bar.setAttribute('aria-valuemin', '0');
+  bar.setAttribute('aria-valuemax', '100');
+  bar.setAttribute('aria-label', t('qr.capacity'));
+  box.append(h('dl', { class: 'ap-kv' },
+    h('dt', {}, t('qr.version')), h('dd', { id: 'qr-version' }, i.fits ? t('qr.versionVal', { v: i.version, n: i.size }) : '—'),
+    h('dt', {}, t('qr.mode')), h('dd', {}, modeName),
+    h('dt', {}, t('qr.capacity')), h('dd', {}, t('qr.bits', { used: fmt(i.dataBits), cap: fmt(i.capacityBits) })),
+    h('dt', {}, t('qr.left')), h('dd', {}, i.fits ? t(unit, { n: i.charsLeft }) : t('qr.over', { n: -i.charsLeft }))), bar);
+  els.chips.textContent = '';
+  if (i.fits && R.matrix) els.chips.append(h('span', { class: 'qr-chip-info' }, t('qr.versionShort', { v: i.version })), h('span', { class: 'qr-chip-info' }, `${i.size}×${i.size}`), h('span', { class: 'qr-chip-info' }, 'ECC ' + S.ec));
+}
+
+// Contrast and layout warnings under the preview.
+function paintWarnings() {
+  const d = S.design, out = [];
+  const bg = d.transparent ? '#ffffff' : d.bg;
+  // The worst contrast over all gradient stops counts: one light stop can make part of the code unreadable.
+  const stops = d.gradient ? [d.fg, d.fg2] : [d.fg];
+  let worst = Infinity;
+  for (const c of stops) { const r = contrastRatio(c, bg); if (Number.isFinite(r)) worst = Math.min(worst, r); }
+  if (worst < 2.5) out.push(['error', t('qr.w.contrastBad', { r: worst.toFixed(1) })]);
+  else if (worst < 4) out.push(['warn', t('qr.w.contrastLow', { r: worst.toFixed(1) })]);
+  const lum = (c) => contrastRatio(c, '#000000');
+  // Inverted codes (light modules on dark) are allowed by the standard, but older scanners fail on them: info, not
+  // error.
+  if (stops.some((c) => lum(c) > lum(bg))) out.push(['info', t('qr.w.inverted')]);
+  if (d.transparent) out.push(['info', t('qr.w.transparent')]);
+  if (d.quiet < 2) out.push(['warn', t('qr.w.quiet')]);
+  if (R.cover && R.cover.load > 1) out.push(['error', t('qr.w.logoBig')]);
+  els.warn.textContent = '';
+  for (const [k, msg] of out) els.warn.append(h('div', { class: 'qr-w qr-w-' + k, role: k === 'error' ? 'alert' : null }, iconEl(k === 'info' ? 'info' : 'warn'), h('span', {}, msg)));
+}
+
+function paintCoverage() {
+  const box = els.coverage;
+  box.textContent = '';
+  if (!S.logo || !R.cover) return;
+  const c = R.cover;
+  if (!c.box) { box.append(h('div', { class: 'ed-hint ed-hint-warn' }, t('qr.logo.small'))); return; }
+  // Coverage levels: load = estimated damage / correction budget; above 0.7 the code is close to failing.
+  const level = c.load > 1 ? 'bad' : c.load > 0.7 ? 'warn' : 'ok';
+  const pct = Math.min(100, Math.round(c.load * 100));
+  box.append(h('div', { class: 'qr-cover qr-cover-' + level },
+    h('div', { class: 'qr-cover-top' }, h('span', {}, t('qr.cover', { p: Math.round(c.ratio * 100), b: Math.round(c.nominal * 100) })), h('b', {}, t('qr.cover.' + level))),
+    h('div', { class: 'ap-progress' }, h('i', { style: { width: pct + '%' } })),
+    h('div', { class: 'ed-hint' }, t('qr.coverBlock', { hit: c.worstBlock.hit, budget: c.worstBlock.budget }))));
+}
+
+function setBadge(state) {
+  R.verify = state;
+  const b = els.badge;
+  b.className = 'qr-badge qr-badge-' + state;
+  b.dataset.state = state;
+  b.textContent = '';
+  if (state === 'idle') return;
+  const ic = { checking: 'refresh', ok: 'ok', fail: 'warn' }[state];
+  b.append(iconEl(ic), h('span', {}, t('qr.verify.' + state)));
+}
+
+// Rasterises the preview at ~5 px per module and decodes it with the built-in decoder.
+async function verify() {
+  const token = R.token;
+  if (!R.matrix) return;
+  // About 5 px per module, clamped to 240..1400 px: enough for the decoder, small enough to stay fast. A transparent
+  // design is checked over white (what a white page would show).
+  const W = R.matrix.length + 2 * S.design.quiet;
+  const size = Math.max(240, Math.min(1400, W * 5));
+  try {
+    const c = await svgToCanvas(qrStyledSVG(R.matrix, svgOpts({ size, id: 'qrv' })), size, S.design.transparent ? '#ffffff' : null);
+    if (token !== R.token) return;
+    const img = c.getContext('2d').getImageData(0, 0, size, size);
+    const res = decodeQR(img);
+    if (token !== R.token) return;
+    // The decoded text must equal the payload exactly: a code that decodes to something else is a failure too.
+    setBadge(res && res.text === R.payload ? 'ok' : 'fail');
+  } catch {
+    if (token === R.token) setBadge('fail');
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Payload handed over by the scanner: #text=<encoded>
+
+function readHash() {
+  // Hand-over from the scan page (#text=...). The payload is parsed back into a typed form only if rebuilding it from
+  // the form yields an identical parse; otherwise the exact text is kept, so nothing the scanner read is lost.
+  const m = /^#text=([\s\S]*)$/.exec(location.hash || '');
+  if (!m) return;
+  let text = '';
+  try { text = decodeURIComponent(m[1]); } catch { return; }
+  history.replaceState(null, '', location.pathname + location.search);
+  if (!text) return;
+  const p = parsePayload(text);
+  const fields = S.fields[p.type];
+  let typed = false;
+  if (fields && p.type !== 'text') {
+    const f = { ...DEF.fields[p.type] };
+    for (const k of Object.keys(f)) if (p.fields[k] != null) f[k] = typeof f[k] === 'boolean' ? !!p.fields[k] : String(p.fields[k]);
+    if (p.type === 'event' && !f.allDay) for (const k of ['start', 'end']) { const d = new Date(f[k]); if (f[k] && !Number.isNaN(d.getTime())) f[k] = localDT(d); }
+    // Use the form only when it rebuilds the same content; otherwise keep the exact text.
+    const same = JSON.stringify(parsePayload(buildPayload(p.type, f))) === JSON.stringify(p);
+    if (same) { S.type = p.type; S.fields[p.type] = f; typed = true; }
+  }
+  if (!typed) { S.type = 'text'; S.fields.text = { text }; }
+  save();
+  setTimeout(() => toast(t('qr.fromScan'), 'ok'), 300);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+
+readHash();
+prepareType();
+startShell('create', () => render());
+render();

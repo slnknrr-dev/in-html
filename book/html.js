@@ -1,0 +1,877 @@
+// book/html.js - the one HTML form of the book model, used by the reader, the editor, EPUB content documents and the
+// HTML export, and the way back: HTML / XHTML (any source: EPUB chapters, web pages, the editor's DOM) to blocks and
+// sections. String based (no DOM), Node and browsers alike.
+//
+// Rendering (well-formed XHTML that is also valid HTML; `\n` between line-level children so the text content of each
+// rendered block equals blockPlain(block) of book/model.js — reader offsets rely on it):
+//   renderInline(inline, ctx)   renderBlock(block, ctx)   renderBlocks(blocks, ctx)   renderTitle(lines, tag, ctx, attrs)
+//   renderSection(section, depth, ctx, { deep = true })   renderNote(note, ctx)
+//   ctx = renderContext({ html5 = true, epub = false, marks = false, k = 0, editable = false, href(h), noteHref(ref),
+//         noteId(ref) -> id of the reference element, imgSrc(id), headingOffset = 0, lang })
+//     html5: section / aside / figure (false: div, for EPUB 2 / XHTML 1.1); epub: epub:type attributes;
+//     marks: data-k serials on reading units (book/model.js readingUnits order); editable: editor attributes
+//   bookToHTML(book, { title, css, imgSrc }) -> a standalone HTML page of the whole book (export)
+//
+// Parsing:
+//   parseContext({ styles, image(src) -> id | null, link(href) -> href | null, isNote(a, href) -> bool,
+//                  noteTarget(href) -> note id, keepIds })
+//   parseFlow(nodes, pctx) -> [block | { heading: level, lines, id }]       parseInline(nodes, pctx) -> inline
+//   sectionsFromFlow(items, { sectionId }) -> { lead: [block], sections: [section] }
+//   blocksFromHTML(html, opts) -> [block] (editor read-back: headings become subtitles)
+//   htmlToBook(text, { name }) -> book (an HTML file: <title>, <meta name=author>, headings -> sections, data: images)
+
+import { escapeXML, escapeXMLAttr } from '../xml/xml.js';
+import { b64decode } from '../codec/base64.js';
+import { getAttr, kids, ln, parseMarkup, textContent } from './markup.js';
+import { BOOK_FORMAT, cleanInline, inlineText, isEmptyInline, newBook, parsePersonName, slug, sniffImage, uuid } from './model.js';
+
+//
+// One renderer for four consumers (reader, editor, EPUB, export) instead of four: they differ only by switches in
+// ctx, so a fix in rendering reaches every surface and the blockPlain invariant has a single implementation to match.
+// Output is XHTML-compatible (self-closed void elements, escaped text and attributes) because EPUB content documents
+// are parsed as XML; the same string is also valid HTML, so no second serializer is needed.
+// attr(): empty and null values are omitted, so optional attributes never produce name="" noise.
+const esc = escapeXML;
+const attr = (name, v) => (v == null || v === '' ? '' : ` ${name}="${escapeXMLAttr(v)}"`);
+
+// --- rendering --------------------------------------------------------------------------------------
+
+// Hooks (href, noteHref, imgSrc) let each consumer map model references to its own URL space: blob: URLs in the
+// reader, relative file paths in EPUB, data: URIs in the export, ids in the editor.
+export function renderContext(o = {}) {
+  return {
+    html5: o.html5 !== false, epub: !!o.epub, marks: !!o.marks, k: o.k || 0, editable: !!o.editable,
+    href: o.href || ((h) => h), noteHref: o.noteHref || ((ref) => '#' + ref), noteId: o.noteId || null,
+    imgSrc: o.imgSrc || ((id) => id), headingOffset: o.headingOffset || 0, lang: o.lang || '',
+    styleClass: (name) => 's-' + name,
+  };
+}
+// data-k serials follow readingUnits order exactly because render order is the same traversal; ctx.k is mutated so
+// one counter runs across a whole render. Nested containers render with marks: false (they are inside one unit).
+const mark = (ctx) => (ctx.marks ? ` data-k="${ctx.k++}"` : '');
+
+// KNOWN DEFECT (security): the href of an 'a' node is rendered as given (ctx.href defaults to identity) and
+// model.cleanInline does not restrict the scheme, so a book JSON or editor state carrying "javascript:..." yields a
+// live javascript: link in the reader. The HTML/Markdown importers filter links (parseContext.link), but JSON
+// import does not. Fix: whitelist '#', http(s):, mailto: in cleanInline (or here) and drop anything else.
+export function renderInline(inl, ctx) {
+  let s = '';
+  for (const x of inl || []) {
+    if (typeof x === 'string') { s += esc(x); continue; }
+    if (!x) continue;
+    switch (x.t) {
+      case 'em': s += `<em>${renderInline(x.c, ctx)}</em>`; break;
+      case 'strong': s += `<strong>${renderInline(x.c, ctx)}</strong>`; break;
+      case 'strike': s += `<s>${renderInline(x.c, ctx)}</s>`; break;
+      case 'sub': s += `<sub>${renderInline(x.c, ctx)}</sub>`; break;
+      case 'sup': s += `<sup>${renderInline(x.c, ctx)}</sup>`; break;
+      case 'code': s += `<code>${renderInline(x.c, ctx)}</code>`; break;
+      case 'style': s += `<span class="${escapeXMLAttr(ctx.styleClass(x.name))}">${renderInline(x.c, ctx)}</span>`; break;
+      case 'br': s += '<br/>'; break;
+      case 'img': s += `<img class="inline"${attr('src', ctx.imgSrc(x.src))}${attr('alt', x.alt || '')}${ctx.editable ? attr('data-id', x.src) : ''}/>`; break;
+      case 'a': {
+        const href = ctx.href(x.href);
+        s += href ? `<a${attr('href', href)}${ctx.editable ? attr('data-href', x.href) : ''}>${renderInline(x.c, ctx)}</a>` : renderInline(x.c, ctx);
+        break;
+      }
+      // Editable mode: contenteditable="false" makes the note marker an atomic object in the editor (the caret cannot
+      // enter and split its label); data-note carries the ref back on read-back.
+      case 'note': {
+        const id = ctx.noteId ? ctx.noteId(x.ref) : '';
+        s += `<a class="noteref"${attr('href', ctx.noteHref(x.ref))}${attr('id', id)}${ctx.epub ? ' epub:type="noteref"' : ''}${ctx.editable ? attr('data-note', x.ref) + ' contenteditable="false"' : attr('data-note', ctx.marks ? x.ref : '')}>${renderInline(x.c, ctx)}</a>`;
+        break;
+      }
+      default: if (x.c) s += renderInline(x.c, ctx);
+    }
+  }
+  return s;
+}
+
+const linesHTML = (lines, ctx) => (lines || []).map((l) => renderInline(l, ctx)).join('<br/>\n');
+
+export function renderTitle(lines, tag, ctx, attrs = '') {
+  return `<${tag}${attrs}${mark(ctx)}>${linesHTML(lines, ctx)}</${tag}>`;
+}
+
+export function renderBlocks(blocks, ctx) {
+  return (blocks || []).map((b) => renderBlock(b, ctx)).join('\n');
+}
+
+// Line-level children are joined with '\n': textContent of the rendered block then equals blockPlain(b), the
+// invariant reader offsets rely on (see book/model.js). Whitespace between block tags is otherwise insignificant.
+export function renderBlock(b, ctx) {
+  const k = mark(ctx);
+  const id = attr('id', b.id);
+  switch (b.type) {
+    case 'p': return `<p${id}${b.style ? attr('class', ctx.styleClass(b.style)) : ''}${k}>${renderInline(b.c, ctx)}</p>`;
+    case 'subtitle': return `<p class="subtitle"${id}${k}>${renderInline(b.c, ctx)}</p>`;
+    case 'empty': return `<p class="empty-line"${id}${k}><br/></p>`;
+    case 'hr': return `<hr class="scene-break"${id}${k}/>`;
+    case 'code': return `<pre class="code"${id}${k}><code>${esc(b.text)}</code></pre>`;
+    case 'image': {
+      const img = `<img${attr('src', ctx.imgSrc(b.src))}${attr('alt', b.alt || '')}${ctx.editable ? attr('data-id', b.src) : ''}/>`;
+      const cap = b.title && b.title.length ? renderInline(b.title, ctx) : '';
+      if (ctx.html5) return `<figure class="image"${id}${k}${ctx.editable ? ' contenteditable="false"' : ''}>${img}${cap || ctx.editable ? `<figcaption${ctx.editable ? ' contenteditable="true"' : ''}>${cap}</figcaption>` : ''}</figure>`;
+      return `<div class="image"${id}${k}>${img}${cap ? `<p class="caption">${cap}</p>` : ''}</div>`;
+    }
+    case 'epigraph': case 'cite': {
+      const inner = { ...ctx, marks: false };
+      const parts = b.blocks.map((x) => renderBlock(x, inner));
+      for (const a of b.authors) parts.push(`<p class="text-author">${renderInline(a, ctx)}</p>`);
+      return `<blockquote class="${b.type}"${id}${k}>${parts.join('\n')}</blockquote>`;
+    }
+    case 'poem': {
+      const inner = { ...ctx, marks: false };
+      const parts = [];
+      if (b.title) parts.push(`<p class="poem-title">${linesHTML(b.title, ctx)}</p>`);
+      for (const e of b.epigraphs) parts.push(renderBlock(e, inner));
+      for (const s of b.stanzas) {
+        const sp = [];
+        if (s.title) sp.push(`<p class="stanza-title">${linesHTML(s.title, ctx)}</p>`);
+        if (s.subtitle && s.subtitle.length) sp.push(`<p class="stanza-subtitle">${renderInline(s.subtitle, ctx)}</p>`);
+        for (const l of s.lines) sp.push(`<p class="verse">${renderInline(l, ctx)}</p>`);
+        parts.push(`<div class="stanza">${sp.join('\n')}</div>`);
+      }
+      for (const a of b.authors) parts.push(`<p class="text-author">${renderInline(a, ctx)}</p>`);
+      if (b.date) parts.push(`<p class="poem-date">${esc(b.date)}</p>`);
+      return `<div class="poem"${id}${k}>${parts.join('\n')}</div>`;
+    }
+    // Cell alignment as an inline style, not the obsolete align attribute: align is invalid in HTML5 and XHTML 1.1.
+    case 'table': {
+      const rows = b.rows.map((r) => '<tr>' + r.cells.map((c) => {
+        const tag = c.header ? 'th' : 'td';
+        return `<${tag}${c.colspan > 1 ? attr('colspan', c.colspan) : ''}${c.rowspan > 1 ? attr('rowspan', c.rowspan) : ''}${c.align ? attr('style', 'text-align: ' + c.align) : ''}>${renderInline(c.c, ctx)}</${tag}>`;
+      }).join('\n') + '</tr>');
+      return `<table${id}${k}>${rows.join('\n')}</table>`;
+    }
+    // A list item holding one plain paragraph is rendered inline (<li>text</li>), which is how lists are normally
+    // written; the parser maps it back to the same single-paragraph item, keeping round trips stable.
+    case 'list': {
+      const inner = { ...ctx, marks: false };
+      const tag = b.ordered ? 'ol' : 'ul';
+      const items = b.items.map((it) => `<li>${it.length === 1 && it[0].type === 'p' && !it[0].id && !it[0].style ? renderInline(it[0].c, ctx) : it.map((x) => renderBlock(x, inner)).join('\n')}</li>`);
+      return `<${tag}${id}${k}>${items.join('\n')}</${tag}>`;
+    }
+    default: return '';
+  }
+}
+
+// Heading level = depth + 1 + headingOffset, capped at h6: deeper nesting cannot be expressed in HTML headings.
+// epub:type part/chapter/subchapter tells EPUB 3 reading systems the structural role (EPUB Structural Semantics).
+export function renderSection(sec, depth, ctx, { deep = true, blocks = null } = {}) {
+  const level = Math.min(6, depth + 1 + ctx.headingOffset);
+  const tag = ctx.html5 ? 'section' : 'div';
+  const et = ctx.epub ? ` epub:type="${depth === 0 ? (sec.sections.length ? 'part' : 'chapter') : 'subchapter'}"` : '';
+  const parts = [];
+  if (sec.title) parts.push(renderTitle(sec.title, 'h' + level, ctx, ' class="title"'));
+  if (sec.blocks.length && (blocks || sec.blocks)) parts.push(renderBlocks(blocks || sec.blocks, ctx));
+  if (deep) for (const s of sec.sections) parts.push(renderSection(s, depth + 1, ctx));
+  return `<${tag} class="section level-${depth + 1}"${attr('id', sec.id)}${et}>${parts.join('\n')}</${tag}>`;
+}
+
+export function renderNote(note, ctx, backHref = '') {
+  const tag = ctx.html5 ? 'aside' : 'div';
+  const et = ctx.epub ? ` epub:type="${note.kind === 'comment' ? 'rearnote' : 'endnote'}"` : '';
+  const label = renderInline(note.label, ctx);
+  const head = `<p class="note-label">${backHref ? `<a${attr('href', backHref)}>${label}</a>` : label}</p>`;
+  return `<${tag} class="note"${attr('id', note.id)}${et}>${head}\n${renderBlocks(note.blocks, { ...ctx, marks: false })}</${tag}>`;
+}
+
+// A standalone HTML page of the whole book (images through imgSrc, e.g. data: URLs).
+// role="doc-toc" / "doc-endnotes" (DPUB-ARIA) give assistive technology the same semantics EPUB gets via epub:type.
+export function bookToHTML(book, { css = '', imgSrc = (id) => id, labels = {} } = {}) {
+  const m = book.meta;
+  const ctx = renderContext({ imgSrc, lang: m.lang });
+  const authors = m.authors.map((p) => [p.first, p.middle, p.last].filter(Boolean).join(' ') || p.nick).join(', ');
+  const parts = [];
+  parts.push('<header class="book-head">');
+  if (m.cover && book.images[m.cover]) parts.push(`<p class="cover"><img${attr('src', imgSrc(m.cover))} alt=""/></p>`);
+  if (authors) parts.push(`<p class="book-author">${esc(authors)}</p>`);
+  parts.push(`<h1 class="book-title">${esc(m.title || '')}</h1>`);
+  if (m.subtitle) parts.push(`<p class="book-subtitle">${esc(m.subtitle)}</p>`);
+  parts.push('</header>');
+  const tocItems = (list) => list.filter((s) => s.title || s.sections.length).map((s) => `<li>${s.title ? `<a href="#${escapeXMLAttr(s.id)}">${esc(s.title.map((l) => inlineText(l)).join(' '))}</a>` : ''}${s.sections.length ? `<ol>${tocItems(s.sections)}</ol>` : ''}</li>`).join('');
+  const toc = tocItems(book.sections);
+  if (toc) parts.push(`<nav class="toc" role="doc-toc"><h2>${esc(labels.toc || 'Contents')}</h2><ol>${toc}</ol></nav>`);
+  if (book.title) parts.push(renderTitle(book.title, 'p', ctx, ' class="body-title"'));
+  if (book.front.length) parts.push(renderBlocks(book.front, ctx));
+  for (const s of book.sections) parts.push(renderSection(s, 0, { ...ctx, headingOffset: 1 }));
+  if (book.notes.length) {
+    parts.push(`<section class="notes" role="doc-endnotes"><h2>${esc(labels.notes || 'Notes')}</h2>`);
+    for (const n of book.notes) parts.push(renderNote(n, ctx));
+    parts.push('</section>');
+  }
+  return `<!DOCTYPE html>\n<html lang="${escapeXMLAttr(m.lang || 'en')}">\n<head>\n<meta charset="utf-8"/>\n<meta name="viewport" content="width=device-width, initial-scale=1"/>\n<title>${esc(m.title || '')}</title>\n`
+    + (authors ? `<meta name="author"${attr('content', authors)}/>\n` : '')
+    + `<meta name="generator" content="${BOOK_FORMAT}"/>\n<style>\n${css}\n</style>\n</head>\n<body>\n<main class="book">\n${parts.join('\n')}\n</main>\n</body>\n</html>\n`;
+}
+
+// --- parsing ----------------------------------------------------------------------------------------
+
+// --- Parsing model ---
+// HTML from the wild is turned into the book model in two layers: parseFlow (block level) and parseInline. Unknown
+// elements are transparent (children kept), SKIP elements are dropped with their content (scripts, forms, media:
+// nothing executable or interactive enters a book). BLOCK decides where an implicit paragraph ends: loose text and
+// inline elements between blocks are gathered into an anonymous <p> (para), as browsers do for anonymous blocks.
+const SKIP = new Set(['script', 'style', 'head', 'title', 'meta', 'link', 'template', 'noscript', 'button', 'input', 'select', 'textarea', 'iframe', 'object', 'embed', 'audio', 'video', 'canvas', 'form', 'map']);
+const BLOCK = new Set(['p', 'div', 'section', 'article', 'main', 'header', 'footer', 'aside', 'nav', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'blockquote', 'pre', 'ul', 'ol', 'dl', 'table', 'figure', 'hr', 'body', 'center', 'address', 'hgroup', 'details', 'summary', 'svg', 'li', 'dd', 'dt', 'figcaption', 'html']);
+const classes = (nd) => new Set(String(getAttr(nd, 'class') || '').toLowerCase().split(/\s+/).filter(Boolean));
+// epub:type (any prefix bound to the OPS namespace is written as epub: in practice) and role tokens.
+// Semantics come from epub:type and ARIA role; "doc-" prefixes are stripped so both vocabularies compare equal.
+// Any prefix ending in ":type" is accepted because the OPS namespace prefix is not always "epub" in the wild.
+function semantics(nd) {
+  const out = new Set();
+  if (!nd.attrs) return out;
+  for (const [k, v] of Object.entries(nd.attrs)) {
+    const kl = k.toLowerCase();
+    if (kl === 'epub:type' || kl === 'role' || (kl.endsWith(':type') && kl !== 'xlink:type')) for (const t of String(v).toLowerCase().split(/\s+/)) if (t) out.add(t.replace(/^doc-/, ''));
+  }
+  return out;
+}
+const hasAny = (set, list) => list.some((x) => set.has(x));
+const NOTE_SEM = ['footnote', 'endnote', 'rearnote', 'note', 'footnotes', 'endnotes', 'rearnotes'];
+
+// The default link filter is the HTML import's security gate: only http(s):, mailto: and in-book #fragments
+// survive; javascript:, data:, file: and relative links are dropped (their text is kept).
+export function parseContext(o = {}) {
+  return {
+    styles: o.styles || null,       // Set of known style ids (null: any s-<name> class becomes a style)
+    image: o.image || ((src) => (src ? src : null)),
+    link: o.link || ((href) => (/^(https?:|mailto:)/i.test(href) ? href : /^#./.test(href) ? href : null)),
+    isNote: o.isNote || null,       // (aElement, href) -> bool
+    noteTarget: o.noteTarget || ((href) => (href.startsWith('#') ? href.slice(1) : null)),
+    onNote: o.onNote || null,       // (element) -> true when the element was taken as a note (left out of the flow)
+    anchors: [],                    // ids met inside the block being parsed
+    onAnchor: o.onAnchor || null,   // (id, blockOrSection) alias registration
+    editor: !!o.editor,
+  };
+}
+
+const WS = /[ \t\n\r\f]+/g;
+
+// Inline content of nodes.
+// Whitespace collapses to single spaces except inside pre/code (pre flag propagates to children). Element ids met
+// here are recorded in pctx.anchors so the enclosing block can adopt one as its own id (link targets survive).
+export function parseInline(nodes, pctx, pre = false) {
+  const out = [];
+  const push = (x) => out.push(x);
+  for (const nd of nodes || []) {
+    if (nd.type === 'text') { push(pre ? nd.text : nd.text.replace(WS, ' ')); continue; }
+    if (nd.type !== 'element') continue;
+    const n = ln(nd);
+    const sub = () => parseInline(nd.children, pctx, pre || n === 'pre');
+    const id = getAttr(nd, 'id');
+    if (id && n !== 'a') pctx.anchors.push(id);
+    switch (n) {
+      case 'br': push({ t: 'br' }); break;
+      case 'em': case 'i': case 'cite': case 'dfn': case 'var': push({ t: 'em', c: sub() }); break;
+      case 'strong': case 'b': push({ t: 'strong', c: sub() }); break;
+      case 's': case 'strike': case 'del': push({ t: 'strike', c: sub() }); break;
+      case 'sub': push({ t: 'sub', c: sub() }); break;
+      case 'sup': {
+        // <sup><a href="#n1">1</a></sup>: the superscript is the note reference's own styling.
+        const els = kids(nd);
+        const onlyA = els.length === 1 && ln(els[0]) === 'a' && !nd.children.some((c) => c.type === 'text' && /\S/.test(c.text));
+        if (onlyA) {
+          const r = parseInline([els[0]], pctx, pre);
+          if (r.length === 1 && r[0] && r[0].t === 'note') { push(r[0]); break; }
+          push({ t: 'sup', c: r });
+          break;
+        }
+        push({ t: 'sup', c: sub() });
+        break;
+      }
+      case 'code': case 'tt': case 'kbd': case 'samp': push({ t: 'code', c: parseInline(nd.children, pctx, true) }); break;
+      case 'a': {
+        const dn = getAttr(nd, 'data-note');
+        const href = getAttr(nd, 'href') || '';
+        // A note reference's own id only serves the note's back link.
+        if (dn) { push({ t: 'note', ref: dn, c: sub() }); break; }
+        if (href && isNoteRef(nd, href, pctx)) {
+          const ref = pctx.noteTarget(href);
+          if (ref) { push({ t: 'note', ref, c: sub() }); break; }
+        }
+        if (id) pctx.anchors.push(id);
+        const name = getAttr(nd, 'name');
+        if (name) pctx.anchors.push(name);
+        const target = href ? pctx.link(getAttr(nd, 'data-href') || href) : null;
+        if (target) push({ t: 'a', href: target, c: sub() }); else out.push(...sub());
+        break;
+      }
+      case 'img': case 'image': {
+        const src = getAttr(nd, 'data-id') || getAttr(nd, 'src') || getAttr(nd, 'href');
+        const im = src ? pctx.image(src, !!getAttr(nd, 'data-id')) : null;
+        if (im) push({ t: 'img', src: im, alt: getAttr(nd, 'alt') || '' });
+        break;
+      }
+      case 'span': {
+        const sem = semantics(nd);
+        if (sem.has('pagebreak')) break;
+        const cls = classes(nd);
+        const st = [...cls].find((c) => c.startsWith('s-') && c.length > 2 && (!pctx.styles || pctx.styles.has(c.slice(2))));
+        if (st) push({ t: 'style', name: st.slice(2), c: sub() }); else out.push(...sub());
+        break;
+      }
+      case 'rt': case 'rp': case 'script': case 'style': case 'svg': case 'noscript': case 'template': case 'head': case 'title': break;
+      case 'math': push(textContent(nd).replace(WS, ' ')); break;
+      default:
+        if (BLOCK.has(n)) { push(' '); out.push(...sub()); push(' '); } else out.push(...sub());
+    }
+  }
+  return out;
+}
+
+// Note references in the wild are marked in many ways: epub:type/role, class names of popular generators, FB2's
+// type="note"; a caller-supplied isNote() adds structural detection (href points at a known note element).
+function isNoteRef(a, href, pctx) {
+  if (getAttr(a, 'data-note')) return true;
+  const sem = semantics(a);
+  if (hasAny(sem, ['noteref', 'footnoteref', 'endnoteref'])) return true;
+  const cls = classes(a);
+  if (hasAny(cls, ['noteref', 'footnote', 'footnote-ref', 'note', 'fnref', 'footnoteref', 'noteanchor'])) return true;
+  if (getAttr(a, 'type') === 'note') return true;
+  return pctx.isNote ? !!pctx.isNote(a, href) : false;
+}
+
+// Whitespace: collapse runs across element boundaries, trim the ends and around line breaks.
+// Collapses whitespace across element boundaries ("a <em> b</em>" -> one space), trims around <br> and at the ends.
+// `space` carries "previous output ended with a space" through the recursion, which per-string trimming cannot.
+// img and code reset it: they are content, so a following space is significant.
+export function tidyInline(inl) {
+  let space = true; // at the start, leading spaces are dropped
+  const walk = (list) => {
+    const out = [];
+    for (const x of list) {
+      if (typeof x === 'string') {
+        let s = x.replace(WS, ' ');
+        if (space) s = s.replace(/^ /, '');
+        if (!s) continue;
+        space = s.endsWith(' ');
+        out.push(s);
+      } else if (x.t === 'br') {
+        trimEnd(out);
+        out.push(x);
+        space = true;
+      } else if (x.t === 'img') { out.push(x); space = false; }
+      else if (x.t === 'code') { out.push(x); space = false; }
+      else { out.push({ ...x, c: walk(x.c) }); }
+    }
+    return out;
+  };
+  const r = walk(inl);
+  trimEnd(r);
+  return cleanInline(r);
+}
+function trimEnd(list) {
+  for (let i = list.length - 1; i >= 0; i--) {
+    const x = list[i];
+    if (typeof x === 'string') { list[i] = x.replace(/ +$/, ''); if (list[i]) return; list.splice(i, 1); continue; }
+    if (x && x.c && x.t !== 'code') { trimEnd(x.c); if (!x.c.length && x.t !== 'note') { list.splice(i, 1); continue; } }
+    return;
+  }
+}
+
+const inlineOf = (nodes, pctx) => tidyInline(parseInline(nodes, pctx));
+// Lines of a heading / title: split at <br>.
+function linesOf(nodes, pctx) {
+  const inl = inlineOf(nodes, pctx);
+  const lines = [[]];
+  for (const x of inl) { if (x && x.t === 'br') lines.push([]); else lines[lines.length - 1].push(x); }
+  return lines.map((l) => cleanInline(l)).filter((l) => !isEmptyInline(l));
+}
+// Scene-break detection: a short line made only of ornament characters, containing at least one "strong" ornament
+// (*, dinkus, bullets), so a line of dashes inside dialogue is not taken for a break.
+const SCENE = /^[\s*⁂•·∗✱✻❖~=#_ .–—-]{1,24}$/;
+const isScene = (s) => SCENE.test(s) && /[*⁂•∗✱✻❖~#]/.test(s);
+
+// Takes the ids recorded while parsing a block: the first one becomes the block id (unless it has one).
+// The first recorded id becomes the block id; every id is also reported to onAnchor so importers can alias the
+// others (a block can be the target of several links). The editor keeps its own ids, hence the editor exception.
+function takeAnchors(pctx, owner) {
+  const ids = pctx.anchors.splice(0);
+  if (!owner) return;
+  for (const id of ids) {
+    if (!owner.id && !pctx.editor) owner.id = id;
+    if (pctx.onAnchor) pctx.onAnchor(id, owner);
+  }
+}
+
+function mkP(nd, pctx, style) {
+  const before = pctx.anchors.length;
+  const c = inlineOf(nd.children, pctx);
+  const text = inlineText(c);
+  let b;
+  if (!c.length || (!/\S/.test(text.replace(/ /g, ' ')) && !c.some((x) => x && x.t === 'img'))) b = { type: 'empty' };
+  else if (isScene(text) && text.trim().length > 0 && !c.some((x) => x && typeof x === 'object' && x.t !== 'strong' && x.t !== 'em')) b = { type: 'hr' };
+  else {
+    // A paragraph that is only an image is an image block.
+    const solo = c.filter((x) => !(typeof x === 'string' && !x.trim()));
+    if (solo.length === 1 && solo[0].t === 'img' && !pctx.editor) b = { type: 'image', src: solo[0].src, alt: solo[0].alt, title: [] };
+    else { b = { type: 'p', c }; if (style) b.style = style; }
+  }
+  const id = getAttr(nd, 'id');
+  if (id) pctx.anchors.splice(before, 0, id);
+  takeAnchors(pctx, b);
+  return b;
+}
+
+function styleOf(nd, pctx) {
+  for (const c of classes(nd)) if (c.startsWith('s-') && c.length > 2 && (!pctx.styles || pctx.styles.has(c.slice(2)))) return c.slice(2);
+  return '';
+}
+
+// Flow content: blocks and heading markers { heading, lines, id }.
+// A top-level <img> starts a block (image block) unless it is in the middle of a paragraph's inline run.
+// inBox: inside epigraphs/cites/lists headings are not section boundaries; they become subtitles.
+export function parseFlow(nodes, pctx, out = [], inBox = false) {
+  let para = null;
+  const flush = () => {
+    if (!para) return;
+    const p = { type: 'element', name: 'p', attrs: {}, children: para };
+    para = null;
+    const b = mkP(p, pctx, '');
+    if (b.type !== 'empty') out.push(b);
+  };
+  for (const nd of nodes || []) {
+    if (nd.type === 'text') { if (para || /\S/.test(nd.text)) (para ||= []).push(nd); continue; }
+    if (nd.type !== 'element') continue;
+    const n = ln(nd);
+    if (SKIP.has(n)) continue;
+    if (!BLOCK.has(n) && !(n === 'img' && !para)) { (para ||= []).push(nd); continue; }
+    flush();
+    blockOf(nd, n, pctx, out, inBox);
+  }
+  flush();
+  return out;
+}
+
+// Notes are checked first: an element marked as a note (or with an id known to be a note target) is handed to
+// onNote and removed from the flow, so footnote bodies do not appear in the middle of the text.
+function blockOf(nd, n, pctx, out, inBox) {
+  const cls = classes(nd);
+  const sem = semantics(nd);
+  const id = getAttr(nd, 'id');
+  if (pctx.onNote && (hasAny(sem, NOTE_SEM) || (id && pctx.onNote.ids && pctx.onNote.ids.has(id))) && pctx.onNote(nd)) return;
+  if (hasAny(sem, ['pagebreak'])) return;
+  // A notes container: its notes are collected, its heading and the rest are not book content.
+  if (pctx.onNote && (hasAny(sem, ['endnotes', 'footnotes', 'rearnotes']) || (cls.has('notes') && (n === 'section' || n === 'div')))) {
+    parseFlow(nd.children, pctx, [], true);
+    pctx.anchors.splice(0);
+    return;
+  }
+  switch (n) {
+    case 'p': {
+      if (cls.has('subtitle')) { out.push(withAnchors({ type: 'subtitle', c: inlineOf(nd.children, pctx) }, pctx, id)); return; }
+      if (cls.has('empty-line')) { out.push(withAnchors({ type: 'empty' }, pctx, id)); return; }
+      if (cls.has('scene-break')) { out.push(withAnchors({ type: 'hr' }, pctx, id)); return; }
+      // The tolerant parser keeps <div> inside <p> (a browser would close the p); such a paragraph is re-read as flow.
+      // Bad nesting (<p><div>…</div></p>) is read as flow.
+      if (nd.children.some((c) => c.type === 'element' && ['div', 'p', 'blockquote', 'table', 'ul', 'ol', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(ln(c)))) { parseFlow(nd.children, pctx, out, inBox); return; }
+      const b = mkP(nd, pctx, styleOf(nd, pctx));
+      if (b.type === 'empty' && pctx.dropEmpty) return;
+      out.push(b);
+      return;
+    }
+    case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6': {
+      const lines = linesOf(nd.children, pctx);
+      if (!lines.length) { takeAnchors(pctx, null); return; }
+      if (inBox || cls.has('subtitle') || pctx.editor) {
+        const c = [];
+        lines.forEach((l, i) => { if (i) c.push({ t: 'br' }); c.push(...l); });
+        out.push(withAnchors({ type: 'subtitle', c: cleanInline(c) }, pctx, id));
+        return;
+      }
+      const ids = pctx.anchors.splice(0);
+      out.push({ heading: +n[1], lines, id: id || ids[0] || '', aliases: ids });
+      return;
+    }
+    case 'hr': out.push(withAnchors({ type: 'hr' }, pctx, id)); return;
+    case 'pre': out.push(withAnchors({ type: 'code', text: textContent(nd).replace(/\r\n?/g, '\n').replace(/\n$/, '') }, pctx, id)); return;
+    case 'blockquote': out.push(boxOf(nd, cls.has('epigraph') || sem.has('epigraph') ? 'epigraph' : 'cite', pctx)); return;
+    case 'ul': case 'ol': { const l = listOf(nd, pctx); if (l) out.push(l); return; }
+    case 'dl': {
+      for (const c of kids(nd)) {
+        const k = ln(c);
+        if (k === 'dt') out.push(withAnchors({ type: 'p', c: [{ t: 'strong', c: inlineOf(c.children, pctx) }] }, pctx));
+        else if (k === 'dd') parseFlow(c.children, pctx, out, inBox);
+      }
+      return;
+    }
+    case 'table': { const t = tableOf(nd, pctx); if (t) out.push(t); return; }
+    case 'figure': case 'svg': case 'img': {
+      const img = n === 'img' ? nd : findImg(nd);
+      if (img) {
+        const src = getAttr(img, 'data-id') || getAttr(img, 'src') || getAttr(img, 'href');
+        const im = src ? pctx.image(src, !!getAttr(img, 'data-id')) : null;
+        if (im) {
+          const cap = n === 'figure' ? kids(nd).find((c) => ln(c) === 'figcaption') : null;
+          if (id) pctx.anchors.push(id);
+          const b = { type: 'image', src: im, alt: getAttr(img, 'alt') || '', title: cap ? inlineOf(cap.children, pctx) : [] };
+          takeAnchors(pctx, b);
+          out.push(b);
+          // Other content of a figure (rare) follows as flow.
+          if (n === 'figure') parseFlow(nd.children.filter((c) => c.type === 'element' && !['img', 'figcaption', 'svg', 'picture'].includes(ln(c))), pctx, out, inBox);
+          return;
+        }
+      }
+      if (n !== 'img' && n !== 'svg') parseFlow(nd.children, pctx, out, inBox);
+      return;
+    }
+    case 'nav': if (hasAny(sem, ['toc', 'landmarks', 'page-list', 'lot', 'loi']) || cls.has('toc')) return; parseFlow(nd.children, pctx, out, inBox); return;
+    case 'li': case 'dd': case 'dt': case 'figcaption': case 'summary': parseFlow(nd.children, pctx, out, inBox); return;
+    // Generic containers: class/semantic names map to model blocks (poem, epigraph, cite, image); anything else is
+    // transparent. A container's id is transferred to its first heading or block so links to the section still work.
+    default: {
+      // div, section, article, main, header, footer, aside, center, address, hgroup, details, body, html
+      if (cls.has('poem') || cls.has('poetry') || cls.has('verse') || sem.has('z3998:poem') || sem.has('z3998:verse')) { out.push(poemOf(nd, pctx)); return; }
+      if (cls.has('stanza')) { out.push(poemOf({ ...nd, children: [nd] }, pctx)); return; }
+      if (cls.has('epigraph') || sem.has('epigraph')) { out.push(boxOf(nd, 'epigraph', pctx)); return; }
+      if (cls.has('cite') || cls.has('citation') || cls.has('annotation')) { out.push(boxOf(nd, 'cite', pctx)); return; }
+      if (cls.has('image') || cls.has('illustration') || cls.has('figure')) {
+        const img = findImg(nd);
+        if (img) { blockOf(img, 'img', pctx, out, inBox); const cap = nd.children.find((c) => c.type === 'element' && classes(c).has('caption')); if (cap && out[out.length - 1].type === 'image') out[out.length - 1].title = inlineOf(cap.children, pctx); return; }
+      }
+      if (id && (n === 'section' || n === 'article' || n === 'div')) pctx.anchors.push(id);
+      const start = out.length;
+      parseFlow(nd.children, pctx, out, inBox);
+      // A section id names the heading (or first block) inside it.
+      if (id && (n === 'section' || n === 'article' || n === 'div')) {
+        const first = out[start];
+        const at = pctx.anchors.indexOf(id);
+        if (at >= 0) pctx.anchors.splice(at, 1);
+        if (first && first.heading) { if (!first.id) first.id = id; else (first.aliases ||= []).push(id); }
+        else if (first) { if (!first.id && !pctx.editor) first.id = id; if (pctx.onAnchor) pctx.onAnchor(id, first); }
+      }
+    }
+  }
+}
+function withAnchors(b, pctx, id) {
+  if (id) pctx.anchors.unshift(id);
+  takeAnchors(pctx, b);
+  return b;
+}
+function findImg(nd) {
+  for (const c of nd.children || []) {
+    if (c.type !== 'element') continue;
+    const n = ln(c);
+    if (n === 'img' || n === 'image') return c;
+    const r = findImg(c);
+    if (r) return r;
+  }
+  return null;
+}
+
+const AUTHOR_CLS = ['text-author', 'author', 'attribution', 'signature', 'epigraph-author', 'epigraph-source', 'source', 'byline'];
+// Attribution detection: author-like classes anywhere, or a <footer>/<cite> as the last element (HTML5 convention).
+// bare: a classless blockquote, a candidate for epigraphize() (an epigraph by position rather than markup).
+function boxOf(nd, type, pctx) {
+  const id = getAttr(nd, 'id');
+  const authors = [];
+  const rest = [];
+  for (const c of nd.children) {
+    if (c.type === 'element' && (hasAny(classes(c), AUTHOR_CLS) || ['footer', 'cite'].includes(ln(c)) && c === lastEl(nd))) authors.push(inlineOf(c.children, pctx));
+    else rest.push(c);
+  }
+  const items = parseFlow(rest, pctx, [], true);
+  const blocks = items.filter((x) => !x.heading);
+  const b = { type, blocks, authors: authors.filter((a) => a.length) };
+  if (id) b.id = id;
+  // A plain <blockquote> (no class) may still be an epigraph by position (epigraphize).
+  if (ln(nd) === 'blockquote' && !classes(nd).size) b.bare = true;
+  return b;
+}
+const lastEl = (nd) => { const e = kids(nd); return e[e.length - 1]; };
+
+// Poems arrive as stanza divs, as <p> lines, or as <p> with <br> lines. Loose <p> lines accumulate into a stanza
+// until an empty paragraph or a structural element ends it; a paragraph with <br>s is a stanza by itself.
+function poemOf(nd, pctx) {
+  const b = { type: 'poem', title: null, epigraphs: [], stanzas: [], authors: [], date: '' };
+  const id = getAttr(nd, 'id');
+  if (id) b.id = id;
+  let loose = null; // lines of plain paragraphs directly in the poem
+  const endLoose = () => { if (loose && loose.lines.length) b.stanzas.push(loose); loose = null; };
+  const splitLines = (c) => {
+    const ls = [[]];
+    for (const x of c) { if (x && x.t === 'br') ls.push([]); else ls[ls.length - 1].push(x); }
+    return ls.map((l) => cleanInline(l));
+  };
+  for (const c of nd.children) {
+    if (c.type === 'text') continue;
+    if (c.type !== 'element') continue;
+    const n = ln(c), cl = classes(c);
+    if (cl.has('poem-title') || (/^h[1-6]$/.test(n) && !b.stanzas.length && !loose)) { endLoose(); b.title = linesOf(c.children, pctx); continue; }
+    if (n === 'blockquote' && cl.has('epigraph') || cl.has('epigraph')) { endLoose(); b.epigraphs.push(boxOf(c, 'epigraph', pctx)); continue; }
+    if (hasAny(cl, AUTHOR_CLS)) { endLoose(); b.authors.push(inlineOf(c.children, pctx)); continue; }
+    if (cl.has('poem-date') || cl.has('date')) { endLoose(); b.date = textContent(c).trim(); continue; }
+    if (cl.has('stanza') || n === 'div' || n === 'blockquote') {
+      endLoose();
+      const st = { title: null, subtitle: [], lines: [] };
+      for (const x of c.children) {
+        if (x.type !== 'element') continue;
+        const xc = classes(x);
+        if (xc.has('stanza-title') || /^h[1-6]$/.test(ln(x))) st.title = linesOf(x.children, pctx);
+        else if (xc.has('stanza-subtitle')) st.subtitle = inlineOf(x.children, pctx);
+        else st.lines.push(...splitLines(inlineOf(x.children, pctx)));
+      }
+      if (!kids(c).length) st.lines.push(...splitLines(inlineOf(c.children, pctx)));
+      b.stanzas.push(st);
+      continue;
+    }
+    // Plain paragraphs: a paragraph with line breaks is a stanza of its own; an empty one ends a stanza.
+    const inl = inlineOf(c.children, pctx);
+    if (isEmptyInline(inl)) { endLoose(); continue; }
+    if (inl.some((x) => x && x.t === 'br')) { endLoose(); b.stanzas.push({ title: null, subtitle: [], lines: splitLines(inl) }); continue; }
+    (loose ||= { title: null, subtitle: [], lines: [] }).lines.push(inl);
+  }
+  endLoose();
+  takeAnchors(pctx, b);
+  if (!b.stanzas.length) b.stanzas.push({ title: null, subtitle: [], lines: [[]] });
+  return b;
+}
+
+function listOf(nd, pctx) {
+  const items = [];
+  for (const li of kids(nd)) {
+    if (ln(li) !== 'li') continue;
+    const lid = getAttr(li, 'id');
+    if (pctx.onNote && (hasAny(semantics(li), NOTE_SEM) || (lid && pctx.onNote.ids && pctx.onNote.ids.has(lid))) && pctx.onNote(li)) continue;
+    const bl = parseFlow(li.children, pctx, [], true).filter((x) => !x.heading);
+    items.push(bl.length ? bl : [{ type: 'p', c: [] }]);
+  }
+  if (!items.length) return null;
+  const b = { type: 'list', ordered: ln(nd) === 'ol', items };
+  const id = getAttr(nd, 'id');
+  if (id) b.id = id;
+  return b;
+}
+
+// Row groups (thead/tbody/tfoot) are flattened in document order; header semantics are kept per cell (th).
+// colspan/rowspan come unclamped from markup; normalizeBook clamps them later.
+function tableOf(nd, pctx) {
+  const rows = [];
+  const visit = (x) => {
+    for (const c of kids(x)) {
+      const n = ln(c);
+      if (n === 'tr') {
+        const cells = kids(c).filter((d) => ['td', 'th'].includes(ln(d))).map((d) => {
+          const o = { c: inlineOf(d.children, pctx) };
+          if (ln(d) === 'th') o.header = true;
+          const cs = +getAttr(d, 'colspan'), rs = +getAttr(d, 'rowspan');
+          if (cs > 1) o.colspan = cs;
+          if (rs > 1) o.rowspan = rs;
+          const al = (getAttr(d, 'align') || (/text-align:\s*(left|center|right|justify)/i.exec(getAttr(d, 'style') || '') || [])[1] || '').toLowerCase();
+          if (['left', 'center', 'right', 'justify'].includes(al)) o.align = al;
+          return o;
+        });
+        if (cells.length) rows.push({ cells });
+      } else if (['thead', 'tbody', 'tfoot'].includes(n)) visit(c);
+    }
+  };
+  visit(nd);
+  takeAnchors(pctx, null);
+  if (!rows.length) return null;
+  const b = { type: 'table', rows };
+  const id = getAttr(nd, 'id');
+  if (id) b.id = id;
+  return b;
+}
+
+// Sections from flow items: content before the first heading is the lead; headings open sections nested by level.
+// Headings form a tree by level with a stack: a heading closes every open section of the same or deeper level.
+// Skipped levels (h1 then h3) still nest correctly, because only relative order matters.
+export function sectionsFromFlow(items, { sectionId = () => 's-' + uuid().slice(0, 8), onAlias = null } = {}) {
+  const lead = [];
+  const roots = [];
+  const stack = [];
+  for (const it of items) {
+    if (it.heading) {
+      const sec = { id: it.id || sectionId(), title: it.lines, blocks: [], sections: [] };
+      if (onAlias) for (const a of it.aliases || []) if (a !== sec.id) onAlias(a, sec);
+      while (stack.length && stack[stack.length - 1].level >= it.heading) stack.pop();
+      if (stack.length) stack[stack.length - 1].sec.sections.push(sec); else roots.push(sec);
+      stack.push({ level: it.heading, sec });
+    } else if (stack.length) {
+      const top = stack[stack.length - 1].sec;
+      // Content after subsections belongs to the last (deepest) one already; nothing to do.
+      top.blocks.push(it);
+    } else lead.push(it);
+  }
+  return { lead, sections: roots };
+}
+
+// Plain block quotes that open a section (right after its heading, before any text) are epigraphs.
+// Only quotes before any real content qualify: images and empty lines may precede, a paragraph stops the scan.
+export function epigraphize(blocks) {
+  for (const b of blocks) {
+    if (b.type === 'cite' && b.bare) b.type = 'epigraph';
+    else if (b.type !== 'epigraph' && b.type !== 'image' && b.type !== 'empty') break;
+  }
+}
+export function epigraphizeSections(list) { for (const s of list) { epigraphize(s.blocks); epigraphizeSections(s.sections); } }
+
+// Editor read-back: blocks of an HTML fragment (headings become subtitles).
+export function blocksFromHTML(html, { styles = null, editor = true, image } = {}) {
+  const doc = parseMarkup(html, { html: true });
+  const pctx = parseContext({ styles, editor, image: image || ((src, isId) => (isId ? src : null)), link: (h) => (/^(https?:|mailto:)/i.test(h) || /^#./.test(h) ? h : null) });
+  pctx.dropEmpty = false;
+  return parseFlow(doc.children, pctx, [], false).filter((x) => !x.heading);
+}
+
+// --- HTML files -------------------------------------------------------------------------------------
+
+// An HTML page as a book: <title> / first <h1> as the title, <meta name="author">, headings as sections, embedded
+// data: images, footnotes marked with epub:type / role / common class names or <a href="#…"> to notes at the end.
+// Pipeline: metadata from <head>, a full id index, note detection (two passes: first find note targets from
+// references, then exclude those elements from the flow), flow parsing, sectioning, then notes rendered from their
+// elements. Images only from data: URIs: an imported page must never trigger network requests.
+export function htmlToBook(text, { name = '' } = {}) {
+  const doc = parseMarkup(text, { html: true });
+  const book = newBook();
+  const htmlEl = doc.children.find((c) => c.type === 'element' && ln(c) === 'html') || doc;
+  const head = kids(htmlEl, 'head')[0];
+  const body = kids(htmlEl, 'body')[0] || htmlEl;
+  const m = book.meta;
+  m.lang = String(getAttr(htmlEl, 'lang') || getAttr(htmlEl, 'xml:lang') || 'en').trim() || 'en';
+  if (head) {
+    const t = kids(head, 'title')[0];
+    if (t) m.title = textContent(t).replace(WS, ' ').trim();
+    for (const meta of kids(head, 'meta')) {
+      const n = String(getAttr(meta, 'name') || '').toLowerCase();
+      const v = String(getAttr(meta, 'content') || '').trim();
+      if (!v) continue;
+      if (n === 'author' || n === 'dc.creator') m.authors.push(...v.split(/\s*[;&]\s*|\s+and\s+/).map(parsePersonName));
+      else if (n === 'description' || n === 'dc.description') m.annotation = [{ type: 'p', c: [v] }];
+      else if (n === 'keywords') m.keywords = v;
+      else if (n === 'dc.language' && v) m.lang = v;
+    }
+  }
+  // Images: data: URIs only (a page never fetches anything).
+  let imgN = 0;
+  const image = (src) => {
+    const mm = /^data:(image\/[a-z0-9.+-]+)?(;base64)?,(.*)$/is.exec(String(src || '').trim());
+    if (!mm) return null;
+    let data;
+    try { data = mm[2] ? b64decode(mm[3]) : new TextEncoder().encode(decodeURIComponent(mm[3])); } catch { return null; }
+    const type = sniffImage(data) || mm[1] || '';
+    if (!/^image\//.test(type)) return null;
+    const id = 'img' + (++imgN) + '.' + (type.split('/')[1] || 'bin').replace('jpeg', 'jpg').replace('svg+xml', 'svg');
+    book.images[id] = { type, data, name: id };
+    return id;
+  };
+  // Notes: elements marked as notes, or targets of links that look like note references.
+  const byId = new Map();
+  const index = (nd) => { for (const c of nd.children || []) if (c.type === 'element') { const id = getAttr(c, 'id'); if (id && !byId.has(id)) byId.set(id, c); index(c); } };
+  index(body);
+  const noteIds = new Set();
+  const scan = (nd) => {
+    for (const c of nd.children || []) {
+      if (c.type !== 'element') continue;
+      if (ln(c) === 'a') {
+        const href = getAttr(c, 'href') || '';
+        if (href.startsWith('#') && byId.has(href.slice(1)) && (isNoteRef(c, href, {}) || looksLikeNoteRef(c, nd))) noteIds.add(href.slice(1));
+      }
+      if (hasAny(semantics(c), NOTE_SEM.slice(0, 4)) && getAttr(c, 'id')) noteIds.add(getAttr(c, 'id'));
+      scan(c);
+    }
+  };
+  scan(body);
+  const notes = new Map();
+  const pctx = parseContext({
+    image,
+    isNote: (a, href) => href.startsWith('#') && noteIds.has(href.slice(1)),
+    noteTarget: (href) => (href.startsWith('#') && noteIds.has(href.slice(1)) ? href.slice(1) : null),
+  });
+  pctx.onNote = (nd) => {
+    const id = getAttr(nd, 'id');
+    if (!id || !noteIds.has(id)) return false;
+    notes.set(id, nd);
+    return true;
+  };
+  pctx.onNote.ids = noteIds;
+  // The header of this library's own HTML export (cover, author, title) is metadata, not content.
+  // Recognises this library's own export header (round trip): cover, author and title become metadata instead of a
+  // duplicate title block. Limited to depth 3 so arbitrary pages are not walked deeply for it.
+  const dropHead = (nd, depth) => {
+    nd.children = (nd.children || []).filter((c) => {
+      if (c.type !== 'element') return true;
+      if (!classes(c).has('book-head')) { if (depth < 3) dropHead(c, depth + 1); return true; }
+      const img = findImg(c);
+      const cover = img && image(getAttr(img, 'src'));
+      if (cover) m.cover = cover;
+      const sub = (function f(x) { for (const k of kids(x)) { if (classes(k).has('book-subtitle')) return k; const r = f(k); if (r) return r; } return null; })(c);
+      if (sub) m.subtitle = textContent(sub).replace(WS, ' ').trim();
+      return false;
+    });
+  };
+  dropHead(body, 0);
+  const items = parseFlow(body.children, pctx);
+  // A note target that is an inline anchor inside a paragraph: the paragraph is the note.
+  const flowNotes = new Map();
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.id && noteIds.has(it.id) && !notes.has(it.id)) { flowNotes.set(it.id, it); items.splice(i, 1); }
+  }
+  const { lead, sections } = sectionsFromFlow(items);
+  // A single top-level heading that equals the title (or the only h1) is the book title.
+  if (sections.length === 1 && sections[0].sections.length && (!m.title || inlineText(sections[0].title.flat()) === m.title)) {
+    const only = sections[0];
+    if (!m.title) m.title = only.title.map((l) => inlineText(l)).join(' ');
+    lead.push(...only.blocks);
+    sections.splice(0, 1, ...only.sections);
+  } else if (!m.title && sections.length) m.title = sections[0].title.map((l) => inlineText(l)).join(' ');
+  if (!m.title) m.title = name || 'Untitled';
+  epigraphize(lead);
+  epigraphizeSections(sections);
+  // Content before the first heading: epigraphs and images only -> front matter; anything else -> an untitled section.
+  if (lead.length) {
+    if (sections.length && lead.every((b) => b.type === 'epigraph' || b.type === 'image')) book.front = lead;
+    else sections.unshift({ id: 's-intro', title: null, blocks: lead, sections: [] });
+  }
+  book.sections = sections;
+  let n = 0;
+  for (const id of noteIds) {
+    const nd = notes.get(id);
+    const flowB = flowNotes.get(id);
+    if (!nd && !flowB) continue;
+    n++;
+    let blocks;
+    if (nd) {
+      const inner = parseContext({ image, link: pctx.link });
+      blocks = parseFlow(nd.children, inner).filter((x) => !x.heading);
+    } else blocks = [flowB];
+    stripBacklinks(blocks);
+    book.notes.push({ id, kind: 'note', label: [String(n)], blocks });
+  }
+  return book;
+}
+
+// <sup><a href="#x">1</a></sup> or a short numeric / asterisk link text.
+// Heuristic for unmarked footnotes: link text like 1, [1], *, a dagger, or a single letter, placed in or around a
+// <sup>; bare numbers in brackets qualify even without <sup> (Wikipedia style).
+function looksLikeNoteRef(a, parent) {
+  const t = textContent(a).trim();
+  if (!/^(\[?\d{1,4}\]?|\*{1,4}|†|‡|[a-z])$/i.test(t)) return false;
+  return ln(parent) === 'sup' || kids(a).some((c) => ln(c) === 'sup') || /^\[?\d+\]?$/.test(t);
+}
+
+// Removes the "back to text" link a note usually starts or ends with (↩, ^, a number linking back).
+// Notes usually carry a return link (arrow, caret, the number). It is removed at the start or end of each
+// paragraph: the reader generates its own back navigation, and a stale link would point at the source page.
+export function stripBacklinks(blocks) {
+  const isBack = (x) => x && x.t === 'a' && /^(\[?\d{1,4}\]?|↩︎?|↑|\^|←|\*{1,4}|back)$/i.test(inlineText(x.c).trim());
+  for (const b of blocks) {
+    if (b.type !== 'p') continue;
+    const first = b.c.findIndex((x) => !(typeof x === 'string' && !x.trim()));
+    if (first >= 0 && isBack(b.c[first])) { b.c.splice(0, first + 1); if (typeof b.c[0] === 'string') b.c[0] = b.c[0].replace(/^[\s.)\]]+/, ''); }
+    let last = b.c.length - 1;
+    while (last >= 0 && typeof b.c[last] === 'string' && !b.c[last].trim()) last--;
+    if (last >= 0 && isBack(b.c[last])) b.c.splice(last);
+    b.c = cleanInline(b.c);
+    if (typeof b.c[b.c.length - 1] === 'string') b.c[b.c.length - 1] = b.c[b.c.length - 1].replace(/\s+$/, '');
+  }
+  for (let i = blocks.length - 1; i >= 0; i--) if (blocks[i].type === 'p' && isEmptyInline(blocks[i].c)) blocks.splice(i, 1);
+  return blocks;
+}
+
+export { slug };

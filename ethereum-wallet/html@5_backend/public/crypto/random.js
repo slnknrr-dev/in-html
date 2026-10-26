@@ -1,0 +1,5 @@
+function source(){const c=globalThis.crypto;if(!c||typeof c.getRandomValues!=='function')throw new Error('no secure random source (crypto.getRandomValues)');return c;}
+function randomBytes(n){const out=new Uint8Array(n),c=source();for(let o=0;o<n;o+=65536)c.getRandomValues(out.subarray(o,Math.min(n,o+65536)));return out;}
+function randomInt(max){if(!(max>=1&&max<=0x100000000))throw new Error('randomInt: max must be 1..2^32');if(max===1)return 0;const limit=0x100000000-(0x100000000%max),buf=new Uint32Array(1),c=source();for(;;){c.getRandomValues(buf);if(buf[0]<limit)return buf[0]%max;}}
+function randomUUID(){const b=randomBytes(16);b[6]=(b[6]&0x0f)|0x40;b[8]=(b[8]&0x3f)|0x80;const h=Array.from(b,(x)=>x.toString(16).padStart(2,'0')).join('');return`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;}
+export{randomBytes,randomUUID,randomInt};

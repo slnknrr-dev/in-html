@@ -1,0 +1,108 @@
+// funding-studio/exporthooks.js - export hooks of the funding product (doc/export.js): page titles and descriptions,
+// head extras (Open Graph, favicon, theme colour), the floating toolbar, and the runtime configuration of exactly the
+// features a page uses (campaign figures, public payment data, backend endpoints, routes, UI strings).
+import { escapeAttr } from '../html/escape.js';
+import { htmlToText, pickText } from '../i18n/text.js';
+import { uiLookup, uiText } from '../doc/dict.js';
+import { attOf, isImage } from '../doc/attach.js';
+import { campCfg, payCfg } from './blocks-donate.js';
+import { pageById, thanksPage } from './model.js';
+import { toolsHTML } from './render.js';
+
+// UI strings the runtime features read (cfg.ui), per feature.
+// Only the keys of used features are embedded, in every exported language: the page stays small and switches
+// language offline. Static text is pre-rendered in HTML; cfg.ui is only for text the runtime creates.
+export const RT_UI = {
+  progress: ['donorsN', 'ended', 'daysLeft'],
+  donate: ['perMonth', 'copy', 'copied', 'copyFail', 'back', 'chooseAmount', 'minAmount', 'maxAmount', 'badEmail', 'needEmail', 'noLink', 'noMonthly',
+    'noCurrency', 'unavailable', 'redirecting', 'serverDown', 'holder', 'reference', 'amount', 'bankName', 'scanBank', 'address', 'noRate', 'openWallet',
+    'transferHint', 'waitingPayment', 'received', 'continue', 'st.failed', 'st.expired', 'm.stripe', 'm.paypal', 'm.tbc', 'm.bank', 'm.btc', 'm.eth'],
+  'm-stripe': ['stripeScript', 'loadStripe'],
+  'm-eth': ['network', 'token', 'tokenNote', 'payWallet', 'confirmWallet', 'switchChain', 'addChain', 'txSent', 'viewTx', 'txRejected', 'txFailed', 'noWallet'],
+  wall: ['anonDonor'],
+  share: ['copied', 'copyFail'],
+  thanks: ['st.pending', 'st.created', 'st.succeeded', 'st.failed', 'st.refunded', 'st.expired', 'st.cancelled', 'thxSum', 'thxSumMonthly', 'thxLocal',
+    'receipt', 'manage', 'manageOk', 'm.stripe', 'm.paypal', 'm.tbc', 'm.bank', 'm.btc', 'm.eth'],
+};
+
+const siteTitle = (doc, l) => htmlToText(pickText(doc.meta.title, l, doc)) || doc.name || 'Campaign';
+const pageTitle = (doc, p, l) => (p ? htmlToText(pickText(p.metaTitle, l, doc)) || htmlToText(pickText(p.title, l, doc)) : '');
+
+// <title>: home page -> its meta title, else the site title (or the page title when no site title); other pages ->
+// 'Page — Site' (de-duplicated when equal). Short titles for the home page read better in search results and tabs.
+function title(doc, l, ctx) {
+  const r = ctx && ctx.route;
+  const site = siteTitle(doc, l);
+  const p = r && (r.mode === 'file' ? r.page : r.home);
+  if (!p) return site;
+  const t = pageTitle(doc, p, l);
+  if (!t) return site;
+  if (r.home && p.id === r.home.id) return htmlToText(pickText(p.metaTitle, l, doc)) || (htmlToText(pickText(doc.meta.title, l, doc)) ? site : t);
+  return t === site ? t : t + ' — ' + site;
+}
+
+function desc(doc, l, ctx) {
+  const r = ctx && ctx.route;
+  const p = r && (r.mode === 'file' ? r.page : r.home);
+  return (p && htmlToText(pickText(p.metaDesc, l, doc))) || htmlToText(pickText(doc.meta.description, l, doc));
+}
+
+// Head extras: Open Graph for link previews in messengers (the main sharing channel for fundraisers), favicon as a
+// data: URL (no extra file; the base64 payload comes from a normalised attachment), theme-color from the page
+// background, and noindex on the thank-you page (it carries donation status and has no value in search).
+function head(ctx, use, { titles, descs }) {
+  const d = ctx.doc;
+  const l = ctx.defaultLang;
+  let s = `<meta property="og:type" content="website"><meta property="og:title" content="${escapeAttr(titles[l])}">`;
+  if (descs[l]) s += `<meta property="og:description" content="${escapeAttr(descs[l])}">`;
+  const fav = attOf(ctx, d.meta.favicon);
+  if (fav && isImage(fav) && fav.data) s += `<link rel="icon" href="data:${escapeAttr(fav.mime)};base64,${fav.data}">`;
+  s += `<meta name="theme-color" content="${escapeAttr(d.theme.bg)}">`;
+  const r = ctx.route;
+  if (r && r.page && r.page.kind === 'thanks' && r.mode === 'file') s += '<meta name="robots" content="noindex">';
+  return s;
+}
+
+function toolbar(ctx, use) {
+  if (!use.toolbar || ctx.edit) return '';
+  const html = toolsHTML(ctx);
+  return html ? `<div class="fd-toolbar fd-js-only" role="toolbar" aria-label="${escapeAttr(uiText('toolbar', ctx.defaultLang, ctx.doc))}">${html}</div>\n` : '';
+}
+
+// Runtime configuration (the JSON block read by rtCore): UI strings, campaign figures of used campaigns, the public
+// payment config of used methods only (payCfg - never a secret), backend endpoints, routes for the thank-you page,
+// and per-page titles for the single-file router. Everything here is public by construction.
+function cfg(c, ctx, use, langs) {
+  const d = ctx.doc;
+  const F = use.features;
+  const keys = new Set(use.uiKeys);
+  for (const [f, list] of Object.entries(RT_UI)) if (F.has(f)) for (const k of list) keys.add(k);
+  if (keys.size) {
+    c.ui = {};
+    for (const l of langs) { const o = {}; for (const k of keys) o[k] = uiLookup(k, l, d)[0]; c.ui[l] = o; }
+  }
+  if (use.camps.size) {
+    c.camps = {};
+    for (const id of use.camps) { const p = pageById(d, id); if (p && p.kind === 'campaign') c.camps[id] = campCfg(ctx, p); }
+  }
+  if (F.has('donate') && use.methods.size) c.pay = payCfg(ctx, use.methods);
+  if (ctx.api) c.api = { base: ctx.api.base, site: ctx.api.site };
+  const r = ctx.route;
+  const th = thanksPage(d);
+  c.routes = { mode: r.mode, depth: r.depth, thanks: th ? th.slug : '' };
+  if (F.has('pages')) {
+    c.pg = { home: r.home ? r.home.slug : '', titles: {} };
+    for (const p of r.pages) { const o = {}; for (const l of langs) o[l] = title(d, l, { route: { ...r, mode: 'file', page: p } }); c.pg.titles[p.slug] = o; }
+  }
+}
+
+function report(rep, ctx, use) {
+  rep.methods = [...use.methods];
+  rep.campaigns = use.camps.size;
+  rep.pages = ctx.route.mode === 'hash' ? ctx.route.pages.length : 1;
+  rep.route = ctx.route.mode;
+  if (ctx.api) rep.api = ctx.api.base;
+}
+
+export const exportHooks = { title, desc, head, toolbar, cfg, report };
+export { siteTitle, pageTitle };

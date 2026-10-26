@@ -1,0 +1,169 @@
+// lingua/strokes.js - how far a hand-drawn letter is from its model: stroke by stroke (shape, count, order, direction)
+// when the model has stroke data, and by ink (a distance transform of both pictures) for any glyph of a font.
+// Pure functions on arrays; the page draws and rasterises.
+//
+//   resample(points, n) -> n points evenly spaced along the polyline
+//   bounds(strokes) -> { x0, y0, x1, y1, w, h }      fit(strokes, box, pad?) -> strokes scaled into box (aspect kept)
+//   compareStrokes(user, model) -> { score, perStroke: [{ model, user, dist, reversed }], order, missing, extra, verdicts }
+//   distanceField(mask, w, h) -> Float32Array (distance in pixels to the nearest ink pixel, chamfer 3-4)
+//   compareMasks(userMask, modelMask, w, h) -> { score, precision, coverage, strayInk, missedInk }
+//   pathStrokes('M10 10L90 10 M50 0L50 100') -> strokes (M / L only, the format of the stroke data)
+//
+// Strokes are arrays of [x, y] points. Model stroke data use a 0…100 box with y down.
+
+// Arc-length resampling (the $1-recognizer idea): equal point counts make strokes comparable point by point no
+// matter how fast or with how many events they were drawn. Duplicate consecutive points are dropped first (zero
+// length segments would divide by zero); a single point becomes n copies (a dot).
+export function resample(points, n = 32) {
+  const p = points.filter((q, i) => i === 0 || q[0] !== points[i - 1][0] || q[1] !== points[i - 1][1]);
+  if (p.length === 0) return [];
+  if (p.length === 1) return Array.from({ length: n }, () => [p[0][0], p[0][1]]);
+  const seg = [];
+  let total = 0;
+  for (let i = 1; i < p.length; i++) { const d = Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]); seg.push(d); total += d; }
+  const out = [[p[0][0], p[0][1]]];
+  const step = total / (n - 1);
+  let i = 0, acc = 0;
+  for (let k = 1; k < n - 1; k++) {
+    const want = k * step;
+    while (i < seg.length - 1 && acc + seg[i] < want) { acc += seg[i]; i++; }
+    const t = seg[i] ? (want - acc) / seg[i] : 0;
+    out.push([p[i][0] + (p[i + 1][0] - p[i][0]) * t, p[i][1] + (p[i + 1][1] - p[i][1]) * t]);
+  }
+  out.push([p[p.length - 1][0], p[p.length - 1][1]]);
+  return out;
+}
+
+export function bounds(strokes) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const s of strokes) for (const [x, y] of s) { if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y; }
+  if (x0 === Infinity) return { x0: 0, y0: 0, x1: 0, y1: 0, w: 0, h: 0 };
+  return { x0, y0, x1, y1, w: x1 - x0, h: y1 - y0 };
+}
+
+// Scales strokes into box (aspect kept, centred). A stroke set that is a line (zero width or height) keeps its scale
+// from the other side.
+export function fit(strokes, box, pad = 0) {
+  const b = bounds(strokes);
+  const bw = box.w - 2 * pad, bh = box.h - 2 * pad;
+  const s = Math.min(b.w ? bw / b.w : Infinity, b.h ? bh / b.h : Infinity);
+  const k = Number.isFinite(s) ? s : 1;
+  const ox = box.x0 + pad + (bw - b.w * k) / 2, oy = box.y0 + pad + (bh - b.h * k) / 2;
+  return strokes.map((st) => st.map(([x, y]) => [ox + (x - b.x0) * k, oy + (y - b.y0) * k]));
+}
+
+// Mean point-to-point distance of two equally resampled strokes (both of length n).
+const meanDist = (a, b) => { let d = 0; for (let i = 0; i < a.length; i++) d += Math.hypot(a[i][0] - b[i][0], a[i][1] - b[i][1]); return d / a.length; };
+
+// Both drawings are fitted into the unit box, so the letter may be drawn anywhere and at any size.
+// Matching: greedy by smallest distance, not Hungarian. With the handful of strokes of a letter the greedy result is
+// nearly always optimal and far simpler. Direction is free in matching (min of forward / reversed) but penalised in
+// the score. Score: 100 at zero mean distance, 0 at 0.22 of the box, minus fixed penalties per error kind.
+// KNOWN DEFECT: `order` requires user index === model index, so one missing or extra stroke shifts every later index
+// and reports an order error although the order is right. Fix: check that the matched user indices increase with the
+// model index (ignoring unmatched strokes).
+export function compareStrokes(user, model, n = 24) {
+  const U = fit(user.filter((s) => s.length), { x0: 0, y0: 0, w: 1, h: 1 }).map((s) => resample(s, n));
+  const M = fit(model, { x0: 0, y0: 0, w: 1, h: 1 }).map((s) => resample(s, n));
+  // distance of every user stroke to every model stroke (forward and reversed)
+  const D = M.map((m) => U.map((u) => {
+    const f = meanDist(m, u), r = meanDist(m, [...u].reverse());
+    return { d: Math.min(f, r), reversed: r < f };
+  }));
+  // greedy matching, smallest distances first
+  const pairs = [];
+  for (let i = 0; i < M.length; i++) for (let j = 0; j < U.length; j++) pairs.push([D[i][j].d, i, j]);
+  pairs.sort((a, b) => a[0] - b[0]);
+  const mUsed = new Map(), uUsed = new Set();
+  for (const [d, i, j] of pairs) { if (mUsed.has(i) || uUsed.has(j)) continue; mUsed.set(i, j); uUsed.add(j); }
+  const perStroke = M.map((_, i) => mUsed.has(i) ? { model: i, user: mUsed.get(i), dist: D[i][mUsed.get(i)].d, reversed: D[i][mUsed.get(i)].reversed } : { model: i, user: -1, dist: 1, reversed: false });
+  const missing = perStroke.filter((p) => p.user < 0).length;
+  const extra = Math.max(0, U.length - mUsed.size);
+  const order = perStroke.every((p) => p.user < 0 || p.user === p.model);
+  const reversed = perStroke.filter((p) => p.reversed).length;
+  const avg = perStroke.reduce((a, p) => a + p.dist, 0) / Math.max(1, perStroke.length);
+  let score = 100 * Math.max(0, 1 - avg / 0.22);
+  score -= missing * 12 + extra * 8 + (order ? 0 : 8) + reversed * 5;
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const verdicts = [];
+  if (missing) verdicts.push('missing');
+  if (extra) verdicts.push('extra');
+  if (!order && U.length > 1) verdicts.push('order');
+  if (reversed) verdicts.push('direction');
+  if (avg > 0.12) verdicts.push('shape');
+  return { score, perStroke, order, missing, extra, reversed, avg: Math.round(avg * 1000) / 1000, verdicts };
+}
+
+// Chamfer (3-4) distance transform: distance to the nearest set pixel, in pixels. Two raster passes (forward with the
+// upper-left neighbours, backward with the lower-right) give O(w*h) instead of a per-pixel search; weights 3 / 4
+// approximate 1 / sqrt(2) with integers (error under 8 %), and the final /3 converts to pixel units. Float32Array:
+// half the memory of Float64, ample precision for pixel distances.
+export function distanceField(mask, w, h) {
+  const INF = 1e9;
+  const d = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) d[i] = mask[i] ? 0 : INF;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      let v = d[i];
+      if (x > 0) v = Math.min(v, d[i - 1] + 3);
+      if (y > 0) {
+        v = Math.min(v, d[i - w] + 3);
+        if (x > 0) v = Math.min(v, d[i - w - 1] + 4);
+        if (x < w - 1) v = Math.min(v, d[i - w + 1] + 4);
+      }
+      d[i] = v;
+    }
+  }
+  for (let y = h - 1; y >= 0; y--) {
+    for (let x = w - 1; x >= 0; x--) {
+      const i = y * w + x;
+      let v = d[i];
+      if (x < w - 1) v = Math.min(v, d[i + 1] + 3);
+      if (y < h - 1) {
+        v = Math.min(v, d[i + w] + 3);
+        if (x < w - 1) v = Math.min(v, d[i + w + 1] + 4);
+        if (x > 0) v = Math.min(v, d[i + w - 1] + 4);
+      }
+      d[i] = v;
+    }
+  }
+  for (let i = 0; i < w * h; i++) d[i] /= 3;
+  return d;
+}
+
+// precision: how close the drawn ink lies to the model's ink; coverage: how much of the model the drawing reaches.
+// Both are mean distances in units of the picture size; the score falls to zero at 7 % of the size.
+// Symmetric by construction: precision alone rewards drawing a single dot on the model, coverage alone rewards
+// scribbling everywhere; averaging both punishes each. 'far' (6 % of the size) defines stray / missed ink counts.
+export function compareMasks(user, model, w, h) {
+  const du = distanceField(user, w, h), dm = distanceField(model, w, h);
+  let pSum = 0, pN = 0, cSum = 0, cN = 0, stray = 0, missed = 0;
+  const far = 0.06 * Math.max(w, h);
+  for (let i = 0; i < w * h; i++) {
+    if (user[i]) { pSum += dm[i]; pN++; if (dm[i] > far) stray++; }
+    if (model[i]) { cSum += du[i]; cN++; if (du[i] > far) missed++; }
+  }
+  if (!pN) return { score: 0, precision: 1, coverage: 1, strayInk: 0, missedInk: 1 };
+  const size = Math.max(w, h);
+  const precision = pSum / pN / size, coverage = cN ? cSum / cN / size : 1;
+  const score = Math.max(0, Math.min(100, Math.round(100 * (1 - (precision * 0.5 + coverage * 0.5) / 0.07))));
+  return { score, precision: Math.round(precision * 1000) / 1000, coverage: Math.round(coverage * 1000) / 1000, strayInk: Math.round(stray / pN * 100) / 100, missedInk: cN ? Math.round(missed / cN * 100) / 100 : 1 };
+}
+
+// Parses the restricted SVG path subset of the stroke data: absolute M and L with implicit repeated coordinate pairs.
+// M starts a new stroke, L continues the current one. Curves, relative commands and H / V are not supported (the
+// data never uses them); unknown commands are skipped by the regex rather than throwing.
+export function pathStrokes(d) {
+  const out = [];
+  const re = /([ML])\s*(-?[\d.]+)[ ,]+(-?[\d.]+)((?:[ ,]+-?[\d.]+[ ,]+-?[\d.]+)*)/g;
+  let m;
+  while ((m = re.exec(d))) {
+    const pts = [[+m[2], +m[3]]];
+    const more = m[4].trim().split(/[ ,]+/).filter(Boolean).map(Number);
+    for (let i = 0; i + 1 < more.length; i += 2) pts.push([more[i], more[i + 1]]);
+    if (m[1] === 'M' || !out.length) out.push(pts);
+    else out[out.length - 1].push(...pts);
+  }
+  return out;
+}

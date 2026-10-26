@@ -1,0 +1,39 @@
+<!doctype html>
+<!-- route-planner/sheet.html - the printable trip sheet. Same shell as index.html; sheet.js renders the paper from
+     the state the plan page saved. Print layout (A4, no shell chrome) is the @media print block of app.css. -->
+<html lang="en">
+<!-- lang="en" is the static default; ui/i18n.js rewrites it on language switch (screen readers, hyphenation). -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: it must sit in the first 1024 bytes, before any non-ASCII text, or the parser re-decodes. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Without viewport, phones lay out at ~980px and zoom out: the @media (max-width) rules of app.css never fire. -->
+<title>Route Planner — Trip sheet</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' d='M9 24h9a4 4 0 0 0 0-8h-4a4 4 0 0 1 0-8h9'/%3E%3Ccircle cx='8' cy='24' r='3' fill='%23fff'/%3E%3Ccircle cx='24' cy='8' r='3' fill='%23fff'/%3E%3C/svg%3E">
+<!-- Icon as a URL-encoded SVG data: URI (route line between two pins): zero requests, works from file:// and offline
+     builds. %23 for '#': a raw '#' would start a URL fragment and truncate the image. -->
+
+<!-- Cascade order is a contract (equal specificity: the later file wins):
+       1. ui/base.css  design tokens (ed- custom properties), reset, primitives (.ed-input, .ed-btn)
+       2. ui/app.css   app shell (.ap-*: header, main, cards, tables)
+       3. ./app.css    this app (.rp-*), overrides 1-2 by order, not by weight -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- .ap on body: root hook of the ui/app.css shell (flex column, footer pushed down). -->
+
+<!-- Page registry as hidden anchors, read by common.js pageHref(id). The build renames pages and reliably rewrites
+     href attributes in markup, but not arbitrary string literals in JS, so the anchor is the single source of truth.
+     hidden (not CSS): semantic, effective before CSS loads, out of the accessibility tree. Both pages carry both
+     anchors because both build the same navigation. -->
+<a id="pg-plan" href="index.html" hidden></a>
+<a id="pg-sheet" href="sheet.html" hidden></a>
+<!-- Empty mount point: all UI is built by the page script. One render path (JS) for content, i18n and state;
+     static markup would duplicate it and drift. <main> landmark lets assistive tech jump straight to content. -->
+<main class="ap-main" id="main"></main>
+<!-- type="module": deferred (runs after parsing), strict mode, native ../ imports in development. -->
+<script type="module" src="./sheet.js"></script>
+</body>
+</html>

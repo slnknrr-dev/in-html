@@ -1,0 +1,6 @@
+import{area as signedArea,dist,bbox as ptsBBox}from"../garment/geom.js";const mm=(v)=>Math.round(v*1000)/1000;const RAD=Math.PI/180;const polygonArea=(pts)=>Math.abs(signedArea(pts));function centroid(pts){let a=0,cx=0,cy=0;for(let i=0;i<pts.length;i++){const[x1,y1]=pts[i],[x2,y2]=pts[(i+1)%pts.length];const c=x1*y2-x2*y1;a+=c;cx+=(x1+x2)*c;cy+=(y1+y2)*c;}
+if(Math.abs(a)<1e-12)return[pts.reduce((s,p)=>s+p[0],0)/pts.length,pts.reduce((s,p)=>s+p[1],0)/pts.length];return[cx/(3*a),cy/(3*a)];}
+const edgeMidpoints=(pts)=>pts.map((p,i)=>{const q=pts[(i+1)%pts.length];return{i,at:[(p[0]+q[0])/2,(p[1]+q[1])/2],length:dist(p,q)};});function shapeBox(sh){if(!sh.rot)return{x:sh.x,y:sh.y,w:sh.w,h:sh.h};const a=sh.rot*RAD,c=Math.abs(Math.cos(a)),s=Math.abs(Math.sin(a));const w=sh.w*c+sh.h*s,h=sh.w*s+sh.h*c;return{x:sh.x+(sh.w-w)/2,y:sh.y+(sh.h-h)/2,w,h};}
+function bounds(shapes=[],outlines=[]){const pts=[];for(const s of shapes){const b=shapeBox(s);pts.push([b.x,b.y],[b.x+b.w,b.y+b.h]);}
+for(const o of outlines)pts.push(...o);if(!pts.length)return null;const b=ptsBBox(pts);return{x:b.x0,y:b.y0,w:b.w,h:b.h};}
+export{polygonArea,mm,bounds,centroid,edgeMidpoints};

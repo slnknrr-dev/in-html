@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<!-- book-processor/index.html: source page of the book reader and writer. Everything visible is rendered by
+     main.js into #bk-main; this file declares the cascade (shared ui, then the app, reader and writer sheets), the
+     theme hints and the module entry. Built into html@5_offline* by singlefile.js. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Books</title>
+  <meta name="description" content="Offline book reader and writer: FB2 and EPUB library with themes, notes, highlights and search; write books with chapters, poems, footnotes and covers and export FB2 / EPUB. Files never leave your device.">
+  <!-- Two theme-color metas with media queries: the browser chrome matches the light or dark page background before
+       any CSS or JS runs. -->
+  <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#14171c" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%237c4a1e'/%3E%3Cpath d='M7 8.5c3-1.4 6-1.2 9 .8 3-2 6-2.2 9-.8V24c-3-1.4-6-1.2-9 .8-3-2-6-2.2-9-.8z' fill='%23f6ead2'/%3E%3Cpath d='M16 9.3v15.5' stroke='%237c4a1e' stroke-width='1.6'/%3E%3C/svg%3E">
+  <!-- Order: ui/base.css (tokens, primitives), ui/app.css (ap- shell), then app.css (overrides the accent tokens),
+       reader.css and writer.css. Later sheets redefine shared tokens on :root, so the order is the override mechanism. -->
+  <link rel="stylesheet" href="../ui/base.css">
+  <link rel="stylesheet" href="../ui/app.css">
+  <link rel="stylesheet" href="./app.css">
+  <link rel="stylesheet" href="./reader.css">
+  <link rel="stylesheet" href="./writer.css">
+  <!-- Module in head: modules are deferred, so it still runs after #bk-main is parsed, while the download starts early. -->
+  <script type="module" src="./main.js"></script>
+</head>
+<body class="ap">
+  <!-- Single mount point: library, reader and writer views replace its content (main.js routes by hash). -->
+  <main class="ap-main bk-main" id="bk-main"></main>
+  <noscript><div class="ed-noscript">This book reader and writer needs JavaScript. It runs entirely in your browser and works offline.</div></noscript>
+</body>
+</html>

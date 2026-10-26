@@ -1,0 +1,167 @@
+/* book-processor/app.css - the book application's shell and library (on top of ui/base.css + ui/app.css):
+   a warm accent, the view switcher, the shelf (grid and list), continue reading, book details, the drafts list,
+   the empty states and the drop overlay. reader.css and writer.css style the two work views. */
+
+   /* CONTRACT
+      - Namespaces: `bk-` library and shell parts of this app, `rd-` reader (reader.css), `wr-` writer (writer.css);
+        `ed-` / `ap-` are the shared primitives and shell of ui/base.css + ui/app.css, restyled here only via tokens.
+      - Theming: the app re-points the shared --ed-accent* tokens to a warm brown and adds --bk-* paper / ink tokens.
+        Each dark value is written twice: under prefers-color-scheme (guarded by :not([data-theme="light"]) so a manual
+        light choice wins) and under [data-theme="dark"] (manual dark on a light OS). One block cannot serve both cases.
+      - Specificity budget: one class; two for context (.bk-list .bk-card) or state (.bk-nav-btn.bk-on). The list view is
+        a context class on the container, so the same card markup renders as grid tile or list row.
+      - Raw colours only in shadows (a brown-tinted rgba gives "paper on wood" depth in both themes) and the logo gradient. */
+
+:root {
+  --ed-accent: #9c4f1d; --ed-accent-hover: #823f12; --ed-accent-weak: #f8ece1; --ed-accent-text: #fffaf3;
+  --ed-focus: 0 0 0 3px rgba(156, 79, 29, .3);
+  --bk-paper: #fffdf8; --bk-ink: #221d17; --bk-ink-soft: #7d6f60; --bk-shelf: #e9dcc8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ed-accent: #e2a670; --ed-accent-hover: #ecbb8f; --ed-accent-weak: #3b2b1e; --ed-accent-text: #1d130b;
+    --ed-focus: 0 0 0 3px rgba(226, 166, 112, .32);
+    --bk-paper: #1f1e1b; --bk-ink: #e7e1d6; --bk-ink-soft: #a3998b; --bk-shelf: #3a3128;
+  }
+}
+:root[data-theme="dark"] {
+  --ed-accent: #e2a670; --ed-accent-hover: #ecbb8f; --ed-accent-weak: #3b2b1e; --ed-accent-text: #1d130b;
+  --ed-focus: 0 0 0 3px rgba(226, 166, 112, .32);
+  --bk-paper: #1f1e1b; --bk-ink: #e7e1d6; --bk-ink-soft: #a3998b; --bk-shelf: #3a3128;
+}
+/* Logo colours are brand, not theme: identical in light and dark. */
+.ap-logo { background: linear-gradient(135deg, #c27a3e, #6b3411); color: #fff6ea; }
+
+/* View switcher in the header */
+/* Segmented pill: the track (panel-2) holds buttons whose active one is filled with the accent. */
+.bk-nav { display: flex; gap: 2px; padding: 3px; margin-left: 6px; border-radius: 999px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.bk-nav-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 13px; border: 0; border-radius: 999px;
+  background: transparent; color: var(--ed-muted); font-weight: 560; white-space: nowrap;
+}
+.bk-nav-btn:hover { color: var(--ed-text); background: var(--ed-hover); }
+.bk-nav-btn.bk-on { color: var(--ed-accent-text); background: var(--ed-accent); }
+.bk-nav-btn .ed-ic, .bk-nav-btn svg { width: 17px; height: 17px; }
+@media (max-width: 560px) {
+  /* Phones: the switcher wraps onto its own full-width line under the header (order: 5 moves it after the other header
+     items, flex-basis 100% forces the wrap) and buttons share the width equally (flex: 1 1 0). */
+  .bk-nav { order: 5; flex: 1 0 100%; margin: 0; }
+  .bk-nav-btn { flex: 1 1 0; justify-content: center; padding: 0 8px; }
+}
+
+/* Library head and tools */
+.bk-main { max-width: 1240px; }
+.bk-lib-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+.bk-lib-title { display: flex; align-items: center; gap: 10px; }
+/* Serif stack for book-ish headings; Noto Serif Georgian / Sylfaen cover the Georgian UI, which Georgia lacks. */
+.bk-lib-title h2 { font-size: 24px; font-weight: 720; letter-spacing: -.02em; font-family: Georgia, "Palatino Linotype", "Noto Serif", "Noto Serif Georgian", Sylfaen, serif; }
+.bk-lib-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.bk-lib-tools { display: flex; gap: 8px; align-items: center; margin: 22px 0 16px; flex-wrap: wrap; }
+/* min-width: 0 lets the search shrink below its intrinsic input width when the toolbar wraps. */
+.bk-search { flex: 1 1 220px; min-width: 0; }
+.bk-sort { width: auto; max-width: 48%; }
+
+/* Continue reading */
+/* Continue-reading banner: gradient from the weak accent fades into the panel at 62%, so the cover side is tinted
+   and the text side stays neutral. text-align: left (not start): physical, would not mirror in an RTL locale. */
+.bk-continue-btn {
+  display: flex; align-items: center; gap: 16px; width: 100%; padding: 14px 18px 14px 14px; border: 1px solid var(--ed-border);
+  border-radius: 16px; background: linear-gradient(115deg, var(--ed-accent-weak), var(--ed-panel) 62%); text-align: left;
+  box-shadow: var(--ed-shadow-sm); transition: border-color .15s, box-shadow .15s;
+}
+.bk-continue-btn:hover { border-color: var(--ed-accent); box-shadow: var(--ed-shadow); }
+.bk-continue-btn > .ed-ic { color: var(--ed-accent); }
+.bk-cover.bk-cover-sm { width: 58px; flex: none; }
+.bk-continue-text { display: flex; flex-direction: column; gap: 3px; flex: 1 1 auto; min-width: 0; }
+.bk-continue-text strong { font-size: 17px; font-family: Georgia, "Noto Serif", "Noto Serif Georgian", Sylfaen, serif; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bk-kicker { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--ed-accent); }
+.bk-continue .bk-progress { max-width: 300px; margin-top: 6px; flex: none; width: 100%; }
+
+/* Shelf: grid of covers or a list */
+.bk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 26px 20px; }
+.bk-list { display: flex; flex-direction: column; gap: 10px; }
+/* Card as a 2x2 grid: cover spans the top, meta and the "more" menu share the bottom row; minmax(0, 1fr) lets long
+   titles shrink instead of pushing the menu button out. */
+.bk-card { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "cover cover" "meta more"; gap: 10px 2px; min-width: 0; }
+.bk-card-open { grid-area: cover; position: relative; display: block; padding: 0; border: 0; background: none; border-radius: 4px 8px 8px 4px; }
+/* Book spine highlight: a 7% wide gradient over the left edge (dark crease, light ridge) makes a flat cover read as
+   a physical book. pointer-events: none so clicks reach the button. */
+.bk-card-open::after {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 7%; border-radius: 4px 0 0 4px; pointer-events: none;
+  background: linear-gradient(90deg, rgba(0, 0, 0, .22), rgba(255, 255, 255, .12) 55%, transparent);
+}
+/* 2 / 3 aspect: standard book proportion, reserved before the image loads (no layout shift). Asymmetric radius
+   (4px spine, 8px fore-edge) and a two-layer shadow (contact + soft drop) finish the book illusion. */
+.bk-cover {
+  display: block; width: 100%; aspect-ratio: 2 / 3; object-fit: cover; border-radius: 4px 8px 8px 4px; background: var(--bk-shelf);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .14), 0 10px 22px -10px rgba(50, 25, 5, .45); transition: transform .18s ease, box-shadow .18s ease;
+}
+.bk-card-open:hover .bk-cover, .bk-card-open:focus-visible .bk-cover { transform: translateY(-4px) rotate(-.4deg); box-shadow: 0 2px 4px rgba(0, 0, 0, .16), 0 18px 30px -12px rgba(50, 25, 5, .5); }
+.bk-card-meta { grid-area: meta; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+/* Two-line clamp: -webkit-line-clamp needs display: -webkit-box and box-orient vertical (supported in all engines
+   with the prefix). overflow-wrap: anywhere breaks very long words or URLs used as titles. */
+.bk-card-title { font-size: 13.5px; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.bk-card-author { color: var(--ed-muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bk-card-foot { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 11.5px; color: var(--ed-muted); }
+.bk-card-more { grid-area: more; align-self: start; margin-top: -4px; }
+.bk-progress { display: block; flex: 1 1 auto; height: 4px; min-width: 28px; border-radius: 999px; background: var(--ed-border); overflow: hidden; }
+.bk-progress > i { display: block; height: 100%; background: var(--ed-accent); border-radius: inherit; }
+.bk-pct { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bk-done .bk-pct { color: var(--ed-ok); font-weight: 600; }
+.bk-fmt { align-self: flex-start; font-size: 9.5px; font-weight: 750; letter-spacing: .07em; padding: 1px 6px; border-radius: 4px; background: var(--ed-hover); color: var(--ed-muted); white-space: nowrap; }
+/* List view: same markup, the container context re-templates the grid into one row (0,2,0 beats .bk-card). */
+.bk-list .bk-card {
+  grid-template-columns: 62px minmax(0, 1fr) auto; grid-template-areas: "cover meta more"; align-items: center; gap: 14px;
+  padding: 10px 10px 10px 12px; border: 1px solid var(--ed-border); border-radius: 14px; background: var(--ed-panel); box-shadow: var(--ed-shadow-sm);
+}
+.bk-list .bk-card-meta { gap: 3px; }
+.bk-list .bk-card-title { font-size: 14.5px; -webkit-line-clamp: 1; }
+.bk-list .bk-card-foot { max-width: 360px; }
+.bk-list .bk-card-more { align-self: center; margin: 0; }
+
+/* Empty states, drop zone, storage line */
+.bk-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 36px 16px 20px; max-width: 580px; margin: 0 auto; }
+.bk-empty-art { color: var(--ed-accent); opacity: .9; }
+.bk-empty-art svg { max-width: 100%; height: auto; }
+.bk-empty h3 { font-size: 21px; font-family: Georgia, "Noto Serif", "Noto Serif Georgian", Sylfaen, serif; }
+.bk-empty .ap-lead { margin: 0 0 6px; }
+.bk-empty .ap-drop { margin-top: 6px; }
+.bk-empty-acts { justify-content: center; }
+.bk-formats { margin: 4px 0 0; color: var(--ed-muted); font-size: 12px; }
+.bk-lib-drop { margin-top: 32px; }
+.bk-lib-drop .ap-drop { min-height: 80px; }
+.bk-storage { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; margin: 18px 0 0; color: var(--ed-muted); font-size: 12px; text-align: center; }
+.bk-storage > .ed-ic, .bk-storage > svg { width: 15px; height: 15px; color: var(--ed-ok); }
+.bk-warn { color: var(--ed-warn); }
+
+/* Book details dialog */
+.bk-details { display: grid; grid-template-columns: 156px minmax(0, 1fr); gap: 22px; align-items: start; }
+.bk-cover.bk-cover-lg { width: 156px; }
+.bk-details-title { font-size: 19px; margin-bottom: 4px; font-family: Georgia, "Noto Serif", "Noto Serif Georgian", Sylfaen, serif; }
+.bk-details .ap-kv { margin-top: 12px; }
+.bk-annotation { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--ed-border); font-size: 13.5px; line-height: 1.6; }
+.bk-annotation p { margin: 0 0 .5em; }
+@media (max-width: 560px) {
+  .bk-details { grid-template-columns: minmax(0, 1fr); }
+  .bk-cover.bk-cover-lg { width: 120px; margin: 0 auto; }
+}
+
+/* Files dragged over the page */
+/* Drop overlay above everything (150); pointer-events: none keeps the drop target the page itself, so dragleave
+   is not fired by the overlay appearing under the cursor. color-mix in srgb is enough for a translucent wash. */
+.bk-dropover { position: fixed; inset: 0; z-index: 150; display: grid; place-items: center; background: color-mix(in srgb, var(--ed-accent) 16%, rgba(12, 10, 8, .38)); backdrop-filter: blur(2px); pointer-events: none; }
+.bk-dropover-box { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 30px 40px; border: 2px dashed var(--ed-accent); border-radius: 20px; background: var(--ed-panel); font-weight: 600; font-size: 16px; box-shadow: var(--ed-shadow-lg); }
+.bk-dropover-box .ed-ic, .bk-dropover-box svg { width: 42px; height: 42px; color: var(--ed-accent); }
+
+/* Drafts of the writer */
+.wr-draft-list .bk-card-meta .ed-muted { font-size: 12px; }
+
+@media (max-width: 560px) {
+  .bk-grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 20px 12px; }
+  .bk-card-title { font-size: 12.5px; }
+  .bk-lib-title h2 { font-size: 21px; }
+  .bk-lib-actions { width: 100%; }
+  .bk-lib-actions .ed-btn { flex: 1 1 auto; }
+  .bk-continue-btn { padding: 12px; gap: 12px; }
+  .bk-continue-btn > .ed-ic { display: none; }
+}

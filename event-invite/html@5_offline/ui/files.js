@@ -1,0 +1,3 @@
+import{h}from"./dom.js";function downloadBlob(blob,name){const url=URL.createObjectURL(blob);const a=h('a',{href:url,download:name,style:{display:'none'}});document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);}
+function pickFiles({accept='',multiple=false}={}){return new Promise((resolve)=>{const inp=h('input',{type:'file',accept,multiple,style:{display:'none'}});let done=false;const finish=(files)=>{if(done)return;done=true;inp.remove();resolve(files);};inp.addEventListener('change',()=>finish(Array.from(inp.files||[])));inp.addEventListener('cancel',()=>finish([]));document.body.append(inp);inp.click();});}
+export{downloadBlob,pickFiles};

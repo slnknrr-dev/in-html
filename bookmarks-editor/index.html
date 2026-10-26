@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- bookmarks-editor/index.html: entry page. A shell, not a document: main.js builds the whole UI inside <main>.
+     Why an empty shell: one render path (JS) owns content, i18n and state; static markup would duplicate it and
+     drift. Cost accepted: nothing useful without JS (see <noscript>). singlefile.js inlines the CSS/JS below into
+     the html@5_* builds and strips every comment, so these notes never ship. -->
+<html lang="en">
+<!-- lang="en" is the static default only; ui/i18n.js rewrites it on language switch (screen readers, hyphenation). -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: it must sit in the first 1024 bytes, before any non-ASCII byte, or the parser re-decodes the page. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Without a viewport meta, mobile browsers lay out at ~980px and zoom out, so no @media (max-width) in app.css fires. -->
+<meta name="referrer" content="no-referrer">
+<!-- no-referrer: opening a bookmark must not leak this page's URL (a self-hosted address, or file:// path) to the
+     bookmarked site. Belt and braces with rel="noopener noreferrer" on the links built in list.js / common.js. -->
+<title>Bookmarks</title>
+<meta name="description" content="Bookmark manager: folders, tags, read later, search language, imports from every browser and service, duplicates, exports; one offline file, a self-hosted service or a file that syncs with it.">
+<meta name="color-scheme" content="light dark">
+<!-- color-scheme: the UA paints scrollbars, form controls and the pre-CSS canvas dark when the OS is dark, so there is
+     no white flash before ui/base.css loads its dark tokens. -->
+<!-- Favicon as a URL-encoded SVG data: URI: zero requests, works from file:// and offline builds. '#' must be %23,
+     otherwise it starts a URL fragment and truncates the image. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%232563eb'/%3E%3Cstop offset='1' stop-color='%237c3aed'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Cpath d='M11 7h10a1 1 0 0 1 1 1v17l-6-3.8L10 25V8a1 1 0 0 1 1-1z' fill='%23fff'/%3E%3C/svg%3E">
+<!-- Cascade order is a contract (equal specificity: later file wins):
+       1. ui/base.css  tokens (ed-* custom properties), reset, shared primitives (.ed-*)
+       2. ui/app.css   app shell (.ap-*)
+       3. ./app.css    this app (bm-*), may override 1-2 without !important
+     Reordering breaks those overrides silently: no error, only wrong styles. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- .bm-loading spinner is static markup so something shows while the module graph downloads; main.js replaces the
+     contents of #main on boot. .ap-wide lifts the shell max-width: a three-pane manager needs the whole screen. -->
+<main class="ap-main ap-wide bm-app" id="main"><div class="bm-loading"><div class="ed-spinner"></div></div></main>
+<!-- .ed-noscript is styled in ui/base.css as a top-layer banner; <noscript> is the only content a JS-less visitor sees. -->
+<noscript><div class="ed-noscript">Bookmarks needs JavaScript.</div></noscript>
+<!-- type=module: deferred by default (runs after parsing, so #main exists), strict mode, own scope, and imports are
+     resolved relative to this file. Modules do not load from file:// in Chromium; that is why the html@5_* single-file
+     builds exist for offline use. -->
+<script type="module" src="./main.js"></script>
+</body>
+</html>

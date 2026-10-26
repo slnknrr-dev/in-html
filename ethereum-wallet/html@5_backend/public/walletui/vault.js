@@ -1,0 +1,25 @@
+import{argon2Async}from"../crypto/argon2.js";import{scryptAsync}from"../crypto/scrypt.js";import{aesGcmEncrypt,aesGcmDecrypt}from"../crypto/aes.js";import{randomBytes}from"../crypto/random.js";import{utf8ToBytes,base64ToBytes,wipe,bytesToBase64,bytesToUtf8}from"../crypto/encoding.js";const DEFAULT_KDF=Object.freeze({name:'argon2id',m:65536,t:3,p:1});const FORMAT='in-html-vault';async function deriveVaultKey(password,kdf,{onProgress,signal}={}){const pw=utf8ToBytes(String(password).normalize('NFC'));const salt=typeof kdf.salt==='string'?base64ToBytes(kdf.salt):kdf.salt;if(!salt||salt.length<16)throw new Error('vault: salt missing');try{if(kdf.name==='argon2id')return await argon2Async('argon2id',pw,salt,{m:kdf.m,t:kdf.t,p:kdf.p,dkLen:32},{onProgress,signal});if(kdf.name==='scrypt')return await scryptAsync(pw,salt,{N:kdf.N,r:kdf.r,p:kdf.p,dkLen:32},{onProgress,signal});throw new Error(`vault: unknown key derivation ${kdf.name}`);}finally{wipe(pw);}}
+const aad=(kdf)=>utf8ToBytes(`${FORMAT}/1/${kdf.name}`);function sealWithKey(data,key,kdf){const iv=randomBytes(12);const pt=utf8ToBytes(JSON.stringify(data));const ct=aesGcmEncrypt(key,iv,pt,aad(kdf));wipe(pt);const k={...kdf,salt:typeof kdf.salt==='string'?kdf.salt:bytesToBase64(kdf.salt)};return{format:FORMAT,v:1,kdf:k,cipher:'aes-256-gcm',iv:bytesToBase64(iv),ct:bytesToBase64(ct)};}
+function checkEnvelope(env){if(!env||env.format!==FORMAT||env.v!==1||env.cipher!=='aes-256-gcm'||!env.kdf||!env.iv||!env.ct){throw Object.assign(new Error('not a vault file of this application'),{code:'format'});}
+return env;}
+function openWithKey(env,key){checkEnvelope(env);let pt;try{pt=aesGcmDecrypt(key,base64ToBytes(env.iv),base64ToBytes(env.ct),aad(env.kdf));}catch{throw Object.assign(new Error('wrong password'),{code:'password'});}
+const data=JSON.parse(bytesToUtf8(pt));wipe(pt);return data;}
+async function sealVault(data,password,{kdf=DEFAULT_KDF,onProgress,signal}={}){const k={...kdf,salt:bytesToBase64(randomBytes(16))};const key=await deriveVaultKey(password,k,{onProgress,signal});return{envelope:sealWithKey(data,key,k),key,kdf:k};}
+async function openVault(env,password,{onProgress,signal}={}){checkEnvelope(env);const key=await deriveVaultKey(password,env.kdf,{onProgress,signal});return{data:openWithKey(env,key),key,kdf:env.kdf};}
+const memoryStorage=()=>{const m=new Map();return{getItem:(k)=>(m.has(k)?m.get(k):null),setItem:(k,v)=>m.set(k,String(v)),removeItem:(k)=>m.delete(k)};};class VaultSession{constructor({storageKey,storage=null,autoLockMinutes=5,onLock=null,kdf=DEFAULT_KDF}={}){this.storageKey=storageKey;this.storage=storage||(typeof localStorage!=='undefined'?localStorage:memoryStorage());this.autoLockMinutes=autoLockMinutes;this.onLock=onLock;this.kdfDefaults=kdf;this.key=null;this.kdf=null;this.data=null;this.lastActive=Date.now();this.timer=null;}
+readEnvelope(){try{const s=this.storage.getItem(this.storageKey);return s?JSON.parse(s):null;}catch{return null;}}
+exists(){return!!this.readEnvelope();}
+get unlocked(){return!!this.key;}
+async create(password,data,opts={}){const r=await sealVault(data,password,{kdf:this.kdfDefaults,...opts});this.storage.setItem(this.storageKey,JSON.stringify(r.envelope));this.key=r.key;this.kdf=r.kdf;this.data=data;this.startTimer();return data;}
+async unlock(password,opts={}){const env=this.readEnvelope();if(!env)throw Object.assign(new Error('no vault'),{code:'missing'});const r=await openVault(env,password,opts);this.key=r.key;this.kdf=r.kdf;this.data=r.data;this.startTimer();return r.data;}
+save(){if(!this.key)throw new Error('the vault is locked');this.storage.setItem(this.storageKey,JSON.stringify(sealWithKey(this.data,this.key,this.kdf)));}
+lock(reason='manual'){if(!this.key)return;wipe(this.key);this.key=null;this.kdf=null;this.data=null;if(this.timer){clearInterval(this.timer);this.timer=null;}
+if(this.onLock)this.onLock(reason);}
+touch(){this.lastActive=Date.now();}
+setAutoLock(minutes){this.autoLockMinutes=minutes;this.touch();}
+startTimer(){this.touch();if(this.timer)clearInterval(this.timer);this.timer=setInterval(()=>{if(this.autoLockMinutes>0&&Date.now()-this.lastActive>this.autoLockMinutes*60000)this.lock('timeout');},5000);}
+async changePassword(oldPassword,newPassword,opts={}){const env=this.readEnvelope();await openVault(env,oldPassword,opts);const r=await sealVault(this.data,newPassword,{kdf:this.kdfDefaults,...opts});this.storage.setItem(this.storageKey,JSON.stringify(r.envelope));if(this.key)wipe(this.key);this.key=r.key;this.kdf=r.kdf;}
+exportEnvelope(){return this.readEnvelope();}
+async importEnvelope(env,password,opts={}){checkEnvelope(env);const r=await openVault(env,password,opts);this.storage.setItem(this.storageKey,JSON.stringify(env));this.key=r.key;this.kdf=r.kdf;this.data=r.data;this.startTimer();return r.data;}
+destroy(){this.lock('destroy');this.storage.removeItem(this.storageKey);}}
+export{VaultSession,openVault};

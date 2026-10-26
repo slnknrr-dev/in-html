@@ -1,0 +1,294 @@
+/* media-player/player.css - player bar, now-playing sheet and layout controls, video stage, lyrics, queue, studio,
+   statistics, forms; the mobile, home-theatre and mini-player modes. */
+
+   /* CONTRACT (same rules as app.css: mp- namespace, --mp-* tokens only, <= two classes for desktop rules)
+      - Loaded last, so it may re-skin anything from app.css at equal specificity.
+      - View modes: main.js sets data-view on #mp-app ("desktop" | "mobile" | "theatre" | "mini"). Every mode rule is
+        prefixed `.mp-app[data-view="..."]` (0,2,0 before the target selector), so it outranks the base rule it amends
+        regardless of position; a mode never needs !important.
+      - Layout renderer: nowplaying.js builds the sheet from a user layout as rows (.mp-lrow) of controls; options map to
+        small modifier classes (.mp-cs-* cover size, .mp-ts-* text size, .mp-align-*, .mp-gap-*, .mp-shape-*), so a
+        layout is pure data and this file is the only place that knows what "l" means.
+      - Motion respects prefers-reduced-motion (spinning vinyl, sheet slide). */
+
+/* player bar */
+/* Three columns: info | transport + seek | tools. The centre gets 2fr and a 320px floor, so transport stays centred
+   and usable while long titles on the left ellipsize first. z-index 5: above .mp-main content, below the stage (20),
+   the sheet (30) and the next-episode toast (40) - the whole stacking ladder of the player. */
+.mp-bar { grid-area: bar; position: relative; display: grid; grid-template-columns: minmax(180px, 1fr) minmax(320px, 2fr) minmax(180px, 1fr); align-items: center; gap: 16px; padding: 0 16px; border-top: 1px solid var(--mp-border); background: var(--mp-surface); z-index: 5; }
+/* Thin progress line along the top edge: shown only in the mobile mode, where the full seek bar is hidden. */
+.mp-bar-progress { display: none; position: absolute; left: 0; right: 0; top: -1px; height: 3px; }
+.mp-bar-progress i { display: block; height: 100%; background: var(--mp-accent); }
+.mp-bar-info { display: flex; align-items: center; gap: 12px; min-width: 0; cursor: pointer; outline: none; }
+.mp-bar-cover { width: 54px; height: 54px; border-radius: calc(var(--mp-cover-radius) / 2.5); object-fit: cover; flex: none; }
+.mp-cover-empty { display: grid; place-items: center; background: var(--mp-surface-2); color: var(--mp-muted); }
+.mp-bar-text { min-width: 0; } .mp-bar-t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mp-bar-s { color: var(--mp-muted); font-size: .86em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mp-bar-center { display: grid; gap: 2px; justify-items: center; }
+.mp-bar-ctrls { display: flex; align-items: center; gap: 6px; }
+.mp-bar-tools { display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.mp-bar .mp-seek { width: 100%; }
+
+/* control buttons */
+/* Control button: inline-grid + place-items centres the icon in one declaration; sizes come from .mp-cbtn-s/m/l/xl
+   chosen per control in the layout. svg at 55% capped at 30px: icons scale with the button but never look bloated. */
+.mp-cbtn { display: inline-grid; place-items: center; border: 0; background: transparent; color: var(--mp-text); border-radius: var(--mp-btn-radius); cursor: pointer; position: relative; flex: none; }
+.mp-cbtn:hover, .mp-cbtn:focus-visible { background: var(--mp-surface-2); outline: none; }
+.mp-cbtn:focus-visible { box-shadow: 0 0 0 3px var(--mp-accent); }
+.mp-cbtn-s { width: 32px; height: 32px; } .mp-cbtn-m { width: 40px; height: 40px; } .mp-cbtn-l { width: 52px; height: 52px; } .mp-cbtn-xl { width: var(--mp-play-size, 72px); height: var(--mp-play-size, 72px); }
+.mp-cbtn svg { width: 55%; height: 55%; max-width: 30px; max-height: 30px; }
+/* Active toggle (shuffle, repeat): colour plus a dot, so the state is not conveyed by colour alone. */
+.mp-cbtn.mp-active { color: var(--mp-accent); } .mp-cbtn.mp-active::after { content: ''; position: absolute; bottom: 3px; width: 4px; height: 4px; border-radius: 50%; background: var(--mp-accent); }
+.mp-play-filled { background: var(--mp-accent); color: var(--mp-on-accent); box-shadow: var(--mp-shadow); }
+.mp-play-filled:hover { background: var(--mp-accent); filter: brightness(1.08); }
+.mp-play-tonal { background: color-mix(in oklab, var(--mp-accent) 25%, var(--mp-surface)); }
+.mp-play-outline { box-shadow: inset 0 0 0 2px var(--mp-accent); }
+/* Badge from data-label (e.g. "1" for repeat-one, "1.5x"): content: attr() keeps the text in markup / JS, no extra
+   element. :not([data-label=""]) hides the badge when the label is cleared, without toggling an attribute. */
+.mp-cbtn[data-label]:not([data-label=""])::before { content: attr(data-label); position: absolute; top: -4px; inset-inline-end: -6px; font-size: 10px; background: var(--mp-accent); color: var(--mp-on-accent); padding: 0 4px; border-radius: 6px; }
+.mp-skipmarker { background: var(--mp-accent); color: var(--mp-on-accent); }
+.mp-volbox { display: flex; align-items: center; gap: 4px; } .mp-vol { width: 96px; accent-color: var(--mp-accent); }
+.mp-stars { display: flex; gap: 2px; } .mp-star { border: 0; background: none; cursor: pointer; color: var(--mp-muted); padding: 2px; } .mp-star.mp-on { color: var(--mp-accent); } .mp-star svg { width: 20px; height: 20px; }
+
+/* seek bars */
+.mp-seek { display: grid; gap: 4px; align-items: center; }
+.mp-seek.mp-times-sides { grid-template-columns: auto 1fr auto; gap: 10px; }
+.mp-times { display: flex; justify-content: space-between; }
+.mp-time { font-variant-numeric: tabular-nums; font-size: .82em; color: var(--mp-muted); }
+/* Seek bar = decorative layers (buffered, filled) + an invisible native <input type=range> on top (.mp-seek-r). The
+   native input gives keyboard, screen-reader and touch support for free; styling its track / thumb across engines
+   needs vendor pseudo-elements, which this avoids. */
+.mp-seek-track { position: relative; height: var(--mp-seek-h, 6px); border-radius: 999px; background: color-mix(in oklab, var(--mp-muted) 28%, transparent); }
+.mp-seek-buf, .mp-seek-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: inherit; width: 0; }
+.mp-seek-buf { background: color-mix(in oklab, var(--mp-muted) 25%, transparent); }
+.mp-seek-fill { background: var(--mp-accent); }
+/* inset -8px 0 and height +16px: a 6px bar is too thin to hit with a finger, so the hit area extends 8px above and
+   below. opacity: 0 (not visibility: hidden) keeps it focusable and clickable. */
+.mp-seek-r { position: absolute; inset: -8px 0; width: 100%; height: calc(100% + 16px); margin: 0; opacity: 0; cursor: pointer; }
+.mp-seek-thick .mp-seek-track { height: calc(var(--mp-seek-h, 6px) * 2); border-radius: 4px; }
+.mp-seek-dots .mp-seek-track { background: repeating-linear-gradient(90deg, color-mix(in oklab, var(--mp-muted) 40%, transparent) 0 4px, transparent 4px 9px); }
+.mp-seek-wave .mp-seek-track { height: 48px; background: none; } .mp-seek-wave .mp-seek-fill, .mp-seek-wave .mp-seek-buf { display: none; }
+.mp-wave { width: 100%; height: 100%; display: block; }
+.mp-seek-ring .mp-seek-track { height: 120px; width: 120px; justify-self: center; background: none; }
+.mp-ring { width: 100%; height: 100%; transform: rotate(-90deg); } .mp-ring circle { fill: none; stroke-width: 6; } .mp-ring-bg { stroke: color-mix(in oklab, var(--mp-muted) 30%, transparent); }
+/* The ring circle has pathLength="1000" (nowplaying.js), so the dash maths is in units of 1/1000 of the circumference
+   whatever the radius: dashoffset = 1000 * (1 - progress). The svg is rotated -90deg to start at 12 o'clock. */
+.mp-ring-fg { stroke: var(--mp-accent); stroke-dasharray: 1000; stroke-dashoffset: 1000; stroke-linecap: round; }
+
+/* now playing sheet */
+/* The now-playing sheet stays in the DOM and slides with transform (compositor-only, no layout per frame).
+   visibility: hidden when closed removes it from the tab order and the accessibility tree; visibility is animatable
+   as a step, so it flips at the end of the slide-out and at the start of the slide-in. */
+.mp-np { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; background: var(--mp-bg); transform: translateY(100%); transition: transform .28s cubic-bezier(.2, .8, .2, 1); visibility: hidden; }
+.mp-np.mp-open { transform: none; visibility: visible; }
+html[data-mp-background="gradient"] .mp-np, .mp-np:has(.mp-bg-art) { background: radial-gradient(900px 600px at 50% 0, color-mix(in oklab, var(--mp-accent) 30%, transparent), transparent 75%), var(--mp-bg); }
+.mp-np-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+.mp-np-main { flex: 1; display: grid; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+/* :has() reacts to content: when a panel (lyrics / queue tab) is open, the cover shrinks so both fit on one screen
+   without JS measuring. Browsers without :has() (Firefox < 121) simply keep the big cover and scroll. */
+.mp-np:has(.mp-np-panel:not(:empty)) .mp-np-cover:not(.mp-cs-s) { width: min(220px, 26vh, 60vw); }
+.mp-np:has(.mp-np-panel:not(:empty)) .mp-np-panel { max-height: 38vh; }
+.mp-np-main.mp-with-side { grid-template-columns: minmax(0, 1.2fr) minmax(260px, 1fr); }
+/* touch-action: pan-y - the browser keeps vertical scrolling, horizontal moves reach the swipe handlers
+   (next / previous) in nowplaying.js without competing with native panning. */
+.mp-np-body { display: flex; flex-direction: column; align-items: stretch; justify-content: center; padding: 8px clamp(14px, 4vw, 48px) 20px; min-height: 0; touch-action: pan-y; }
+.mp-np-side { overflow: auto; padding: 10px 18px; border-inline-start: 1px solid var(--mp-border); }
+.mp-np-tabs { display: flex; justify-content: center; gap: 6px; padding: 6px; }
+.mp-np-panel { max-height: 45vh; overflow: auto; padding: 0 16px 16px; }
+/* :empty instead of a JS-toggled class: closing a tab just clears the panel. */
+.mp-np-panel:empty { display: none; }
+.mp-layout { display: flex; flex-direction: column; gap: calc(14px * var(--mp-density, 1)); width: 100%; max-width: 720px; margin: 0 auto; }
+.mp-lrow { display: flex; align-items: center; gap: 12px; min-width: 0; }
+/* Every control in a row may shrink below its content width; without it a long title or the seek bar would overflow
+   the row. Seek, lyrics, queue and visualizer then take the free space (flex: 1). */
+.mp-lrow > * { min-width: 0; }
+.mp-lrow > .mp-seek, .mp-lrow > .mp-lyrics, .mp-lrow > .mp-queue, .mp-lrow > .mp-viz { flex: 1; }
+.mp-wrap { flex-wrap: wrap; } .mp-gap-s { gap: 6px; } .mp-gap-l { gap: 20px; }
+.mp-align-start { justify-content: flex-start; } .mp-align-center { justify-content: center; } .mp-align-end { justify-content: flex-end; }
+.mp-align-between { justify-content: space-between; } .mp-align-around { justify-content: space-around; } .mp-align-evenly { justify-content: space-evenly; }
+.mp-spacer.mp-grow { flex: 1; }
+.mp-np-cover { flex: none; position: relative; border-radius: var(--mp-cover-radius); overflow: hidden; aspect-ratio: 1; box-shadow: var(--mp-shadow); }
+.mp-np-cover > .mp-cover { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Glow strength is a skin token (--mp-art-glow, 0..1) turned into a percentage inside color-mix: calc() in the mix
+   percentage keeps the knob a plain number. */
+.mp-np-cover.mp-glow { box-shadow: 0 24px 80px color-mix(in oklab, var(--mp-accent) calc(var(--mp-art-glow, .4) * 70%), transparent); }
+/* Cover sizes bounded by vw and vh together: on a landscape phone vh is the limit, on a portrait one vw. */
+.mp-cs-s { width: 72px; } .mp-cs-m { width: min(200px, 40vw); } .mp-cs-l { width: min(300px, 60vw, 38vh); } .mp-cs-xl { width: min(420px, 82vw, 46vh); } .mp-cs-full { width: min(100%, 60vh); }
+.mp-shape-square { border-radius: 0; } .mp-shape-circle, .mp-shape-vinyl { border-radius: 50%; }
+/* Vinyl label hole drawn as a pseudo-element in the background colour: no extra markup, follows the skin. */
+.mp-shape-vinyl::after { content: ''; position: absolute; inset: 41%; border-radius: 50%; background: var(--mp-bg); box-shadow: 0 0 0 6px color-mix(in oklab, var(--mp-bg) 50%, transparent); }
+/* The image spins, not the container: the container keeps its shadow and hole overlay still. */
+.mp-spin.mp-playing > .mp-cover { animation: mp-spin 6s linear infinite; }
+@keyframes mp-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .mp-spin.mp-playing > .mp-cover { animation: none; } .mp-np { transition: none; } }
+.mp-np-title { font-size: var(--mp-title-size, 24px); font-weight: var(--mp-title-weight, 700); line-height: 1.2; }
+/* Note: .mp-ts-s comes after .mp-np-title at equal specificity (0,1,0) and the renderer sets no inline font-size, so
+   the !important is not needed for any rule in this file; it only matters against a future more specific title rule. */
+.mp-ts-s { font-size: .95em !important; } .mp-ts-m { font-size: 1.15em; } .mp-ts-l { font-size: var(--mp-title-size, 24px); } .mp-ts-xl { font-size: calc(var(--mp-title-size, 24px) * 1.6); }
+.mp-np-title span { display: inline-block; }
+/* Marquee by keyframes: pauses 10% at each end so the start is readable. -60% is a fixed distance, not the measured
+   overflow, so very long titles do not reveal their end. */
+.mp-marquee { overflow: hidden; white-space: nowrap; } .mp-marquee span { animation: mp-marquee 14s linear infinite; }
+@keyframes mp-marquee { 0%, 10% { transform: translateX(0); } 90%, 100% { transform: translateX(-60%); } }
+.mp-al-center { text-align: center; } .mp-al-end { text-align: end; } .mp-al-start { text-align: start; }
+.mp-np-artist, .mp-np-album, .mp-np-chapter, .mp-np-next { color: var(--mp-muted); }
+.mp-np-video { padding-top: 0; }
+.mp-np-videoslot { width: 100%; max-width: 1200px; margin: 0 auto; aspect-ratio: 16 / 9; background: #000; border-radius: var(--mp-radius); overflow: hidden; }
+.mp-np-videoslot .mp-media { width: 100%; height: 100%; display: block; background: #000; }
+.mp-viz { width: 100%; display: block; }
+
+/* lyrics, queue */
+/* Synced lyrics: mask-image fades the top and bottom 15% so lines appear and disappear softly; 10vh padding lets the
+   first and last line scroll to the middle where the current line is kept. */
+.mp-lyrics { max-height: 46vh; overflow: auto; text-align: center; scroll-behavior: smooth; mask-image: linear-gradient(transparent, #000 15%, #000 85%, transparent); padding: 10vh 0; }
+.mp-lline { margin: .45em 0; font-size: 1.25em; color: var(--mp-muted); opacity: .7; cursor: pointer; transition: .2s; }
+.mp-lline.mp-on { color: var(--mp-text); opacity: 1; font-weight: 700; transform: scale(1.04); }
+/* Karaoke: word spans (.mp-lw) get .mp-sung as their timestamps pass, only inside the current line. */
+.mp-lw { transition: color .1s; } .mp-lline.mp-on .mp-lw.mp-sung { color: var(--mp-accent); }
+.mp-lyrics-static .mp-lline, .mp-lyrics-scroll .mp-lline { opacity: 1; }
+.mp-queue { display: flex; flex-direction: column; gap: 2px; }
+.mp-qhead { display: flex; justify-content: space-between; align-items: center; padding: 4px 0 8px; }
+.mp-qrow { display: grid; grid-template-columns: 40px 1fr auto; gap: 10px; align-items: center; padding: 4px 6px; border-radius: var(--mp-radius); cursor: pointer; outline: none; }
+.mp-qrow:hover, .mp-qrow:focus-visible { background: var(--mp-surface-2); }
+.mp-qrow.mp-on { background: color-mix(in oklab, var(--mp-accent) 20%, transparent); } .mp-qrow.mp-past { opacity: .55; }
+.mp-qcover { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; }
+
+/* video stage (floating picture when the sheet is closed) */
+/* Floating video when the sheet is closed. bottom = bar + mobile tabs + 12px via the shell variables, so it clears
+   the player bar in every mode. Raw #000 behind video: letterboxing is black in every skin by convention. */
+.mp-stage { position: fixed; z-index: 20; inset-inline-end: 16px; bottom: calc(var(--mp-bar-h) + var(--mp-tabs-h) + 12px); width: min(380px, 70vw); aspect-ratio: 16 / 9; background: #000; border-radius: var(--mp-radius); overflow: hidden; box-shadow: var(--mp-shadow); display: none; cursor: pointer; }
+.mp-stage.mp-show { display: block; }
+.mp-stage .mp-media { width: 100%; height: 100%; display: block; }
+.mp-stage-ctl { position: absolute; top: 4px; inset-inline-end: 4px; display: flex; gap: 2px; z-index: 2; }
+.mp-stage-ctl .mp-icon-btn { color: #fff; background: rgba(0, 0, 0, .45); }
+.mp-next-count { position: fixed; z-index: 40; inset-inline-end: 24px; bottom: calc(var(--mp-bar-h) + 24px); padding: 10px 16px; border-radius: var(--mp-radius); background: var(--mp-accent); color: var(--mp-on-accent); box-shadow: var(--mp-shadow); }
+/* ::cue styles WebVTT subtitles (SRT / ASS are converted to VTT tracks in nowplaying.js); a translucent box keeps
+   them readable over bright frames. */
+video.mp-media::cue { background: rgba(0, 0, 0, .65); font-size: 1.05em; }
+
+/* forms, panels */
+.mp-form { display: grid; gap: 12px; }
+.mp-formrow { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.mp-field { display: grid; gap: 4px; min-width: 160px; flex: 1; } .mp-field-l { font-size: .86em; color: var(--mp-muted); } .mp-field-h { font-size: .8em; color: var(--mp-muted); }
+.mp-check { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.mp-range { display: flex; align-items: center; gap: 10px; } .mp-range .ed-range { flex: 1; accent-color: var(--mp-accent); } .mp-range-v { min-width: 4.5em; text-align: end; font-variant-numeric: tabular-nums; }
+.mp-color { width: 48px; height: 32px; border: 1px solid var(--mp-border); border-radius: 6px; padding: 0; background: none; }
+.mp-card-box { padding: 16px; border-radius: var(--mp-radius-l); background: var(--mp-surface); border: 1px solid var(--mp-border); margin: 14px 0; display: grid; gap: 12px; }
+.mp-card-box h3 { margin: 0; display: flex; align-items: center; gap: 8px; }
+.mp-explain { font-size: .86em; }
+.mp-bigsearch { font-size: 1.15em; padding: 12px 16px; border-radius: var(--mp-btn-radius); }
+.mp-help { margin: 10px 0; } .mp-help-body { display: grid; gap: 8px; padding: 10px 0; }
+.mp-editor textarea { font-family: var(--mp-font); }
+.mp-addgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.mp-addtile { display: grid; gap: 4px; text-align: start; padding: 14px; border-radius: var(--mp-radius); border: 1px solid var(--mp-border); background: var(--mp-surface); cursor: pointer; }
+.mp-addtile:hover, .mp-addtile:focus-visible { border-color: var(--mp-accent); outline: none; } .mp-addtile span { color: var(--mp-muted); font-size: .86em; }
+.mp-progress { color: var(--mp-muted); font-size: .9em; }
+.mp-progress-bar { height: 4px; border-radius: 4px; background: var(--mp-surface-2); overflow: hidden; } .mp-progress-bar i { display: block; height: 100%; background: var(--mp-accent); }
+.mp-job { padding: 12px; border-radius: var(--mp-radius); background: var(--mp-surface); display: grid; gap: 8px; margin-bottom: 8px; }
+.mp-job-failed { border-inline-start: 3px solid var(--mp-danger); } .mp-job-done { border-inline-start: 3px solid var(--mp-ok); }
+.mp-log, .mp-cmd pre { max-height: 260px; overflow: auto; font-family: var(--ed-mono, monospace); font-size: 12px; background: var(--mp-surface-2); padding: 10px; border-radius: 8px; white-space: pre; margin: 0; }
+.mp-cmds { display: grid; gap: 10px; } .mp-cmd-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.mp-tool { display: grid; grid-template-columns: 80px 1fr minmax(160px, 1fr); gap: 10px; align-items: center; padding: 4px 0; }
+.mp-rules textarea { font-family: var(--ed-mono, monospace); font-size: 13px; }
+.mp-preview { display: grid; gap: 6px; } .mp-prev-row { padding: 8px; border-radius: 8px; background: var(--mp-surface-2); display: grid; gap: 4px; }
+.mp-prev-f { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: .86em; } .mp-prov-template { color: var(--mp-accent); } .mp-prov-tags { color: var(--mp-ok); } .mp-prov-name, .mp-prov-folder { color: var(--mp-muted); }
+.mp-source .mp-head { margin: 0; }
+.mp-taglist { display: grid; gap: 4px; } .mp-tagrow { display: flex; align-items: center; gap: 10px; }
+.mp-tracktable { display: grid; gap: 2px; }
+.mp-tt-h, .mp-tt-r { display: grid; grid-template-columns: 44px minmax(160px, 2fr) minmax(120px, 1fr) 90px minmax(120px, 1fr) 90px; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 8px; }
+.mp-tt-h { color: var(--mp-muted); font-size: .82em; } .mp-tt-r:hover { background: var(--mp-surface-2); } .mp-tt-cover { width: 40px; height: 40px; border-radius: 6px; object-fit: cover; }
+.mp-tt-r .ed-select { width: 100%; }
+.mp-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.mp-kpi { padding: 14px; border-radius: var(--mp-radius); background: var(--mp-surface); display: grid; } .mp-kpi b { font-size: 1.6em; } .mp-kpi span { color: var(--mp-muted); font-size: .86em; }
+.mp-bars { display: grid; gap: 4px; } .mp-barrow { display: grid; grid-template-columns: minmax(80px, 180px) 1fr 70px; gap: 10px; align-items: center; font-size: .9em; }
+.mp-sb-t { height: 10px; border-radius: 5px; background: var(--mp-surface-2); overflow: hidden; } .mp-sb-t i { display: block; height: 100%; background: var(--mp-accent); }
+.mp-sb-l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; } .mp-sb-v { text-align: end; color: var(--mp-muted); }
+.mp-hourmap, .mp-daymap { display: grid; gap: 3px; } .mp-hourmap { grid-template-columns: repeat(24, 1fr); } .mp-daymap { grid-template-columns: repeat(26, 1fr); grid-auto-flow: column; grid-template-rows: repeat(7, 12px); }
+/* Heatmap cells: --v (0..1) set inline per cell, mixed from surface to accent; one rule, any skin. */
+.mp-hourmap i, .mp-daymap i { height: 22px; border-radius: 3px; background: color-mix(in oklab, var(--mp-accent) calc(var(--v) * 100%), var(--mp-surface-2)); } .mp-daymap i { height: 12px; }
+.mp-ws { display: grid; grid-template-columns: 260px 1fr; gap: 20px; } .mp-ws-side { display: grid; align-content: start; gap: 6px; }
+.mp-tree { display: grid; gap: 1px; } .mp-tree-row { display: flex; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 8px; text-decoration: none; }
+.mp-tree-row:hover, .mp-tree-row.mp-on { background: var(--mp-surface-2); }
+.mp-eq { display: flex; gap: 10px; align-items: flex-end; height: 170px; padding: 8px 0; }
+/* Vertical EQ sliders: writing-mode: vertical-lr turns a native range vertical (Chrome 124+, Firefox, Safari 17);
+   direction: rtl makes the top the maximum, as on a hardware EQ. */
+.mp-eq-b { display: grid; justify-items: center; gap: 4px; font-size: 11px; color: var(--mp-muted); } .mp-eq-r { writing-mode: vertical-lr; direction: rtl; height: 130px; accent-color: var(--mp-accent); }
+.mp-keys { display: grid; gap: 4px; } .mp-keyrow { display: flex; justify-content: space-between; gap: 10px; padding: 4px 0; border-bottom: 1px solid var(--mp-border); } .mp-keyrow kbd { margin-inline-start: 4px; }
+.mp-about dt { color: var(--mp-muted); font-size: .86em; } .mp-about dd { margin: 0 0 10px; }
+
+/* studio */
+.mp-skinlist { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.mp-skin { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 12px; border: 2px solid; cursor: pointer; } .mp-skin.mp-on { outline: 3px solid var(--mp-accent); outline-offset: 2px; }
+.mp-skin i { width: 14px; height: 14px; border-radius: 50%; }
+.mp-skin-edit, .mp-layout-edit, .mp-cover-edit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 400px); gap: 24px; align-items: start; }
+.mp-cover-edit { grid-template-columns: minmax(260px, 420px) 1fr minmax(160px, 260px); }
+/* The preview uses the same --mp-* tokens as the app; the skin editor writes edited values on this element, so the
+   preview changes while the app keeps its current skin. */
+.mp-skin-preview { position: sticky; top: 0; padding: 20px; border-radius: var(--mp-radius-l); background: var(--mp-bg); color: var(--mp-text); border: 1px solid var(--mp-border); font-family: var(--mp-font); display: grid; gap: 12px; }
+.mp-pv-card { display: grid; gap: 8px; justify-items: center; padding: 20px; border-radius: var(--mp-radius-l); background: var(--mp-surface); box-shadow: var(--mp-shadow); }
+.mp-pv-art { width: 160px; height: 160px; border-radius: var(--mp-cover-radius); background: linear-gradient(135deg, var(--mp-accent), var(--mp-accent-2)); }
+.mp-pv-card span { color: var(--mp-muted); } .mp-pv-seek { width: 100%; height: var(--mp-seek-h); border-radius: 999px; background: var(--mp-surface-2); } .mp-pv-seek i { display: block; width: 40%; height: 100%; border-radius: inherit; background: var(--mp-accent); }
+.mp-pv-btns { display: flex; gap: 16px; align-items: center; } .mp-pv-play { display: grid; place-items: center; width: 56px; height: 56px; border-radius: var(--mp-btn-radius); background: var(--mp-accent); color: var(--mp-on-accent); }
+.mp-contrast { display: flex; flex-wrap: wrap; gap: 8px; font-size: .8em; }
+.mp-layout-preview { border: 1px solid var(--mp-border); border-radius: var(--mp-radius-l); padding: 16px; max-height: 80vh; overflow: auto; }
+.mp-sticky { position: sticky; top: 0; }
+.mp-rowsedit { display: grid; gap: 12px; } .mp-rowedit { padding: 12px; border-radius: var(--mp-radius); background: var(--mp-surface); display: grid; gap: 8px; }
+.mp-rowedit-h { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; } .mp-rowedit-h .ed-select { width: auto; }
+.mp-ctrls { display: flex; flex-wrap: wrap; gap: 8px; min-height: 48px; padding: 6px; border: 1px dashed var(--mp-border); border-radius: 8px; }
+.mp-ctrl { display: grid; gap: 4px; padding: 8px; border-radius: 8px; background: var(--mp-surface-2); cursor: grab; font-size: .86em; }
+.mp-ctrl-opts { display: flex; flex-wrap: wrap; gap: 4px; } .mp-ctrl-opts .ed-select { width: auto; font-size: .9em; padding: 2px 6px; } .mp-ctrl-a { display: flex; gap: 2px; }
+.mp-palette { display: flex; flex-wrap: wrap; gap: 6px; }
+.mp-cover-big svg { width: 100%; height: auto; border-radius: var(--mp-cover-radius); box-shadow: var(--mp-shadow); display: block; }
+.mp-cover-current .mp-cover { width: 100%; border-radius: var(--mp-cover-radius); }
+.mp-sync-line { font-size: 1.4em; font-weight: 700; text-align: center; padding: 20px; }
+
+/* ---- mobile ---- */
+/* Mobile: one column; the sidebar becomes bottom tabs, the bar keeps cover + play only. Mode switching redefines the
+   shell variables (--mp-tabs-h, --mp-bar-h) so fixed overlays that read them move automatically. */
+.mp-mtabs { display: none; }
+.mp-app[data-view="mobile"] { --mp-tabs-h: 60px; --mp-bar-h: 64px; grid-template-columns: 1fr; grid-template-rows: var(--mp-top-h) 1fr var(--mp-bar-h) var(--mp-tabs-h); grid-template-areas: 'top' 'main' 'bar' 'tabs'; }
+.mp-app[data-view="mobile"] .mp-side, .mp-app[data-view="mobile"] .mp-viewseg, .mp-app[data-view="mobile"] .mp-lang, .mp-app[data-view="mobile"] .mp-status span:last-child { display: none; }
+/* env(safe-area-inset-bottom): keeps tabs above the iPhone home indicator; needs viewport-fit=cover (index.html). */
+.mp-app[data-view="mobile"] .mp-mtabs { grid-area: tabs; display: grid; grid-template-columns: repeat(5, 1fr); border-top: 1px solid var(--mp-border); background: var(--mp-surface); padding-bottom: env(safe-area-inset-bottom); }
+.mp-app[data-view="mobile"] .mp-mtabs .mp-nav-a { flex-direction: column; gap: 2px; font-size: 11px; justify-content: center; border-radius: 0; padding: 6px 2px; }
+.mp-app[data-view="mobile"] .mp-bar { grid-template-columns: 1fr auto; gap: 8px; padding: 0 8px; }
+.mp-app[data-view="mobile"] .mp-bar-progress { display: block; }
+/* Positional hiding (:first-child, :nth-child(2), :last-child of the transport) assumes the bar's button order from
+   nowplaying.js; reordering the bar's buttons there changes what mobile hides. */
+.mp-app[data-view="mobile"] .mp-bar-center .mp-seek, .mp-app[data-view="mobile"] .mp-bar-tools, .mp-app[data-view="mobile"] .mp-bar-ctrls > :first-child, .mp-app[data-view="mobile"] .mp-bar-ctrls > :last-child, .mp-app[data-view="mobile"] .mp-bar-ctrls > :nth-child(2) { display: none; }
+.mp-app[data-view="mobile"] .mp-bar-cover { width: 44px; height: 44px; }
+.mp-app[data-view="mobile"] .mp-top { padding: 0 8px; gap: 4px; }
+.mp-app[data-view="mobile"] .mp-hero { grid-template-columns: 1fr; justify-items: center; text-align: center; } .mp-app[data-view="mobile"] .mp-hero-art { width: min(70vw, 300px); }
+.mp-app[data-view="mobile"] .mp-hero .mp-actions, .mp-app[data-view="mobile"] .mp-hero .mp-chips { justify-content: center; }
+.mp-app[data-view="mobile"] .mp-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+.mp-app[data-view="mobile"] .mp-np-main.mp-with-side { grid-template-columns: 1fr; } .mp-app[data-view="mobile"] .mp-np-side { display: none; }
+.mp-app[data-view="mobile"] .mp-ws, .mp-app[data-view="mobile"] .mp-skin-edit, .mp-app[data-view="mobile"] .mp-layout-edit, .mp-app[data-view="mobile"] .mp-cover-edit { grid-template-columns: 1fr; }
+.mp-app[data-view="mobile"] .mp-tt-h { display: none; } .mp-app[data-view="mobile"] .mp-tt-r { grid-template-columns: 40px 1fr 1fr; }
+.mp-app[data-view="mobile"] .mp-tt-r > :nth-child(n+5) { grid-column: 2 / -1; }
+.mp-app[data-view="mobile"] .mp-tool { grid-template-columns: 1fr; }
+.mp-app[data-view="mobile"] .mp-row-d, .mp-app[data-view="mobile"] .mp-row-r .mp-pres { display: none; }
+.mp-app[data-view="mobile"] .mp-np-head { padding-top: max(10px, env(safe-area-inset-top)); }
+
+/* ---- home theatre (10-foot) ---- */
+/* Home theatre (10-foot UI): bigger type and cards, and a strong focus ring with a slight scale, because a TV remote
+   moves focus with arrows and the user sits far away; :focus (not :focus-visible) since arrow navigation must always
+   show where focus is. */
+.mp-app[data-view="theatre"] { --mp-side-w: 260px; font-size: 1.25em; --mp-bar-h: 96px; }
+.mp-app[data-view="theatre"] .mp-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 22px; }
+.mp-app[data-view="theatre"] .mp-shelf { grid-auto-columns: 220px; gap: 22px; }
+.mp-app[data-view="theatre"] .mp-card:focus, .mp-app[data-view="theatre"] .mp-row:focus, .mp-app[data-view="theatre"] .mp-nav-a:focus, .mp-app[data-view="theatre"] .mp-tile:focus, .mp-app[data-view="theatre"] button:focus { outline: 4px solid var(--mp-accent); outline-offset: 3px; transform: scale(1.03); transition: transform .12s; z-index: 1; }
+.mp-app[data-view="theatre"] .mp-top .mp-search { font-size: 1em; }
+.mp-app[data-view="theatre"] .mp-cbtn-l { width: 64px; height: 64px; }
+
+/* ---- mini player ---- */
+/* Mini player (#mini, or the Electron mini window): the shell grid is dropped, only .mp-mini is rendered. */
+.mp-app[data-view="mini"] { display: block; height: 100dvh; }
+.mp-mini { display: grid; grid-template-columns: auto 1fr; grid-template-rows: 1fr auto; gap: 6px 12px; padding: 10px; height: 100%; box-sizing: border-box; background: var(--mp-surface); }
+.mp-mini-cover { grid-row: 1 / span 2; width: 96px; height: 96px; max-height: calc(100dvh - 20px); aspect-ratio: 1; border-radius: 10px; object-fit: cover; background: var(--mp-surface-2); }
+.mp-mini-body { min-width: 0; display: grid; align-content: center; gap: 2px; } .mp-mini-t { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mp-mini-s { color: var(--mp-muted); font-size: .86em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mp-mini-prog { height: 6px; border-radius: 3px; background: var(--mp-surface-2); cursor: pointer; margin-top: 6px; } .mp-mini-prog i { display: block; height: 100%; width: 0; border-radius: inherit; background: var(--mp-accent); }
+.mp-mini-ctrls { display: flex; align-items: center; gap: 4px; }
+/* Electron frameless window: the body drags the window, interactive parts opt out with no-drag or they stop receiving
+   clicks. */
+.mp-draggable .mp-mini { -webkit-app-region: drag; } .mp-draggable .mp-mini button, .mp-draggable .mp-mini-prog { -webkit-app-region: no-drag; }

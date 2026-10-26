@@ -1,0 +1,1 @@
+const optList=(...vals)=>vals.map((v)=>({v,l:'o.'+v}));const numOpts=(...vals)=>vals.map((v)=>({v,l:String(v)}));const ALIGN3=optList('left','center','right');export{optList,numOpts,ALIGN3};

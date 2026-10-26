@@ -1,0 +1,558 @@
+// textile-studio/panels.js - the panels of the steps: Body (sex, size, weight, age, pose, features, measurements and
+// the nearest size), Template (the outfit in stacking order, the garment gallery, options), Details (layered
+// components inside -> outside with their options), Fabric (a fabric per material slot: preset, colours, weave or knit,
+// weaving draft, jacquard, physical properties), Print (repeat, motifs, colourways, placement prints), Export, and the
+// panel of the Mockup mode. Every edit goes through app.commit (undo history); sliders merge into one step.
+//
+// Design rules of this module:
+// - Each panel is a pure function app -> array of DOM nodes, rebuilt from the project on every change (main.js
+//   renderPanel). No panel keeps state between renders; a closure captures the values of THIS render only.
+// - Edits mutate the draft copy q handed to commit, never the rendered project p (p is a history snapshot).
+// - Every slider passes a merge key ('height', 'd3-width' ...) and live: true. Merge: one undo step per drag. Live:
+//   main.js skips the panel rebuild, which would otherwise replace the input under the pointer and end the drag.
+//   Keys include an index or id where several sliders of the same kind exist, so dragging two different sliders in a
+//   row does not merge into one step.
+// - data-k / data-action / data-export attributes are stable hooks for e2e.js; labels are translated and cannot be.
+
+import { h } from '../ui/dom.js';
+import { t } from '../ui/i18n.js';
+import { iconEl } from '../ui/icons.js';
+import { field, seg, select, toggle, button, colorInput, dropZone, textInput } from '../ui/app.js';
+import { openMenu } from '../ui/overlays.js';
+import { BODY_PRESETS, FEATURES, POSES, LIMITS, bmiOf, bmiCategory } from '../body/body.js';
+import { MEASUREMENTS } from '../body/measure.js';
+import { SIZE_SYSTEMS } from '../body/sizes.js';
+import { GARMENTS, OUTFITS, OUTFIT_INFO, garmentOptions } from '../garment/garments.js';
+import { DETAILS, STACK, detailChoices } from '../garment/details.js';
+import { FABRICS } from '../fabric/fabric.js';
+import { WEAVES, KNITS } from '../fabric/weave.js';
+import { MOTIFS } from '../motif/motifs.js';
+import { REPEATS, DEFAULT_DESIGN, normalizeDesign, seamlessCheck } from '../motif/repeat.js';
+import { DYES } from '../fabric/dye.js';
+import { checkSeams } from '../garment/seams.js';
+import { LAYER_SHAPES } from '../garment/edits.js';
+import { PLACES } from '../garment/costume.js';
+import { newGarment, outfitOf, tuxedoOutfit, uid } from './state.js';
+import { draftOf, measurementsOf, sizeOf, materialsOf, fabricOf, layersOf, thicknessOf, usageOf } from './compute.js';
+import { garmentName, detailName, variantName, materialName, pieceName } from './names.js';
+
+// fmt: rounding for display only (the model keeps full precision).
+const fmt = (v, d = 1) => (Math.round(v * 10 ** d) / 10 ** d).toString();
+const card = (titleKey, ...kids) => h('section', { class: 'ap-card tx-card' }, h('h2', { class: 'ap-card-h' }, t(titleKey)), ...kids);
+
+// Range with a number readout; live input merges into one undo step.
+// The readout is updated directly on input (the panel is not rebuilt during a live drag, see header).
+// Range with a number readout; live input merges into one undo step.
+function slider(label, value, o, onInput) {
+  const out = h('output', { class: 'ed-range-val' }, (o.show ? o.show(value) : fmt(value, o.digits ?? 1)) + (o.unit || ''));
+  const r = h('input', { type: 'range', class: 'ed-range', min: o.min, max: o.max, step: o.step || 1, value, 'aria-label': t(label) });
+  r.addEventListener('input', () => { out.textContent = (o.show ? o.show(+r.value) : fmt(+r.value, o.digits ?? 1)) + (o.unit || ''); onInput(+r.value); });
+  const f = field(label, h('div', { class: 'ed-range-wrap' }, r, out));
+  f.dataset.k = o.key || label;
+  return f;
+}
+
+// --- body ---------------------------------------------------------------------------------------------------------
+
+export function bodyPanel(app) {
+  const p = app.project(), b = p.body;
+  // set(): body edits; a merge key also marks the commit live (sliders), discrete controls commit normally.
+  const set = (fn, merge) => app.commit('body', (q) => fn(q.body), { merge, live: !!merge });
+  const bmi = bmiOf(b);
+  // Presets replace the body parameters and reset features and measurement overrides: a preset is a starting point,
+  // mixing it with overrides of a previous body would give a body nobody chose.
+  const preset = select([{ v: '', l: 'body.presetPick' }, ...Object.keys(BODY_PRESETS).map((k) => ({ v: k, l: 'preset.' + k }))], '', (v) => {
+    if (!v) return;
+    const pr = BODY_PRESETS[v];
+    app.commit('body', (q) => { q.body = { ...q.body, ...pr, features: { ...Object.fromEntries(FEATURES.map((f) => [f, 0])), ...(pr.features || {}) }, overrides: {} }; });
+  });
+  const main = card('body.main',
+    field('body.preset', preset),
+    field('body.sex', seg([{ v: 'female', l: 'sex.female' }, { v: 'male', l: 'sex.male' }], b.sex, (v) => set((x) => { x.sex = v; }), 'body.sex')),
+    slider('body.height', b.height, { min: LIMITS.height[0], max: LIMITS.height[1], step: 0.5, unit: ' cm', key: 'height' }, (v) => set((x) => { x.height = v; }, 'height')),
+    slider('body.weight', b.weight, { min: LIMITS.weight[0], max: LIMITS.weight[1], step: 0.5, unit: ' kg', key: 'weight' }, (v) => set((x) => { x.weight = v; }, 'weight')),
+    h('p', { class: 'ed-hint tx-bmi', dataset: { bmi: fmt(bmi) } }, t('body.bmi', { bmi: fmt(bmi), cat: t('bmi.' + bmiCategory(bmi, b.age)) })),
+    slider('body.age', b.age, { min: LIMITS.age[0], max: LIMITS.age[1], step: 1, digits: 0, key: 'age' }, (v) => set((x) => { x.age = v; }, 'age')),
+    field('body.pose', seg(POSES.map((v) => ({ v, l: 'pose.' + v })), b.pose, (v) => set((x) => { x.pose = v; }), 'body.pose')));
+  const feats = card('body.features', ...FEATURES.map((f) => slider('feat.' + f, b.features[f], { min: -1, max: 1, step: 0.05, show: (v) => (v > 0 ? '+' : '') + Math.round(v * 100) + ' %', key: 'feat-' + f }, (v) => set((x) => { x.features[f] = v; }, 'feat-' + f))));
+  // Measurements: editable ones are number fields that override; others read only.
+  // Grid with display: contents rows (see app.css .tx-meas). An override is committed on change (blur / Enter), not on
+  // input: a half-typed '8' of '86' must not re-draft everything. Values <= 0 or non-numeric are ignored silently.
+  // Measurements: editable ones are number fields that override; others read only.
+  const m = measurementsOf(p);
+  const groups = ['main', 'head', 'upper', 'arm', 'leg', 'heights'];
+  const table = h('div', { class: 'tx-meas' });
+  for (const g of groups) {
+    table.append(h('div', { class: 'tx-meas-h' }, t('mg.' + g)));
+    for (const d of MEASUREMENTS.filter((x) => x.group === g && (!x.sex || x.sex === b.sex))) {
+      const over = b.overrides[d.id] != null;
+      const v = m[d.id];
+      const ctl = d.editable
+        ? h('input', { type: 'number', class: 'ed-input tx-num', step: 0.1, min: 1, max: 300, value: fmt(v), 'aria-label': t('m.' + d.id), dataset: { m: d.id },
+          onchange: (e) => { const n = Number(e.target.value); if (Number.isFinite(n) && n > 0) app.commit('measure', (q) => { q.body.overrides[d.id] = n; }); } })
+        : h('span', { class: 'tx-ro' }, fmt(v));
+      table.append(h('div', { class: 'tx-meas-row' + (over ? ' tx-over' : ''), title: d.def },
+        h('span', { class: 'tx-meas-n' }, t('m.' + d.id)), ctl, h('span', { class: 'tx-unit' }, 'cm'),
+        over ? h('button', { type: 'button', class: 'ed-iconbtn', title: t('body.reset'), 'aria-label': t('body.reset'), onclick: () => app.commit('measure', (q) => { delete q.body.overrides[d.id]; }) }, iconEl('undo')) : h('span')));
+    }
+  }
+  // Nearest size and the per-measurement difference to it; 'between' when the body sits between two sizes.
+  const sz = sizeOf(p);
+  const size = card('body.size',
+    field('body.system', select(SIZE_SYSTEMS.map((s) => ({ v: s, l: '=' + s })), p.view.sizeSystem, (v) => app.commit('view', (q) => { q.view.sizeSystem = v; }))),
+    h('p', { class: 'tx-size', dataset: { size: sz.label } }, h('b', {}, t('body.nearest', { size: sz.label })), ' · ', Object.entries(sz.labels).map(([k, v]) => `${k} ${v}`).join(' · ')),
+    h('p', { class: 'ed-hint' }, Object.entries(sz.delta).map(([k, v]) => `${t('m.' + k)} ${v >= 0 ? '+' : ''}${fmt(v)} cm`).join(' · '), sz.second ? ' · ' + t('body.between', { size: sz.second.label }) : ''),
+    Object.keys(b.overrides).length ? button('body.resetAll', 'undo', () => app.commit('measure', (q) => { q.body.overrides = {}; })) : null);
+  return [main, card('body.measurements', table), size, feats];
+}
+
+// --- template -------------------------------------------------------------------------------------------------------
+
+// The template gallery by group; the outfits of the catalogue by group.
+// The template gallery by group; the outfits of the catalogue by group.
+const GALLERY_GROUPS = [
+  ['merch', ['tshirt', 'longsleeve', 'tank', 'sweatshirt', 'hoodie', 'tote']],
+  ['classic', ['shirt', 'dress', 'skirt', 'trousers']],
+  ['tailoring', ['waistcoat', 'jacket', 'cummerbund']],
+  ['outerwear', ['bomber', 'parka', 'puffer', 'trucker']],
+  ['georgian', ['chokha', 'arkhaluk', 'kartuli', 'belt']],
+  ['slavic', ['kosovorotka', 'rubakha', 'sarafan', 'kaftan']],
+];
+const GALLERY = GALLERY_GROUPS.flatMap(([, ids]) => ids);
+const OUTFIT_GROUPS = ['tailoring', 'classic', 'georgian', 'slavic', 'outerwear'];
+const sexMark = (s) => (s === 'female' ? ' ♀' : s === 'male' ? ' ♂' : '');
+
+export function templatePanel(app) {
+  const p = app.project();
+  const g = p.outfit[p.active];
+  // The outfit, inside -> outside. Order IS the layering (state.js / compute.js layersOf): moving a garment up or
+  // down changes what it is drafted over. The active index follows the moved garment.
+  // The outfit, inside -> outside.
+  const list = h('ol', { class: 'tx-outfit' }, p.outfit.map((x, i) => h('li', { class: 'tx-outfit-row' + (i === p.active ? ' tx-on' : ''), dataset: { i: String(i), g: x.garment } },
+    h('button', { type: 'button', class: 'tx-link', onclick: () => app.commit('active', (q) => { q.active = i; }) }, `${i + 1}. ${garmentName(x.garment)}`),
+    h('span', { class: 'ed-spacer' }),
+    h('button', { type: 'button', class: 'ed-iconbtn', title: t('outfit.in'), 'aria-label': t('outfit.in'), disabled: i === 0, onclick: () => app.commit('outfit', (q) => { [q.outfit[i - 1], q.outfit[i]] = [q.outfit[i], q.outfit[i - 1]]; q.active = i - 1; }) }, iconEl('up')),
+    h('button', { type: 'button', class: 'ed-iconbtn', title: t('outfit.out'), 'aria-label': t('outfit.out'), disabled: i === p.outfit.length - 1, onclick: () => app.commit('outfit', (q) => { [q.outfit[i + 1], q.outfit[i]] = [q.outfit[i], q.outfit[i + 1]]; q.active = i + 1; }) }, iconEl('down')),
+    h('button', { type: 'button', class: 'ed-iconbtn', title: t('outfit.remove'), 'aria-label': t('outfit.remove'), disabled: p.outfit.length < 2, onclick: () => app.commit('outfit', (q) => { q.outfit.splice(i, 1); q.active = Math.max(0, Math.min(q.active, q.outfit.length - 1)); }) }, iconEl('trash')))));
+  const add = h('div', { class: 'ap-row' },
+    button('outfit.add', 'plus', (e) => openMenu(e.currentTarget, GALLERY_GROUPS.flatMap(([grp, ids], k) => [...(k ? [{ sep: true }] : []), { header: true, label: t('ggroup.' + grp) }, ...ids.map((id) => ({ label: garmentName(id), action: () => app.commit('outfit', (q) => { q.outfit.push(newGarment(id, q.body.sex)); q.active = q.outfit.length - 1; }) }))]), { label: t('outfit.add') })),
+    button('outfit.tuxedo', 'star', () => app.commit('outfit', (q) => { q.outfit = tuxedoOutfit(q.body.sex); q.active = q.outfit.length - 1; })),
+    button('outfit.importDxf', 'upload', () => app.importPattern()),
+    button('outfit.ready', 'layers', (e) => openMenu(e.currentTarget, OUTFIT_GROUPS.flatMap((grp, k) => {
+      const ids = Object.keys(OUTFITS).filter((id) => (OUTFIT_INFO[id]?.group || 'tailoring') === grp);
+      return ids.length ? [...(k ? [{ sep: true }] : []), { header: true, label: t('ggroup.' + grp) }, ...ids.map((id) => ({ label: t('outfit.' + id) + sexMark(OUTFIT_INFO[id]?.sex), action: () => app.commit('outfit', (q) => { q.outfit = outfitOf(id, q.body.sex); q.active = q.outfit.length - 1; }) }))] : [];
+    }), { label: t('outfit.ready') })));
+  const outfit = card('tpl.outfit', h('p', { class: 'ed-hint' }, t('tpl.outfitHint')), list, add);
+  // Gallery: the active garment's template.
+  // Replacing a template keeps the garment id (stable identity for the 3D viewer and the selection) and the repeat
+  // design, but drops placements: print positions are relative to pieces that the new template may not have.
+  // role=radio / radiogroup: the gallery is a single choice, screen readers announce it as such.
+  const gcard = (id) => h('button', {
+    type: 'button', role: 'radio', 'aria-checked': String(id === g.garment), class: 'tx-gcard' + (id === g.garment ? ' tx-on' : ''), dataset: { garment: id },
+    onclick: () => { if (id !== g.garment) app.commit('garment', (q) => { const old = q.outfit[q.active]; q.outfit[q.active] = { ...newGarment(id, q.body.sex), id: old.id, design: old.design, placements: [] }; }); },
+  }, h('span', { class: 'tx-gicon', html: app.thumb(id) }), h('span', {}, garmentName(id)), GARMENTS[id].blank ? h('small', {}, t('tpl.blank')) : null);
+  const gallery = h('div', { class: 'tx-gallery-groups' }, GALLERY_GROUPS.map(([grp, ids]) => h('div', { class: 'tx-ggroup' },
+    h('h3', { class: 'tx-ggroup-h' }, t('ggroup.' + grp)),
+    h('div', { class: 'tx-gallery', role: 'radiogroup', 'aria-label': t('ggroup.' + grp) }, ids.map(gcard)))));
+  // Options of the active garment.
+  // Options come from the template definition (garment/garments.js): seg / toggle / slider by type, so a new option
+  // needs no UI code here.
+  const opts = garmentOptions(g.garment).map((o) => {
+    const setOpt = (v, merge) => app.commit('opt', (q) => { q.outfit[q.active].opts[o.key] = v; }, { merge, live: !!merge });
+    if (o.type === 'seg') return field('opt.' + o.key, seg(o.values.map((v) => ({ v, l: 'val.' + v })), g.opts[o.key], (v) => setOpt(v), 'opt.' + o.key));
+    if (o.type === 'toggle') return field('opt.' + o.key, toggle(g.opts[o.key], (v) => setOpt(v)));
+    return slider('opt.' + o.key, g.opts[o.key], { min: o.min, max: o.max, step: o.step, unit: o.unit ? ' ' + o.unit : '', digits: 0, key: 'opt-' + o.key }, (v) => setOpt(v, 'opt-' + o.key));
+  });
+  opts.push(slider('opt.sa', g.opts.sa ?? 1, { min: 0, max: 3, step: 0.25, unit: ' cm', digits: 2, key: 'opt-sa' }, (v) => app.commit('opt', (q) => { q.outfit[q.active].opts.sa = v; }, { merge: 'sa', live: true })));
+  return [outfit, card('tpl.gallery', gallery), card('tpl.options', h('p', { class: 'tx-sub' }, garmentName(g.garment)), ...opts), layerCard(app)];
+}
+
+// The layer of the active garment: its thickness (from the fabrics or set by hand) and the room the layers under it take.
+// Shown in mm (finer steps), stored in cm (the unit of all drafting).
+// The layer of the active garment: its thickness (from the fabrics or set by hand) and the room the layers under it take.
+function layerCard(app) {
+  const p = app.project(), i = p.active, g = p.outfit[i];
+  const own = g.thickness != null;
+  const mm = thicknessOf(p, i) * 10;
+  const under = layersOf(p)[i] || [];
+  const room = draftOf(p, i)?.m?.layers;
+  const kids = [
+    h('p', { class: 'ed-hint' }, t('thick.hint')),
+    h('p', { class: 'tx-layer-t', dataset: { mm: fmt(mm, 1) } }, t(own ? 'thick.own' : 'thick.auto', { mm: fmt(mm, 1) })),
+    field('thick.manual', toggle(own, (v) => app.commit('layer', (q) => { q.outfit[q.active].thickness = v ? Math.round(thicknessOf(q, q.active) * 100) / 100 : null; }))),
+  ];
+  if (own) kids.push(slider('thick.thickness', mm, { min: 0, max: 60, step: 0.5, unit: ' mm', key: 'layer-mm' }, (v) => app.commit('layer', (q) => { q.outfit[q.active].thickness = v / 10; }, { merge: 'layer-mm', live: true })));
+  if (under.length) {
+    kids.push(h('p', { class: 'tx-layer-under' }, t('thick.under', { list: under.map((u) => garmentName(u.garment) + ' ' + fmt(u.t * 10, 1) + ' mm').join(', ') })));
+    if (room) kids.push(h('p', { class: 'tx-layer-room', dataset: { torso: fmt(room.torso, 1) } }, t('thick.room', { torso: fmt(room.torso, 1), waist: fmt(room.waist, 1), hip: fmt(room.hip, 1), arm: fmt(room.arm, 1) })));
+  } else kids.push(h('p', { class: 'ed-hint' }, t('thick.innermost')));
+  return card('thick.title', ...kids);
+}
+
+// --- details --------------------------------------------------------------------------------------------------------
+
+export function detailsPanel(app) {
+  const p = app.project();
+  const g = p.outfit[p.active];
+  const d = draftOf(p);
+  // Details listed in stacking order (STACK, inside -> outside), filtered to those valid for this garment: details of a
+  // previous template may survive a template change in the data, but must not be shown or drafted.
+  const rows = g.details.map((c, i) => ({ c, i, def: DETAILS[c.type] })).filter((x) => x.def && x.def.garments.includes(g.garment))
+    .sort((a, b) => STACK.indexOf(a.def.layer) - STACK.indexOf(b.def.layer));
+  const setC = (i, fn, merge) => app.commit('detail', (q) => fn(q.outfit[q.active].details[i]), { merge, live: !!merge });
+  const comp = ({ c, i, def }) => {
+    const kids = [];
+    if (def.variants) kids.push(seg(def.variants.map((v) => ({ v, l: '=' + variantName(c.type, v) })), c.variant || def.variants[0], (v) => setC(i, (x) => { x.variant = v; }), 'det.variant'));
+    for (const o of def.options || []) {
+      if (o.type === 'seg') kids.push(field('dopt.' + o.key, seg(o.values.map((v) => ({ v, l: o.key === 'material' || o.key === 'facing' ? '=' + materialName(v) : 'val.' + v })), c[o.key] ?? o.def, (v) => setC(i, (x) => { x[o.key] = v; }), 'dopt.' + o.key)));
+      else kids.push(slider('dopt.' + o.key, c[o.key] ?? o.def, { min: o.min, max: o.max, step: o.step, unit: o.unit ? ' ' + o.unit : '', digits: o.step < 1 ? 1 : 0, key: `d${i}-${o.key}` }, (v) => setC(i, (x) => { x[o.key] = v; }, `d${i}-${o.key}`)));
+    }
+    return h('li', { class: 'tx-det', dataset: { type: c.type, layer: def.layer } },
+      h('div', { class: 'tx-det-h' }, h('span', { class: 'tx-layer', title: t('det.layer') }, t('layer.' + def.layer)), h('b', {}, detailName(c.type)), h('span', { class: 'ed-spacer' }),
+        h('button', { type: 'button', class: 'ed-iconbtn', title: t('det.remove'), 'aria-label': t('det.remove') + ' ' + detailName(c.type), onclick: () => app.commit('detail', (q) => { q.outfit[q.active].details.splice(i, 1); }) }, iconEl('trash'))),
+      kids.length ? h('div', { class: 'tx-det-b' }, kids) : null);
+  };
+  const inner = rows.filter((r) => r.def.category === 'inner'), outer = rows.filter((r) => r.def.category === 'outer');
+  // Add menu: each detail type once, except pockets and buttons, which a garment can have several of.
+  const choices = detailChoices(g.garment).filter((k) => k === 'pocket' || k === 'buttons' || !g.details.some((c) => c.type === k));
+  const addBtn = button('det.add', 'plus', (e) => openMenu(e.currentTarget, choices.map((k) => ({ label: detailName(k), action: () => app.commit('detail', (q) => { q.outfit[q.active].details.push({ id: uid('d'), type: k, ...(DETAILS[k].variants ? { variant: DETAILS[k].variants[0] } : {}) }); }) })), { label: t('det.add') }));
+  addBtn.dataset.action = 'add-detail';
+  const notes = d.notes.length ? h('p', { class: 'ed-hint tx-warn' }, d.notes.join(' · ')) : null;
+  return [
+    pieceEditor(app, d),
+    card('det.stack', h('p', { class: 'ed-hint' }, t('det.stackHint')), h('ol', { class: 'tx-stack' }, STACK.map((l) => h('li', { class: rows.some((r) => r.def.layer === l) || d.pieces.some((pc) => pc.layer === l) ? 'tx-on' : '' }, t('layer.' + l))))),
+    card('det.outer', h('ul', { class: 'tx-dets' }, outer.map(comp)), addBtn),
+    card('det.inner', h('ul', { class: 'tx-dets' }, inner.map(comp))),
+    notes,
+  ];
+}
+
+// The selected piece of the pattern: its material slot (and the slot's colour and dye), the layers laid on it with
+// their shape, size, position, material and side; new layers as rectangles, ellipses, drawn shapes or presets.
+// Colour / dye edits apply to the MATERIAL SLOT, not the piece: every piece of that slot changes. That is how real
+// garments work (one fabric per slot); a piece-specific colour is made by assigning the piece another slot.
+// The selected piece of the pattern: its material slot (and the slot's colour and dye), the layers laid on it with
+// their shape, size, position, material and side; new layers as rectangles, ellipses, drawn shapes or presets.
+const SLOT_CHOICES = ['shell', 'contrast', 'satin', 'lining', 'rib', 'accent1', 'accent2', 'accent3'];
+function pieceEditor(app, d) {
+  const p = app.project();
+  const sel = app.selected();
+  const pc = sel && d.pieces.find((x) => x.id === sel.piece);
+  if (!pc) return card('pe.title', h('p', { class: 'ed-hint' }, t('pe.pick')));
+  const g = p.outfit[p.active];
+  const edits = g.edits || { materials: {}, layers: [] };
+  const setE = (fn, merge) => app.commit('edit', (q) => { const x = q.outfit[q.active]; x.edits = x.edits || { materials: {}, layers: [] }; fn(x.edits); }, { merge, live: !!merge });
+  const own = edits.materials[pc.id];
+  const slots = [...new Set([...SLOT_CHOICES, pc.material])];
+  const fab = fabricOf(p, p.active, pc.material);
+  const kids = [
+    h('p', { class: 'tx-sub', dataset: { piece: pc.id } }, pieceName(pc.name || pc.id)),
+    field('pe.material', select(slots.map((m) => ({ v: m, l: '=' + materialName(m) })), pc.material, (v) => setE((x) => { x.materials[pc.id] = v; }))),
+    own ? h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => setE((x) => { delete x.materials[pc.id]; }) }, iconEl('undo'), t('pe.materialReset')) : null,
+    // A new colour removes warp / weft orders: a plain colour would otherwise be hidden under the old yarn colours.
+    field('pe.color', colorInput(fab.color, (v) => app.commit('fabric', (q) => { const x = q.outfit[q.active]; x.fabrics[pc.material] = { ...(x.fabrics[pc.material] || { preset: fab.preset }), color: v }; delete x.fabrics[pc.material].warp; delete x.fabrics[pc.material].weft; }, { merge: 'pe-color', live: true }))),
+    field('pe.dye', seg(DYES.map((k) => ({ v: k, l: 'dye.' + k })), fab.dye?.kind || 'none', (v) => app.commit('fabric', (q) => { const x = q.outfit[q.active]; const cur = x.fabrics[pc.material] || { preset: fab.preset }; x.fabrics[pc.material] = { ...cur, dye: { ...(cur.dye || {}), kind: v } }; }), 'pe.dye')),
+    h('p', { class: 'ed-hint' }, t('pe.slotHint')),
+  ];
+  // An imported piece: where on the body the 3D view wraps it, which way round, how far down.
+  // The index is found by the sanitised name (as garment/* builds piece ids) or by position as a fallback.
+  // An imported piece: where on the body the 3D view wraps it, which way round, how far down.
+  if (g.garment === 'imported' && pc.meta?.imported) {
+    const k = (g.imported?.pieces || []).findIndex((x, i) => (String(x.name || 'piece').replace(/[^\w-]/g, '_').slice(0, 30) || 'piece') === pc.id.replace(/_\d+$/, '') || i === d.pieces.indexOf(pc));
+    const setP = (fn, merge) => app.commit('imported', (q) => { const x = q.outfit[q.active].imported.pieces[k]; if (x) fn(x); }, { merge, live: !!merge });
+    if (k >= 0) {
+      const ip = g.imported.pieces[k];
+      kids.push(h('h3', { class: 'tx-ggroup-h' }, t('pe.place3d')),
+        field('pe.place', select(PLACES.map((v) => ({ v, l: 'place.' + v })), pc.meta.place || 'none', (v) => setP((x) => { x.place = v; }))),
+        field('pe.flip', toggle(!!ip.flip, (v) => setP((x) => { x.flip = v; }))),
+        slider('pe.drop', ip.drop ?? pc.arrange?.drop ?? 0, { min: -20, max: 60, step: 1, unit: ' cm', digits: 0, key: 'pe-drop-' + k }, (v) => setP((x) => { x.drop = v; }, 'pe-drop-' + k)),
+        h('p', { class: 'ed-hint' }, t('pe.placeHint')));
+    }
+  }
+  // Layers on this piece.
+  const layers = edits.layers.map((l, i) => ({ l, i })).filter(({ l }) => l.piece === pc.id);
+  const row = ({ l, i }) => {
+    const set = (fn, merge) => setE((x) => fn(x.layers[i]), merge);
+    const r = (k, mn, mx, unit = ' cm', step = 0.5) => slider('pe.' + k, l[k], { min: mn, max: mx, step, unit, key: `pe-${l.id}-${k}` }, (v) => set((x) => { x[k] = v; }, `pe-${l.id}-${k}`));
+    return h('li', { class: 'tx-det' + (sel.layer === l.id ? ' tx-on' : ''), dataset: { layer: l.id } },
+      h('div', { class: 'tx-det-h' }, h('b', {}, l.name || t('pe.shape.' + l.shape)), h('span', { class: 'ed-spacer' }),
+        h('button', { type: 'button', class: 'ed-iconbtn', title: t('pe.remove'), 'aria-label': t('pe.remove'), onclick: () => setE((x) => { x.layers.splice(i, 1); }) }, iconEl('trash'))),
+      h('div', { class: 'tx-det-b' },
+        field('pe.layerMaterial', select(SLOT_CHOICES.map((m) => ({ v: m, l: '=' + materialName(m) })), l.material, (v) => set((x) => { x.material = v; }))),
+        field('pe.side', seg([{ v: 'both', l: 'pe.sideBoth' }, { v: 'R', l: 'pe.sideR' }, { v: 'L', l: 'pe.sideL' }], l.side, (v) => set((x) => { x.side = v; }), 'pe.side')),
+        l.shape !== 'poly' ? r('w', 1, 120) : null, l.shape !== 'poly' ? r('h', 1, 120) : null, r('x', -40, 160), r('y', -40, 200), r('rot', -180, 180, '°', 1)));
+  };
+  // Presets: sizes relative to the piece's bounding box, capped in cm (a yoke deeper than 10 cm is no longer a yoke).
+  // The applique is a 5-point star: 10 vertices alternating outer / inner radius (0.45), starting at the top (-PI/2).
+  const add = (shape, o = {}) => app.addLayer(pc.id, shape, o);
+  const xs = pc.edges.flatMap((e) => e.pts.map((q) => q[0])), ys = pc.edges.flatMap((e) => e.pts.map((q) => q[1]));
+  const bx = { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+  const W = bx.x1 - bx.x0, H = bx.y1 - bx.y0;
+  const presets = [
+    { k: 'yoke', fn: () => add('rect', { name: t('pe.preset.yoke'), material: 'contrast', box: { x: bx.x0 + W / 2, y: bx.y0 + Math.min(10, H * 0.18) / 2 + 1, w: W * 0.92, h: Math.min(10, H * 0.18) } }) },
+    { k: 'band', fn: () => add('rect', { name: t('pe.preset.band'), material: 'contrast', box: { x: bx.x0 + W / 2, y: bx.y1 - 6, w: W * 0.96, h: 6 } }) },
+    { k: 'patch', fn: () => add('ellipse', { name: t('pe.preset.patch'), material: 'accent1', box: { x: bx.x0 + W / 2, y: bx.y0 + H * 0.6, w: Math.min(10, W * 0.5), h: Math.min(14, H * 0.3) } }) },
+    { k: 'applique', fn: () => add('poly', { name: t('pe.preset.applique'), material: 'accent2', pts: Array.from({ length: 10 }, (_, k) => { const a = (k / 10) * Math.PI * 2 - Math.PI / 2, rr = (k % 2 ? 0.45 : 1) * Math.min(W, H) * 0.18; return [bx.x0 + W / 2 + rr * Math.cos(a), bx.y0 + H * 0.4 + rr * Math.sin(a)]; }) }) },
+  ];
+  const addBar = h('div', { class: 'ap-actions tx-pe-add' },
+    ...LAYER_SHAPES.map((sh) => button('pe.add.' + sh, sh === 'rect' ? 'square' : sh === 'ellipse' ? 'circle' : 'edit', () => (sh === 'poly' ? app.startDraw(pc.id) : add(sh)))),
+    button('pe.presets', 'layers', (e) => openMenu(e.currentTarget, presets.map((x) => ({ label: t('pe.preset.' + x.k), action: x.fn })), { label: t('pe.presets') })));
+  // Reshaped outline: the moved handles of this piece and the seams that no longer match.
+  // A moved handle changes an edge length; checkSeams reports seams whose two sides now differ, so the user sees the
+  // consequence of a reshape before cutting cloth.
+  // Reshaped outline: the moved handles of this piece and the seams that no longer match.
+  const handles = (edits.shape && edits.shape[pc.id]) || [];
+  const shapeRows = handles.map((hd, k) => h('li', { class: 'tx-handle-row' },
+    h('span', {}, t(hd.at <= 0 ? 'pe.corner' : 'pe.edgeMid', { edge: hd.edge })), h('span', { class: 'tx-num' }, `${fmt(hd.dx, 1)}, ${fmt(hd.dy, 1)} cm`),
+    slider('pe.falloff', hd.r || 0, { min: 0, max: 60, step: 1, unit: ' cm', digits: 0, key: `pe-r-${pc.id}-${k}` }, (v) => setE((x) => { x.shape[pc.id][k].r = v; }, `pe-r-${pc.id}-${k}`)),
+    h('button', { type: 'button', class: 'ed-iconbtn', title: t('pe.handleReset'), 'aria-label': t('pe.handleReset'), onclick: () => setE((x) => { x.shape[pc.id].splice(k, 1); if (!x.shape[pc.id].length) delete x.shape[pc.id]; }) }, iconEl('undo'))));
+  const touches = (id) => { const def = d.seams.find((x) => x.id === id); return !!def && [...def.a, ...def.b].some(([pid]) => pid === pc.id); };
+  const bad = checkSeams(d).filter((s) => !s.ok && touches(s.id));
+  return card('pe.title', ...kids.filter(Boolean),
+    h('h3', { class: 'tx-ggroup-h' }, t('pe.shape')),
+    h('p', { class: 'ed-hint' }, t('pe.shapeHint')),
+    handles.length ? h('ul', { class: 'tx-dets tx-handles' }, shapeRows) : null,
+    handles.length ? h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => setE((x) => { delete x.shape[pc.id]; }) }, iconEl('undo'), t('pe.shapeReset')) : null,
+    bad.length ? h('p', { class: 'ed-hint tx-warn', dataset: { seams: String(bad.length) } }, t('pe.seamsOff', { list: bad.map((s) => `${s.id} ${s.diff > 0 ? '+' : ''}${fmt(s.diff, 1)} cm`).join(', ') })) : null,
+    h('h3', { class: 'tx-ggroup-h' }, t('pe.layers')),
+    layers.length ? h('ul', { class: 'tx-dets' }, layers.map(row)) : h('p', { class: 'ed-hint' }, t('pe.noLayers')),
+    addBar,
+    h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => app.selectPiece(null) }, iconEl('close'), t('pe.deselect')));
+}
+
+// --- fabric ---------------------------------------------------------------------------------------------------------
+
+export function fabricPanel(app) {
+  const p = app.project();
+  const g = p.outfit[p.active];
+  const mats = materialsOf(p);
+  let slot = app.fabricSlot();
+  if (!mats.includes(slot)) slot = 'shell';
+  const f = fabricOf(p, p.active, slot);
+  // setF edits a deep copy of the slot's fabric and writes it back: the stored fabric may be shared with the
+  // project's raw object, and partial in-place edits would leak into the rendered snapshot.
+  const setF = (fn, merge) => app.commit('fabric', (q) => { const x = q.outfit[q.active]; const cur = JSON.parse(JSON.stringify(x.fabrics[slot] || { preset: f.preset })); fn(cur); x.fabrics[slot] = cur; }, { merge, live: !!merge });
+  const slots = seg(mats.map((m) => ({ v: m, l: '=' + materialName(m) })), slot, (v) => { app.setFabricSlot(v); app.refreshPanel(); }, 'fab.slot');
+  const groups = [...new Set(Object.values(FABRICS).map((x) => x.group))];
+  // Choosing a preset resets the slot to that preset alone: custom colours / structure of the old preset rarely make
+  // sense for the new one.
+  const presetSel = h('select', { class: 'ed-input ed-select', 'aria-label': t('fab.preset'), onchange: (e) => app.commit('fabric', (q) => { q.outfit[q.active].fabrics[slot] = { preset: e.target.value }; }) },
+    groups.map((gr) => h('optgroup', { label: t('fg.' + gr) }, Object.keys(FABRICS).filter((k) => FABRICS[k].group === gr).map((k) => h('option', { value: k, selected: k === f.preset }, t('fab.' + k))))));
+  const st = f.structure;
+  // Structure type switch: each type starts from a sensible default (2/2 twill, plain jersey, a 32x32 satin jacquard).
+  const structure = [field('fab.type', seg([{ v: 'woven', l: 'fab.woven' }, { v: 'knit', l: 'fab.knit' }, { v: 'jacquard', l: 'fab.jacquard' }], st.type, (v) => setF((x) => { x.structure = v === 'knit' ? { type: 'knit', knit: 'jersey' } : v === 'jacquard' ? { type: 'jacquard', w: 32, h: 32, bitmap: '', figure: 'satin', ground: 'satin' } : { type: 'woven', weave: 'twill', params: { up: 2, down: 2 } }; }), 'fab.type'))];
+  if (st.type === 'woven') {
+    structure.push(field('fab.weave', select([...Object.keys(WEAVES), 'custom'].map((k) => ({ v: k, l: 'weave.' + k })), st.weave, (v) => setF((x) => { x.structure = v === 'custom' ? { type: 'woven', weave: 'custom', w: 4, h: 4 } : { type: 'woven', weave: v, params: {} }; }))));
+    for (const prm of WEAVES[st.weave] || []) {
+      if (prm.values) structure.push(field('wp.' + prm.key, seg(prm.values.map((v) => ({ v, l: '=' + v })), st.params?.[prm.key] ?? prm.def, (v) => setF((x) => { x.structure.params = { ...(x.structure.params || {}), [prm.key]: v }; }), 'wp.' + prm.key)));
+      else structure.push(slider('wp.' + prm.key, st.params?.[prm.key] ?? prm.def, { min: prm.min, max: prm.max, step: 1, digits: 0, key: 'wp-' + prm.key }, (v) => setF((x) => { x.structure.params = { ...(x.structure.params || {}), [prm.key]: v }; }, 'wp-' + prm.key)));
+    }
+    if (st.weave === 'custom') structure.push(h('p', { class: 'ed-hint' }, t('fab.customHint')));
+  } else if (st.type === 'knit') {
+    structure.push(field('fab.knitType', select(Object.keys(KNITS).map((k) => ({ v: k, l: 'knit.' + k })), st.knit, (v) => setF((x) => { x.structure = { type: 'knit', knit: v }; }))));
+  } else {
+    structure.push(dropZone({ accept: 'image/*', label: 'fab.jacquardDrop', onFiles: async ([file]) => { const bmp = await bitmapOf(file, 40); setF((x) => { x.structure = { ...x.structure, type: 'jacquard', w: bmp.w, h: bmp.h, bitmap: bmp.b64 }; }); } }));
+    for (const k of ['figure', 'ground']) structure.push(field('fab.' + k, select(Object.keys(WEAVES).map((w) => ({ v: w, l: 'weave.' + w })), st[k], (v) => setF((x) => { x.structure[k] = v; }))));
+  }
+  // Colours: plain, warp / weft orders, or a tartan sett.
+  // A colour order is a list of { color, n threads }; up to 4 entries in the UI. The sett is the tartan thread count
+  // notation (colour/count, '/' marks a pivot), parsed by fabric/*.
+  // Colours: plain, warp / weft orders, or a tartan sett.
+  const two = (which) => {
+    const ord = f[which] || [{ color: f.color, n: 1 }];
+    return h('div', { class: 'tx-order', dataset: { which } }, h('span', { class: 'tx-order-l' }, t('fab.' + which)), ord.slice(0, 4).map((o, k) => h('span', { class: 'tx-order-i' },
+      colorInput(o.color, (v) => setF((x) => { const o2 = (x[which] || ord).map((y) => ({ ...y })); o2[k].color = v; x[which] = o2; delete x.color; }, `${which}-c${k}`)),
+      h('input', { type: 'number', class: 'ed-input tx-num tx-small', min: 1, max: 200, value: o.n, 'aria-label': t('fab.count'), onchange: (e) => setF((x) => { const o2 = (x[which] || ord).map((y) => ({ ...y })); o2[k].n = Math.max(1, Number(e.target.value) || 1); x[which] = o2; }) }))),
+      ord.length < 4 ? h('button', { type: 'button', class: 'ed-iconbtn', title: t('fab.addColor'), 'aria-label': t('fab.addColor'), onclick: () => setF((x) => { x[which] = [...(x[which] || ord), { color: '#ffffff', n: 2 }]; delete x.color; }) }, iconEl('plus')) : null);
+  };
+  const colours = [field('fab.color', colorInput(f.color, (v) => setF((x) => { x.color = v; delete x.warp; delete x.weft; delete x.sett; }, 'color'))), two('warp'), two('weft'),
+    field('fab.sett', textInput(f.sett || '', (v) => setF((x) => { x.sett = v || null; }, 'sett'), { placeholder: 'K/4 R24 K24 Y/4' }))];
+  // Physical properties drive the cloth simulation (gsm, bending, stretch, friction) and the shading (sheen,
+  // roughness). Ranges cover real fabrics: 20 g/m2 chiffon to 800 g/m2 heavy coating.
+  const props = [
+    slider('fab.threads', f.threadsPerCm, { min: 1, max: 30, step: 0.5, unit: ' /cm', key: 'tpc' }, (v) => setF((x) => { x.threadsPerCm = v; }, 'tpc')),
+    ...[['gsm', 20, 800, 5, ' g/m²', 0], ['thickness', 0.05, 3, 0.05, ' mm', 2], ['stretchWarp', 0, 80, 0.5, ' %', 1], ['stretchWeft', 0, 100, 0.5, ' %', 1], ['bending', 0, 1, 0.01, '', 2], ['shear', 0, 1, 0.01, '', 2], ['sheen', 0, 1, 0.01, '', 2], ['roughness', 0, 1, 0.01, '', 2], ['friction', 0, 1, 0.01, '', 2]]
+      .map(([k, mn, mx, s, u, dg]) => slider('prop.' + k, f.props[k], { min: mn, max: mx, step: s, unit: u, digits: dg, key: 'prop-' + k }, (v) => setF((x) => { x.props = { ...(x.props || {}), [k]: v }; }, 'prop-' + k))),
+  ];
+  const zoom = slider('fab.zoom', p.view.threadZoom || 1, { min: 1, max: 6, step: 0.5, unit: '×', key: 'zoom' }, (v) => app.commit('view', (q) => { q.view.threadZoom = v; }, { merge: 'zoom', live: true }));
+  return [card('fab.slots', slots, field('fab.preset', presetSel), button('fab.reset', 'undo', () => app.commit('fabric', (q) => { q.outfit[q.active].fabrics[slot] = { preset: f.preset }; }))),
+    card('fab.structure', ...structure), card('fab.colours', ...colours), dyeCard(f, setF), card('fab.props', ...props, zoom)];
+}
+
+// Dyeing over the fabric of a slot: the kind, the dye colour and the kind's parameters (garment centimetres).
+// _rgb is a cache field added by normalisation; it is deleted so a stale parsed colour is not stored back.
+// Dyeing over the fabric of a slot: the kind, the dye colour and the kind's parameters (garment centimetres).
+function dyeCard(f, setF) {
+  const dy = f.dye || { kind: 'none' };
+  const setDye = (fn, merge) => setF((x) => { x.dye = { ...(x.dye || {}), ...dy }; delete x.dye._rgb; fn(x.dye); }, merge);
+  const kids = [field('dye.kind', seg(DYES.map((k) => ({ v: k, l: 'dye.' + k })), dy.kind, (v) => setDye((x) => { x.kind = v; }), 'dye.kind'))];
+  if (dy.kind !== 'none') {
+    kids.push(field('dye.color', colorInput(dy.color, (v) => setDye((x) => { x.color = v; }, 'dye-color'))));
+    kids.push(slider('dye.strength', Math.round(dy.strength * 100), { min: 0, max: 100, step: 1, unit: ' %', digits: 0, key: 'dye-str' }, (v) => setDye((x) => { x.strength = v / 100; }, 'dye-str')));
+    const r = (key, k, mn, mx, unit = ' cm') => slider('dye.' + k, dy[k], { min: mn, max: mx, step: 1, unit, digits: 0, key: 'dye-' + k }, (v) => setDye((x) => { x[k] = v; }, 'dye-' + k));
+    if (dy.kind === 'ombre') kids.push(r('ombre', 'from', -20, 200), r('ombre', 'to', -20, 200), r('ombre', 'angle', -180, 180, '°'));
+    if (dy.kind === 'dip') kids.push(r('dip', 'level', 0, 200), r('dip', 'soft', 0, 40));
+    if (dy.kind === 'tieDye') kids.push(r('tie', 'cx', -40, 120), r('tie', 'cy', -40, 200), r('tie', 'rings', 1, 12, ''));
+    if (dy.kind === 'spray') kids.push(slider('dye.amount', Math.round(dy.amount * 100), { min: 0, max: 100, step: 1, unit: ' %', digits: 0, key: 'dye-amt' }, (v) => setDye((x) => { x.amount = v / 100; }, 'dye-amt')), r('spray', 'seed', 0, 999, ''));
+    kids.push(h('p', { class: 'ed-hint' }, t('dye.hint')));
+  }
+  return card('dye.title', ...kids);
+}
+
+// A picture reduced to a w x w grey bitmap (base64) for jacquards.
+// Luma by the Rec. 601 weights (0.299 R + 0.587 G + 0.114 B): perceived brightness, so a red and a blue of equal
+// RGB value map to different greys as the eye sees them. One byte per pixel as a binary string -> btoa.
+// The object URL is revoked in finally: it pins the file in memory until revoked.
+// A picture reduced to a w x w grey bitmap (base64) for jacquards.
+async function bitmapOf(file, w) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = new Image(); img.src = url; await img.decode();
+    const hgt = Math.max(2, Math.round((w * img.naturalHeight) / img.naturalWidth));
+    const c = document.createElement('canvas'); c.width = w; c.height = hgt;
+    const x = c.getContext('2d'); x.drawImage(img, 0, 0, w, hgt);
+    const d = x.getImageData(0, 0, w, hgt).data;
+    let s = '';
+    for (let i = 0; i < w * hgt; i++) s += String.fromCharCode(Math.round(0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]));
+    return { w, h: hgt, b64: btoa(s) };
+  } finally { URL.revokeObjectURL(url); }
+}
+
+// --- print ----------------------------------------------------------------------------------------------------------
+
+export function printPanel(app) {
+  const p = app.project();
+  const g = p.outfit[p.active];
+  const d = draftOf(p);
+  const design = g.design ? normalizeDesign(g.design) : null;
+  const setD = (fn, merge) => app.commit('design', (q) => { const x = q.outfit[q.active]; x.design = normalizeDesign(x.design || DEFAULT_DESIGN); fn(x.design); }, { merge, live: !!merge });
+  const out = [];
+  // data-k="repeat-on" is the e2e hook for the toggle.
+  const onOff = field('pr.repeatOn', toggle(!!design, (v) => app.commit('design', (q) => { q.outfit[q.active].design = v ? normalizeDesign(DEFAULT_DESIGN) : null; })));
+  onOff.dataset.k = 'repeat-on';
+  if (!design) out.push(card('pr.repeat', onOff, h('p', { class: 'ed-hint' }, t('pr.repeatHint'))));
+  else {
+    const cw = design.colorways[design.colorway];
+    // seamlessCheck renders the tile at low resolution and compares opposite edges: a cheap early warning.
+    const sc = seamlessCheck(design, { pxPerCm: 3 });
+    out.push(card('pr.repeat', onOff,
+      field('pr.type', seg(REPEATS.map((r) => ({ v: r, l: 'rep.' + r })), design.repeat, (v) => setD((x) => { x.repeat = v; }), 'pr.type')),
+      slider('pr.w', design.w, { min: 1, max: 60, step: 0.5, unit: ' cm', key: 'dw' }, (v) => setD((x) => { x.w = v; }, 'dw')),
+      slider('pr.h', design.h, { min: 1, max: 60, step: 0.5, unit: ' cm', key: 'dh' }, (v) => setD((x) => { x.h = v; }, 'dh')),
+      h('p', { class: 'ed-hint tx-seamless', dataset: { ok: String(sc.ok) } }, sc.ok ? t('pr.seamless') : t('pr.notSeamless')),
+      field('pr.on', h('div', { class: 'ap-row' }, materialsOf(p).filter((m) => m !== 'interfacing' && m !== 'canvas' && m !== 'pocketing').map((m) => h('label', { class: 'tx-check' }, toggle(g.designOn.includes(m), (v) => app.commit('design', (q) => { const x = q.outfit[q.active]; x.designOn = v ? [...new Set([...x.designOn, m])] : x.designOn.filter((y) => y !== m); })), ' ', materialName(m)))))));
+    out.push(card('pr.colorways',
+      field('pr.colorway', select(design.colorways.map((c, i) => ({ v: i, l: '=' + c.name })), design.colorway, (v) => setD((x) => { x.colorway = Number(v); }))),
+      h('div', { class: 'tx-cw' }, cw.colors.map((c, k) => h('span', { class: 'tx-cw-i' }, h('small', {}, k === design.background ? t('pr.bg') : String(k)), colorInput(c, (v) => setD((x) => { x.colorways[x.colorway].colors[k] = v; }, `cw-${k}`)))),
+        cw.colors.length < 8 ? h('button', { type: 'button', class: 'ed-iconbtn', title: t('pr.addColor'), 'aria-label': t('pr.addColor'), onclick: () => setD((x) => { x.colorways[x.colorway].colors.push('#888888'); }) }, iconEl('plus')) : null),
+      // New colourway: the current colours inverted (0xffffff - rgb) as a starting point that is visibly different.
+      button('pr.newColorway', 'copy', () => setD((x) => { x.colorways.push({ name: t('pr.colorwayN', { n: x.colorways.length + 1 }), colors: x.colorways[x.colorway].colors.map((c) => '#' + (0xffffff - parseInt(c.slice(1), 16)).toString(16).padStart(6, '0')) }); x.colorway = x.colorways.length - 1; }))));
+    out.push(card('pr.motifs', h('ul', { class: 'tx-layers' }, design.layers.map((l, i) => h('li', { class: 'tx-layer-row', dataset: { i: String(i) } },
+      h('div', { class: 'ap-row' }, select([...Object.keys(MOTIFS)].map((k) => ({ v: k, l: 'motif.' + k })), l.motif, (v) => setD((x) => { x.layers[i].motif = v; })),
+        select(cw.colors.map((c, k) => ({ v: k, l: '=' + t('pr.colorN', { n: k }) })), l.color, (v) => setD((x) => { x.layers[i].color = Number(v); })),
+        h('button', { type: 'button', class: 'ed-iconbtn', title: t('pr.removeMotif'), 'aria-label': t('pr.removeMotif'), onclick: () => setD((x) => { x.layers.splice(i, 1); }) }, iconEl('trash'))),
+      slider('pr.x', l.x, { min: 0, max: 1, step: 0.01, digits: 2, key: `lx${i}` }, (v) => setD((x) => { x.layers[i].x = v; }, `lx${i}`)),
+      slider('pr.y', l.y, { min: 0, max: 1, step: 0.01, digits: 2, key: `ly${i}` }, (v) => setD((x) => { x.layers[i].y = v; }, `ly${i}`)),
+      slider('pr.size', l.size, { min: 0.2, max: 30, step: 0.1, unit: ' cm', key: `ls${i}` }, (v) => setD((x) => { x.layers[i].size = v; }, `ls${i}`)),
+      slider('pr.rot', l.rot, { min: -180, max: 180, step: 1, unit: '°', digits: 0, key: `lr${i}` }, (v) => setD((x) => { x.layers[i].rot = v; }, `lr${i}`))))),
+      button('pr.addMotif', 'plus', () => setD((x) => { x.layers.push({ motif: 'dot', x: 0.5, y: 0.5, size: 2, rot: 0, color: 1 }); }))));
+  }
+  // Placement prints. Changing the print area resets x / y: offsets are relative to the area's centre, an offset
+  // meant for the chest would land off the piece on a sleeve.
+  // Placement prints.
+  const areas = Object.keys(d.printAreas || {});
+  const pls = g.placements;
+  const setP = (i, fn, merge) => app.commit('placement', (q) => fn(q.outfit[q.active].placements[i]), { merge, live: !!merge });
+  const plRows = pls.map((pl, i) => h('li', { class: 'tx-pl-row', dataset: { i: String(i) } },
+    h('div', { class: 'ap-row' }, h('b', {}, pl.art.kind === 'image' ? (p.images[pl.art.id]?.name || t('pr.image')) : t('motif.' + pl.art.motif)), h('span', { class: 'ed-spacer' }),
+      h('button', { type: 'button', class: 'ed-iconbtn', title: t('pr.removePrint'), 'aria-label': t('pr.removePrint'), onclick: () => app.commit('placement', (q) => { q.outfit[q.active].placements.splice(i, 1); }) }, iconEl('trash'))),
+    pl.art.kind === 'motif' ? h('div', { class: 'ap-row' }, select(Object.keys(MOTIFS).map((k) => ({ v: k, l: 'motif.' + k })), pl.art.motif, (v) => setP(i, (x) => { x.art.motif = v; })), colorInput(pl.art.color, (v) => setP(i, (x) => { x.art.color = v; }, `pc${i}`))) : null,
+    areas.length ? field('pr.area', select(areas.map((a) => ({ v: a, l: 'area.' + a })), pl.area || areas[0], (v) => setP(i, (x) => { x.area = v; x.x = 0; x.y = 0; }))) : null,
+    slider('pr.dx', pl.x, { min: -40, max: 40, step: 0.5, unit: ' cm', key: `px${i}` }, (v) => setP(i, (x) => { x.x = v; }, `px${i}`)),
+    slider('pr.dy', pl.y, { min: -40, max: 40, step: 0.5, unit: ' cm', key: `py${i}` }, (v) => setP(i, (x) => { x.y = v; }, `py${i}`)),
+    slider('pr.width', pl.w ?? 20, { min: 2, max: 60, step: 0.5, unit: ' cm', key: `pw${i}` }, (v) => setP(i, (x) => { x.w = v; }, `pw${i}`)),
+    slider('pr.rot', pl.rot || 0, { min: -180, max: 180, step: 1, unit: '°', digits: 0, key: `prr${i}` }, (v) => setP(i, (x) => { x.rot = v; }, `prr${i}`))));
+  const addMotif = button('pr.addPrint', 'star', () => app.commit('placement', (q) => { q.outfit[q.active].placements.push({ id: uid('pl'), area: areas[0] || null, piece: 'front', side: 'C', x: 0, y: 0, w: 16, rot: 0, art: { kind: 'motif', motif: 'star', color: '#d0425b' } }); }));
+  addMotif.dataset.action = 'add-print';
+  const upload = dropZone({ accept: 'image/png,image/jpeg,image/webp,image/svg+xml,image/gif', label: 'pr.drop', onFiles: ([file]) => app.addImagePlacement(file, areas[0]) });
+  out.push(card('pr.placements', h('p', { class: 'ed-hint' }, t('pr.placementHint')), h('ul', { class: 'tx-pls' }, plRows), h('div', { class: 'ap-row' }, addMotif), upload));
+  return out;
+}
+
+// --- export ---------------------------------------------------------------------------------------------------------
+
+// Export: data-export attributes are the e2e hooks; the file names and contents are made in export.js.
+export function exportPanel(app) {
+  const p = app.project();
+  const b = (label, icon, fn, k) => { const x = button(label, icon, fn); x.dataset.export = k; return x; };
+  return [
+    card('ex.pattern',
+      field('ex.paper', seg([{ v: 'A4', l: '=A4' }, { v: 'Letter', l: '=Letter' }], p.view.paper, (v) => app.commit('view', (q) => { q.view.paper = v; }), 'ex.paper')),
+      field('ex.allowance', toggle(p.view.allowance, (v) => app.commit('view', (q) => { q.view.allowance = v; }))),
+      h('div', { class: 'ap-actions' }, b('ex.pdf', 'print', () => app.exporter('pdf'), 'pdf'), b('ex.svg', 'image', () => app.exporter('svg'), 'svg'), b('ex.dxf', 'file', () => app.exporter('dxf'), 'dxf'), b('ex.graded', 'layers', () => app.exporter('graded'), 'graded'))),
+    card('ex.cutting',
+      slider('ex.width', p.view.fabricWidth || 150, { min: 90, max: 180, step: 5, unit: ' cm', digits: 0, key: 'fw' }, (v) => app.commit('view', (q) => { q.view.fabricWidth = v; }, { merge: 'fw', live: true })),
+      h('div', { class: 'ap-actions' }, b('ex.layout', 'scissors', () => app.exporter('layout'), 'layout'), b('ex.flats', 'image', () => app.exporter('flats'), 'flats'))),
+    usageCard(app, b),
+    card('ex.images',
+      h('div', { class: 'ap-actions' }, b('ex.shot', 'camera', () => app.exporter('shot'), 'shot'), b('ex.mockup', 'gallery', () => app.exporter('mockup'), 'mockup'))),
+    card('ex.project',
+      h('div', { class: 'ap-actions' }, b('ex.file', 'download', () => app.exporter('project'), 'project'), b('ex.import', 'upload', () => app.importProject(), 'import'))),
+  ];
+}
+
+// Material usage of the outfit: the length to buy of every fabric of every garment, the notions, a CSV.
+// Material usage of the outfit: the length to buy of every fabric of every garment, the notions, a CSV.
+function usageCard(app, b) {
+  const p = app.project();
+  const u = usageOf(p);
+  const m = (cm) => t('use.meters', { v: fmt(cm / 100, 2) });
+  const table = h('table', { class: 'tx-usage' },
+    h('thead', {}, h('tr', {}, ...['use.garment', 'use.material', 'use.layout', 'use.buy'].map((k) => h('th', {}, t(k))))),
+    h('tbody', {}, u.rows.filter((r) => r.pieces).map((r) => h('tr', { dataset: { garment: r.garmentId, material: r.material } },
+      h('td', {}, `${r.index + 1}. ${garmentName(r.garmentId)}`), h('td', {}, materialName(r.material)),
+      h('td', { class: 'tx-num' }, t('use.lay', { len: fmt(r.layout / 100, 2), w: r.width })), h('td', { class: 'tx-num' }, h('b', {}, m(r.buy)))))));
+  const n = u.notions;
+  const notions = [
+    ...Object.entries(n.buttons).sort((a, c) => +a[0] - +c[0]).map(([k, v]) => t('use.buttonsN', { n: v, d: k })),
+    ...n.zips.map((z) => t('use.zipN', { cm: z })),
+    n.hooks ? t('use.hooksN', { n: n.hooks }) : null, n.cartridges ? t('use.cartridgesN', { n: n.cartridges }) : null,
+    t('use.threadN', { m: n.thread }),
+  ].filter(Boolean);
+  return card('use.title', h('p', { class: 'ed-hint' }, t('use.hint', { w: p.view.fabricWidth || 150 })), table,
+    h('ul', { class: 'tx-notions' }, notions.map((x) => h('li', {}, x))),
+    h('div', { class: 'ap-actions' }, b('use.csv', 'sheet', () => app.exporter('usage'), 'usage')));
+}
+
+// --- mockup mode ------------------------------------------------------------------------------------------------------
+
+// Blanks of the mockup mode: garments that are commonly printed on. main.js keeps its own copy of this list in
+// switchMode; the two must stay in sync.
+export const BLANKS = ['tshirt', 'longsleeve', 'tank', 'sweatshirt', 'hoodie', 'tote'];
+
+export function mockupPanel(app) {
+  const p = app.project();
+  const g = p.outfit[0];
+  const d = draftOf(p, 0);
+  const areas = Object.keys(d.printAreas || {});
+  const pl = g.placements[0];
+  const shell = fabricOf(p, 0, 'shell');
+  // Swapping the blank keeps the shell colour and the prints (re-centred on the front), and picks the fabric the
+  // blank is usually made of (canvas tote, french terry sweatshirts, jersey tees).
+  const blank = h('div', { class: 'tx-gallery tx-blanks', role: 'radiogroup', 'aria-label': t('mk.blank') }, BLANKS.map((id) => h('button', {
+    type: 'button', role: 'radio', 'aria-checked': String(id === g.garment), class: 'tx-gcard' + (id === g.garment ? ' tx-on' : ''), dataset: { garment: id },
+    onclick: () => app.commit('blank', (q) => { const old = q.outfit[0]; q.outfit = [{ ...newGarment(id, q.body.sex), id: old.id, fabrics: { shell: { ...(old.fabrics.shell || {}), preset: id === 'tote' ? 'cottonCanvas' : id === 'sweatshirt' || id === 'hoodie' ? 'frenchTerry' : 'jersey' } }, placements: old.placements.map((x) => ({ ...x, area: 'front', x: 0, y: 0 })) }]; q.active = 0; }),
+  }, h('span', { class: 'tx-gicon', html: app.thumb(id) }), h('span', {}, t('g.' + id)))));
+  const bodySel = select(Object.keys(BODY_PRESETS).map((k) => ({ v: k, l: 'preset.' + k })), app.mockupPreset(), (v) => { app.setMockupPreset(v); app.commit('body', (q) => { const pr = BODY_PRESETS[v]; q.body = { ...q.body, ...pr, features: { ...Object.fromEntries(FEATURES.map((f) => [f, 0])), ...(pr.features || {}) }, overrides: {} }; }); });
+  const col = colorInput(shell.color, (v) => app.commit('fabric', (q) => { q.outfit[0].fabrics.shell = { ...(q.outfit[0].fabrics.shell || { preset: shell.preset }), color: v }; }, { merge: 'mk-color', live: true }));
+  const upload = dropZone({ accept: 'image/png,image/jpeg,image/webp,image/svg+xml,image/gif', label: 'mk.drop', onFiles: ([file]) => app.addImagePlacement(file, 'front', true) });
+  const ctl = pl ? [
+    field('pr.area', select(areas.map((a) => ({ v: a, l: 'area.' + a })), pl.area || 'front', (v) => app.commit('placement', (q) => { const x = q.outfit[0].placements[0]; x.area = v; x.x = 0; x.y = 0; }))),
+    slider('pr.width', pl.w ?? 20, { min: 2, max: 45, step: 0.5, unit: ' cm', key: 'mkw' }, (v) => app.commit('placement', (q) => { q.outfit[0].placements[0].w = v; }, { merge: 'mkw', live: true })),
+    slider('pr.dx', pl.x, { min: -20, max: 20, step: 0.5, unit: ' cm', key: 'mkx' }, (v) => app.commit('placement', (q) => { q.outfit[0].placements[0].x = v; }, { merge: 'mkx', live: true })),
+    slider('pr.dy', pl.y, { min: -20, max: 25, step: 0.5, unit: ' cm', key: 'mky' }, (v) => app.commit('placement', (q) => { q.outfit[0].placements[0].y = v; }, { merge: 'mky', live: true })),
+  ] : [h('p', { class: 'ed-hint' }, t('mk.noPrint'))];
+  const ex = h('div', { class: 'ap-actions' }, button('mk.front', 'camera', () => app.exporter('mockup-front')), button('mk.back', 'camera', () => app.exporter('mockup-back')), button('mk.both', 'gallery', () => app.exporter('mockup')));
+  ex.dataset.k = 'mockup-export';
+  return [card('mk.blank', blank, field('mk.body', bodySel), field('mk.color', col)), card('mk.print', upload, button('mk.motif', 'star', () => app.commit('placement', (q) => { q.outfit[0].placements = [{ id: uid('pl'), area: 'front', piece: 'front', side: 'C', x: 0, y: 0, w: 18, rot: 0, art: { kind: 'motif', motif: 'star', color: '#f2c94c' } }]; })), ...ctl), card('mk.export', h('p', { class: 'ed-hint' }, t('mk.exportHint')), ex)];
+}

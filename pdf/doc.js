@@ -1,0 +1,488 @@
+// pdf/doc.js - a general PDF 1.7 writer: pages in top-left coordinates (points, y down), text in embedded TrueType
+// fonts (Type0 / CIDFontType2 / Identity-H, glyph subsets, compact /W widths, ToUnicode so text copies and searches)
+// or the standard Helvetica / Courier, fallback font stacks, lines / rectangles / ellipses / arcs / SVG paths with
+// fill, stroke, dashes and opacity, clipping and transforms, JPEG / PNG / RGBA images with soft masks, URI and page
+// links, flat bookmarks, document metadata, and synchronous Flate compression (../codec/zlib.js). The output has an
+// exact cross-reference table and a trailer /ID; it is deterministic when `date` is given.
+//
+//   const doc = new PDFDocument({ title, author, subject, keywords, creator, lang, date, compress, subset })
+//   doc.addFont(ttfBytes | parseTTF(…), { subset }) -> font      doc.addStandardFont('Helvetica') -> font
+//   doc.setFont(font | [font, fallback…])                        doc.addImage(jpeg | png | { width, height, data }) -> image
+//   const page = doc.addPage('A4' | [w, h], { landscape })        doc.bookmark(title, page, y)
+//   page.text(s, x, y, { font, size, color, align, baseline, rotate, charSpacing, wordSpacing, underline, strike,
+//             opacity, link }) -> width                            page.measure(s, { font, size }) -> width
+//   page.line / polyline / polygon / rect(x, y, w, h, { radius }) / circle / ellipse / arc / path(d | commands, style)
+//       style: { fill, stroke, width, dash, cap, join, opacity, fillOpacity, strokeOpacity, evenOdd }
+//   page.image(img, x, y, w, h, { fit: 'fill' | 'contain' | 'cover', opacity })   page.link(x, y, w, h, url | { page, y })
+//   page.save() / restore() / translate / scale / rotate(deg, cx, cy) / transform(a, b, c, d, e, f) / clip(path)
+//   doc.toBytes() -> Uint8Array
+//   PAGE_SIZES, pageSize(size, landscape) -> [w, h], mm(v) / cm(v) / inch(v) -> points, parseColor(c), pdfText(s)
+// Colours: '#rgb' / '#rrggbb' / '#rrggbbaa', a grey number 0..1, [r, g, b] or [c, m, y, k] in 0..1, 'none'.
+//
+// Key decisions:
+// - Top-left, y-down coordinates like every screen API. Each page's content is wrapped in one flipping matrix
+//   (1 0 0 -1 0 h cm), so callers never convert; glyphs are then flipped back by a negative d in every Tm and images
+//   by a negative height in their cm - those minus signs below are deliberate, not bugs.
+// - Two passes: drawing only records ops and which fonts/images/states a page uses; toBytes() writes objects at the
+//   end, when the glyph subsets are final. That is why fonts can be subset at all.
+// - Object numbers are reserved before their bodies exist (catalog, page tree, pages), so forward references
+//   (/Parent, /Dest) need no second pass.
+// - Determinism: no Math.random, ids and subset tags are hashes of the content; with `date` the bytes are stable.
+
+import { zlibSync } from '../codec/zlib.js';
+import { parseTTF, subsetTTF } from './ttf.js';
+import { STANDARD_FONTS } from './standard.js';
+import { StandardFont, TrueTypeFont, fontList, measureText, shapeText } from './font.js';
+import { prepareImage } from './image.js';
+import { arcPath, ellipsePath, fmt, parsePath, pathOps, polygonPath, rectPath } from './path.js';
+
+export const PAGE_SIZES = {
+  A0: [2383.94, 3370.39], A1: [1683.78, 2383.94], A2: [1190.55, 1683.78], A3: [841.89, 1190.55], A4: [595.28, 841.89],
+  A5: [419.53, 595.28], A6: [297.64, 419.53], A7: [209.76, 297.64], B5: [498.9, 708.66],
+  LETTER: [612, 792], LEGAL: [612, 1008], TABLOID: [792, 1224],
+};
+export const mm = (v) => (v * 72) / 25.4;
+export const cm = (v) => (v * 72) / 2.54;
+export const inch = (v) => v * 72;
+
+export function pageSize(size = 'A4', landscape = false) {
+  let wh = Array.isArray(size) ? [+size[0], +size[1]] : PAGE_SIZES[String(size).toUpperCase()];
+  if (!wh || !(wh[0] > 0 && wh[1] > 0)) throw new Error('PDF: unknown page size ' + size);
+  if (landscape && wh[1] > wh[0]) wh = [wh[1], wh[0]];
+  return wh;
+}
+
+// --- strings, colours ---------------------------------------------------------------------------------------------
+
+// The file is assembled from JS strings whose chars are all < 256 (structure is ASCII; binary goes in separate
+// Uint8Array parts), so a char -> byte copy is exact. A UTF-8 encoder would corrupt the binary header comment.
+const latin1 = (s) => { const b = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i) & 255; return b; };
+const literal = (s) => '(' + s.replace(/[\\()]/g, (c) => '\\' + c).replace(/[\r\n]/g, (c) => (c === '\r' ? '\\r' : '\\n')) + ')';
+
+/** A PDF text string: a literal for printable ASCII, UTF-16BE hex with a BOM otherwise. */
+// UTF-16 code units are emitted as-is, so astral characters come out as their surrogate pair - exactly what
+// UTF-16BE requires. PDFDocEncoding (the other legal choice) would need a translation table and still miss scripts.
+export function pdfText(s) {
+  const str = String(s ?? '');
+  if (/^[\x20-\x7e]*$/.test(str)) return literal(str);
+  let h = '<FEFF';
+  for (let i = 0; i < str.length; i++) h += str.charCodeAt(i).toString(16).toUpperCase().padStart(4, '0');
+  return h + '>';
+}
+const pdfName = (s) => '/' + String(s).replace(/[^A-Za-z0-9_.+-]/g, (c) => '#' + c.charCodeAt(0).toString(16).padStart(2, '0'));
+
+export function parseColor(c) {
+  if (c == null || c === false || c === 'none' || c === 'transparent') return null;
+  const clamp = (v) => Math.max(0, Math.min(1, +v || 0));
+  if (typeof c === 'number') return { space: 'gray', v: [clamp(c)], alpha: 1 };
+  if (Array.isArray(c)) {
+    if (c.length === 4) return { space: 'cmyk', v: c.map(clamp), alpha: 1 };
+    if (c.length === 3) return { space: 'rgb', v: c.map(clamp), alpha: 1 };
+    if (c.length === 1) return { space: 'gray', v: [clamp(c[0])], alpha: 1 };
+  }
+  if (typeof c === 'string') {
+    let h = c.trim().replace(/^#/, '');
+    if (/^[0-9a-f]{3,4}$/i.test(h)) h = [...h].map((x) => x + x).join('');
+    if (/^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(h)) {
+      const v = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
+      return { space: 'rgb', v, alpha: h.length === 8 ? parseInt(h.slice(6), 16) / 255 : 1 };
+    }
+  }
+  throw new Error('PDF: bad colour ' + JSON.stringify(c));
+}
+const colorOp = (col, stroke) => {
+  const v = col.v.map(fmt).join(' ');
+  if (col.space === 'gray') return v + (stroke ? ' G' : ' g');
+  if (col.space === 'cmyk') return v + (stroke ? ' K' : ' k');
+  return v + (stroke ? ' RG' : ' rg');
+};
+
+const CAPS = { butt: 0, round: 1, square: 2 };
+const JOINS = { miter: 0, round: 1, bevel: 2 };
+
+// --- page ---------------------------------------------------------------------------------------------------------
+
+export class Page {
+  constructor(doc, width, height, index) {
+    this.doc = doc; this.width = width; this.height = height; this.index = index;
+    this.ops = [];
+    this.annots = [];
+    this.fonts = new Set(); this.images = new Set(); this.states = new Set();
+  }
+
+  save() { this.ops.push('q'); return this; }
+  restore() { this.ops.push('Q'); return this; }
+  transform(a, b, c, d, e, f) { this.ops.push(`${fmt(a)} ${fmt(b)} ${fmt(c)} ${fmt(d)} ${fmt(e)} ${fmt(f)} cm`); return this; }
+  translate(x, y) { return this.transform(1, 0, 0, 1, x, y); }
+  scale(sx, sy = sx) { return this.transform(sx, 0, 0, sy, 0, 0); }
+  rotate(deg, cx = 0, cy = 0) {
+    const a = (deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a);
+    return this.transform(c, s, -s, c, cx - c * cx + s * cy, cy - s * cx - c * cy);
+  }
+  clip(path, { evenOdd = false } = {}) { this.ops.push(pathOps(toCommands(path)) + (evenOdd ? ' W* n' : ' W n')); return this; }
+  clipRect(x, y, w, h) { return this.clip(rectPath(x, y, w, h)); }
+
+  _alpha(fillA, strokeA) {
+    if (fillA >= 1 && strokeA >= 1) return '';
+    const g = this.doc._state(fillA, strokeA);
+    this.states.add(g);
+    return `/${g.res} gs `;
+  }
+
+  // Every painted shape is wrapped in q ... Q, so colour, width, dash and opacity never leak into the next shape -
+  // the PDF graphics state is otherwise sticky. Opacity needs an ExtGState resource (there is no inline alpha
+  // operator); states are de-duplicated per (fill alpha, stroke alpha) pair at document level.
+  // The paint operator follows from what is set: B (fill+stroke), f, S, or n (path only, e.g. a no-op).
+  _paint(cmds, s, def) {
+    const fill = parseColor(s.fill !== undefined ? s.fill : def === 'fill' ? '#000' : null);
+    const stroke = parseColor(s.stroke !== undefined ? s.stroke : def === 'stroke' ? '#000' : null);
+    if (!cmds.length) return this;
+    const op = ['q'];
+    const o = s.opacity ?? 1;
+    const gs = this._alpha(o * (s.fillOpacity ?? 1) * (fill ? fill.alpha : 1), o * (s.strokeOpacity ?? 1) * (stroke ? stroke.alpha : 1));
+    if (gs) op.push(gs.trim());
+    if (fill) op.push(colorOp(fill, false));
+    if (stroke) {
+      op.push(colorOp(stroke, true), fmt(s.width ?? 1) + ' w');
+      if (s.cap) op.push(CAPS[s.cap] + ' J');
+      if (s.join) op.push(JOINS[s.join] + ' j');
+      if (s.dash && s.dash.length) op.push(`[${s.dash.map(fmt).join(' ')}] ${fmt(s.dashOffset || 0)} d`);
+    }
+    const eo = s.evenOdd ? '*' : '';
+    op.push(pathOps(cmds) + ' ' + (fill && stroke ? 'B' + eo : fill ? 'f' + eo : stroke ? 'S' : 'n'), 'Q');
+    this.ops.push(op.join(' '));
+    return this;
+  }
+
+  path(d, style = {}) { return this._paint(toCommands(d), style, 'fill'); }
+  line(x1, y1, x2, y2, style = {}) { return this._paint([['M', x1, y1], ['L', x2, y2]], { ...style, fill: null }, 'stroke'); }
+  polyline(points, style = {}) { return this._paint(polygonPath(points, false), { fill: null, ...style }, 'stroke'); }
+  polygon(points, style = {}) { return this._paint(polygonPath(points, true), style, 'fill'); }
+  rect(x, y, w, h, style = {}) { return this._paint(rectPath(x, y, w, h, style.radius), style, 'fill'); }
+  ellipse(cx, cy, rx, ry, style = {}) { return this._paint(ellipsePath(cx, cy, rx, ry), style, 'fill'); }
+  circle(cx, cy, r, style = {}) { return this.ellipse(cx, cy, r, r, style); }
+  arc(cx, cy, r, startDeg, endDeg, style = {}) { return this._paint(arcPath(cx, cy, r, startDeg, endDeg), { fill: null, ...style }, 'stroke'); }
+
+  image(img, x, y, w, h, { fit = 'fill', opacity = 1 } = {}) {
+    if (!img || !img.res) throw new Error('PDF: page.image needs a doc.addImage() handle');
+    if (w == null && h == null) { w = img.width; h = img.height; }
+    else if (h == null) h = (w * img.height) / img.width;
+    else if (w == null) w = (h * img.width) / img.height;
+    let dx = x, dy = y, dw = w, dh = h;
+    if (fit === 'contain' || fit === 'cover') {
+      const k = (fit === 'contain' ? Math.min : Math.max)(w / img.width, h / img.height);
+      dw = img.width * k; dh = img.height * k; dx = x + (w - dw) / 2; dy = y + (h - dh) / 2;
+    }
+    this.images.add(img);
+    const gs = this._alpha(opacity, opacity);
+    const clip = fit === 'cover' ? `${pathOps(rectPath(x, y, w, h))} W n ` : '';
+    this.ops.push(`q ${gs}${clip}${fmt(dw)} 0 0 ${fmt(-dh)} ${fmt(dx)} ${fmt(dy + dh)} cm /${img.res} Do Q`);
+    return this;
+  }
+
+  measure(s, { font, size = 12, charSpacing = 0 } = {}) { return measureText(s, this.doc._fonts(font), size, { charSpacing }); }
+
+  // Alignment and baseline are applied as offsets (du along the baseline, dv across it) rotated into page space, so
+  // rotated text still aligns correctly. Word spacing is done with TJ kerning after each space glyph because the Tw
+  // operator only affects single-byte code 32 - it does nothing for 2-byte Identity-H fonts.
+  // color 'none' -> text render mode 3 (invisible but selectable), used for searchable text layers over images.
+  text(s, x, y, o = {}) {
+    const fonts = this.doc._fonts(o.font);
+    const size = o.size ?? 12;
+    const runs = shapeText(s, fonts);
+    if (!runs.length) return 0;
+    const cs = o.charSpacing || 0, ws = o.wordSpacing || 0;
+    let width = 0;
+    for (const r of runs) {
+      width += (r.width * size) / 1000 + cs * r.glyphs.length;
+      if (ws) width += ws * r.cps.filter((c) => c === 32).length;
+    }
+    const ascent = Math.max(...fonts.map((f) => f.ascent)) * size / 1000, descent = Math.min(...fonts.map((f) => f.descent)) * size / 1000;
+    const du = o.align === 'right' ? -width : o.align === 'center' ? -width / 2 : 0;
+    const b = o.baseline || 'alphabetic';
+    const dv = b === 'top' ? ascent : b === 'middle' ? (ascent + descent) / 2 : b === 'bottom' ? descent : 0;
+    const a = ((o.rotate || 0) * Math.PI) / 180, c = Math.cos(a), sn = Math.sin(a);
+    const px = x + du * c - dv * sn, py = y + du * sn + dv * c;
+    const color = parseColor(o.color ?? '#000');
+    const op = ['q'];
+    const gs = this._alpha((o.opacity ?? 1) * (color ? color.alpha : 1), 1);
+    if (gs) op.push(gs.trim());
+    if (color) op.push(colorOp(color, false));
+    op.push('BT', `${fmt(c)} ${fmt(sn)} ${fmt(sn)} ${fmt(-c)} ${fmt(px)} ${fmt(py)} Tm`);
+    if (cs) op.push(fmt(cs) + ' Tc');
+    if (!color) op.push('3 Tr');
+    let cur = null;
+    for (const r of runs) {
+      this.fonts.add(r.font);
+      if (r.font !== cur) { op.push(`/${r.font.res} ${fmt(size)} Tf`); cur = r.font; }
+      r.glyphs.forEach((g, i) => r.font.mark(g, r.cps[i]));
+      if (!ws) { op.push(r.font.encode(r.glyphs) + ' Tj'); continue; }
+      const parts = [];
+      let chunk = [];
+      r.glyphs.forEach((g, i) => {
+        chunk.push(g);
+        if (r.cps[i] === 32) { parts.push(r.font.encode(chunk), fmt((-ws * 1000) / size)); chunk = []; }
+      });
+      if (chunk.length) parts.push(r.font.encode(chunk));
+      op.push(`[${parts.join(' ')}] TJ`);
+    }
+    op.push('ET', 'Q');
+    this.ops.push(op.join(' '));
+    // local frame: u along the baseline, v perpendicular (down); decorations and the link box live in it
+    const at = (u, v) => [px + u * c - v * sn, py + u * sn + v * c];
+    const deco = (v) => {
+      const p0 = at(0, v), p1 = at(width, v);
+      this.line(p0[0], p0[1], p1[0], p1[1], { stroke: o.color ?? '#000', width: Math.max(0.4, size * 0.06) });
+    };
+    if (o.underline) deco(Math.max(1, -descent * 0.5));
+    if (o.strike) deco(-ascent * 0.3);
+    if (o.link) {
+      const pts = [at(0, -ascent), at(width, -ascent), at(width, -descent), at(0, -descent)];
+      const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
+      this.link(Math.min(...xs), Math.min(...ys), Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), o.link);
+    }
+    return width;
+  }
+
+  // Scheme denylist for URI actions: a document generated from user data must not carry javascript:/data:/file:
+  // links that a viewer might execute or open locally. Internal links are validated to point at a page.
+  link(x, y, w, h, target) {
+    const rect = [x, y, x + w, y + h];
+    if (typeof target === 'string') {
+      if (/^\s*(javascript|data|vbscript|file):/i.test(target)) throw new Error('PDF: refusing link scheme of ' + target);
+    } else if (!target || !(target.page instanceof Page || Number.isInteger(target.page))) throw new Error('PDF: link target is a URL or { page, y }');
+    this.annots.push({ rect, target });
+    return this;
+  }
+}
+
+function toCommands(d) {
+  if (typeof d === 'string') return parsePath(d);
+  if (Array.isArray(d)) return d;
+  throw new Error('PDF: a path is SVG path data or a command list');
+}
+
+// --- document -----------------------------------------------------------------------------------------------------
+
+export class PDFDocument {
+  constructor({ title = '', author = '', subject = '', keywords = '', creator = 'in-html', producer = 'in-html pdf', lang = '', date = null, compress = true, subset = true } = {}) {
+    this.info = { title, author, subject, keywords, creator, producer };
+    this.lang = lang; this.date = date; this.compress = compress; this.subset = subset;
+    this.pages = []; this.allFonts = []; this.allImages = []; this.marks = [];
+    this.stateCache = new Map();
+    this.counter = { font: 0, image: 0, gs: 0 };
+    this.defaultFonts = null;
+  }
+
+  // OS/2 fsType "restricted licence" fonts are refused unless the caller explicitly overrides: embedding them would
+  // put the document's author in breach of the font licence. Duck typing (cmap + gidFor) accepts a pre-parsed font
+  // so one parse can serve several documents.
+  addFont(src, { subset = this.subset, ignoreLicense = false } = {}) {
+    const ttf = src && src.cmap && src.gidFor ? src : parseTTF(src);
+    if (!ttf.embeddable && !ignoreLicense) throw new Error(`PDF: the licence of ${ttf.postscriptName} forbids embedding (OS/2 fsType)`);
+    const f = new TrueTypeFont(ttf, 'F' + ++this.counter.font);
+    f.subset = subset;
+    this.allFonts.push(f);
+    if (!this.defaultFonts) this.defaultFonts = [f];
+    return f;
+  }
+
+  addStandardFont(name = 'Helvetica') {
+    if (!STANDARD_FONTS.includes(name)) throw new Error('PDF: standard fonts are ' + STANDARD_FONTS.join(', '));
+    const have = this.allFonts.find((f) => f.kind === 'standard' && f.name === name);
+    if (have) return have;
+    const f = new StandardFont(name, 'F' + ++this.counter.font);
+    this.allFonts.push(f);
+    if (!this.defaultFonts) this.defaultFonts = [f];
+    return f;
+  }
+
+  setFont(f) { this.defaultFonts = fontList(f); return this; }
+
+  _fonts(f) {
+    const list = fontList(f);
+    if (list.length) return list;
+    if (!this.defaultFonts) this.addStandardFont('Helvetica');
+    return this.defaultFonts;
+  }
+
+  _state(ca, CA) {
+    const k = fmt(ca) + '|' + fmt(CA);
+    if (!this.stateCache.has(k)) this.stateCache.set(k, { res: 'GS' + ++this.counter.gs, ca, CA });
+    return this.stateCache.get(k);
+  }
+
+  addImage(src) {
+    const img = prepareImage(src);
+    const h = { ...img, res: 'Im' + ++this.counter.image };
+    this.allImages.push(h);
+    return h;
+  }
+
+  addPage(size = 'A4', { landscape = false } = {}) {
+    const [w, h] = pageSize(size, landscape);
+    const p = new Page(this, w, h, this.pages.length);
+    this.pages.push(p);
+    return p;
+  }
+
+  bookmark(title, page, y = 0) { this.marks.push({ title: String(title ?? ''), page, y }); return this; }
+
+  // Only resources actually used by some page are written (unused addFont/addImage calls cost nothing). Images are
+  // stored uncompressed by ObjectWriter because their data is already JPEG or zlib. Annotation rectangles are
+  // flipped back to PDF's bottom-up space here, since annotations are not affected by the content-stream matrix.
+  // Note: `date` must be a Date for deterministic output; any other value falls back to the current time.
+  toBytes() {
+    if (!this.pages.length) this.addPage();
+    const w = new ObjectWriter(this.compress);
+    const catalog = w.reserve(), tree = w.reserve();
+    const pageNums = this.pages.map(() => w.reserve());
+    const used = (set) => { const s = new Set(); for (const p of this.pages) for (const x of p[set]) s.add(x); return s; };
+    const fontObj = new Map(), imgObj = new Map(), gsObj = new Map();
+    for (const f of used('fonts')) fontObj.set(f, f.kind === 'standard' ? w.add(`<< /Type /Font /Subtype /Type1 /BaseFont /${f.name} /Encoding /WinAnsiEncoding >>`) : writeTrueType(w, f));
+    for (const im of used('images')) {
+      const sm = im.smask ? w.stream(imageDict(im.smask), im.smask.data, { compress: false }) : 0;
+      imgObj.set(im, w.stream(imageDict(im) + (sm ? ` /SMask ${sm} 0 R` : ''), im.data, { compress: false }));
+    }
+    for (const g of used('states')) gsObj.set(g, w.add(`<< /Type /ExtGState /ca ${fmt(g.ca)} /CA ${fmt(g.CA)} >>`));
+    const dest = (page, y) => {
+      const p = page instanceof Page ? page : this.pages[page];
+      if (!p) return 'null';
+      return `[${pageNums[p.index]} 0 R /XYZ 0 ${fmt(p.height - (y || 0))} null]`;
+    };
+    this.pages.forEach((p, i) => {
+      const content = w.stream('<<', latin1(`q 1 0 0 -1 0 ${fmt(p.height)} cm\n${p.ops.join('\n')}\nQ\n`));
+      const res = [];
+      if (p.fonts.size) res.push('/Font << ' + [...p.fonts].map((f) => `/${f.res} ${fontObj.get(f)} 0 R`).join(' ') + ' >>');
+      if (p.images.size) res.push('/XObject << ' + [...p.images].map((m) => `/${m.res} ${imgObj.get(m)} 0 R`).join(' ') + ' >>');
+      if (p.states.size) res.push('/ExtGState << ' + [...p.states].map((g) => `/${g.res} ${gsObj.get(g)} 0 R`).join(' ') + ' >>');
+      const annots = p.annots.map((a) => {
+        const r = [a.rect[0], p.height - a.rect[3], a.rect[2], p.height - a.rect[1]].map(fmt).join(' ');
+        const act = typeof a.target === 'string' ? `/A << /S /URI /URI ${literal(encodeURI(decodeSafe(a.target)))} >>` : `/Dest ${dest(a.target.page, a.target.y)}`;
+        return w.add(`<< /Type /Annot /Subtype /Link /Rect [${r}] /Border [0 0 0] ${act} >>`);
+      });
+      w.set(pageNums[i], `<< /Type /Page /Parent ${tree} 0 R /MediaBox [0 0 ${fmt(p.width)} ${fmt(p.height)}] /Resources << /ProcSet [/PDF /Text /ImageB /ImageC] ${res.join(' ')} >> /Contents ${content} 0 R${annots.length ? ` /Annots [${annots.map((n) => n + ' 0 R').join(' ')}]` : ''} >>`);
+    });
+    w.set(tree, `<< /Type /Pages /Kids [${pageNums.map((n) => n + ' 0 R').join(' ')}] /Count ${pageNums.length} >>`);
+    let outlines = '';
+    if (this.marks.length) {
+      const root = w.reserve();
+      const nums = this.marks.map(() => w.reserve());
+      this.marks.forEach((m, i) => {
+        w.set(nums[i], `<< /Title ${pdfText(m.title)} /Parent ${root} 0 R${i ? ` /Prev ${nums[i - 1]} 0 R` : ''}${i < nums.length - 1 ? ` /Next ${nums[i + 1]} 0 R` : ''} /Dest ${dest(m.page, m.y)} >>`);
+      });
+      w.set(root, `<< /Type /Outlines /First ${nums[0]} 0 R /Last ${nums[nums.length - 1]} 0 R /Count ${nums.length} >>`);
+      outlines = ` /Outlines ${root} 0 R /PageMode /UseOutlines`;
+    }
+    const d = this.date instanceof Date ? this.date : new Date();
+    const pad = (v) => String(v).padStart(2, '0');
+    const stamp = `D:${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
+    const I = this.info;
+    const infoParts = [['Title', I.title], ['Author', I.author], ['Subject', I.subject], ['Keywords', I.keywords], ['Creator', I.creator], ['Producer', I.producer]]
+      .filter(([, v]) => v).map(([k, v]) => `/${k} ${pdfText(v)}`);
+    const info = w.add(`<< ${infoParts.join(' ')} /CreationDate (${stamp}) /ModDate (${stamp}) >>`);
+    w.set(catalog, `<< /Type /Catalog /Pages ${tree} 0 R${this.lang ? ' /Lang ' + pdfText(this.lang) : ''}${I.title ? ' /ViewerPreferences << /DisplayDocTitle true >>' : ''}${outlines} >>`);
+    return w.finish(catalog, info);
+  }
+}
+
+const decodeSafe = (u) => { try { return decodeURI(u); } catch { return u; } };
+
+function imageDict(im) {
+  return `<< /Type /XObject /Subtype /Image /Width ${im.width} /Height ${im.height} /ColorSpace /${im.colorSpace} /BitsPerComponent ${im.bpc}` +
+    (im.filter ? ` /Filter /${im.filter}` : '') + (im.decode ? ` /Decode [${im.decode.join(' ')}]` : '');
+}
+
+// Subset tag: six capital letters from a hash of the used glyphs (same glyphs -> same tag).
+// The 'ABCDEF+' prefix is required by the PDF spec for subset fonts; deriving it from content (not randomly) keeps
+// output deterministic and lets readers share identical subsets across merged documents.
+function subsetTag(name, gids) {
+  let h = 0x811c9dc5;
+  for (const c of name + ':' + gids.join(',')) { h ^= c.charCodeAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
+  let t = '';
+  for (let i = 0; i < 6; i++) { t += String.fromCharCode(65 + (h % 26)); h = Math.floor(h / 26) ^ (i * 0x9e3779b1 >>> 0); h >>>= 0; }
+  return t;
+}
+
+const hex4 = (n) => n.toString(16).toUpperCase().padStart(4, '0');
+function utf16hex(s) { let h = ''; for (let i = 0; i < s.length; i++) h += hex4(s.charCodeAt(i)); return h; }
+
+// Type0 + CIDFontType2 + Identity-H + CIDToGIDMap Identity: CID == glyph id, so the subset keeps original glyph ids
+// (subsetTTF empties unused glyphs instead of renumbering) and the content stream needs no remapping.
+// Flags 32 = non-symbolic; FontDescriptor metrics come from the font's head/hhea/OS2 tables. StemV is required but
+// unknown for TrueType, so a conventional guess (80 / 120 bold) is used - readers only use it for substitution.
+function writeTrueType(w, f) {
+  const ttf = f.ttf;
+  const gids = [...f.used.keys()].sort((a, b) => a - b);
+  const bytes = f.subset ? subsetTTF(ttf, gids) : ttf.bytes;
+  const base = (f.subset ? subsetTag(ttf.postscriptName, gids) + '+' : '') + ttf.postscriptName;
+  const file = w.stream(`<< /Length1 ${bytes.length}`, bytes);
+  const flags = 32 | (ttf.fixedPitch ? 1 : 0) | (ttf.italic ? 64 : 0);
+  const desc = w.add(`<< /Type /FontDescriptor /FontName ${pdfName(base)} /Flags ${flags} /FontBBox [${ttf.bbox.join(' ')}] /ItalicAngle ${fmt(ttf.italicAngle)} ` +
+    `/Ascent ${ttf.ascent} /Descent ${ttf.descent} /CapHeight ${ttf.capHeight} /XHeight ${ttf.xHeight} /StemV ${ttf.bold ? 120 : 80} /FontFile2 ${file} 0 R >>`);
+  // /W: runs of consecutive glyph ids share one array ("first [w1 w2 …]").
+  const parts = [];
+  for (let i = 0; i < gids.length;) {
+    let j = i;
+    while (j + 1 < gids.length && gids[j + 1] === gids[j] + 1) j++;
+    parts.push(`${gids[i]} [${gids.slice(i, j + 1).map((g) => ttf.widthOf(g)).join(' ')}]`);
+    i = j + 1;
+  }
+  const cid = w.add(`<< /Type /Font /Subtype /CIDFontType2 /BaseFont ${pdfName(base)} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> ` +
+    `/FontDescriptor ${desc} 0 R /DW 1000 /W [${parts.join(' ')}] /CIDToGIDMap /Identity >>`);
+  // ToUnicode: at most 100 entries per bfchar block (a CMap limit some readers enforce).
+  const lines = gids.filter((g) => g !== 0).map((g) => `<${hex4(g)}> <${utf16hex(f.used.get(g))}>`);
+  let cmap = '/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n' +
+    `/CMapName /${base.replace(/[^A-Za-z0-9+_-]/g, '')}-UCS def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n`;
+  for (let i = 0; i < lines.length; i += 100) { const part = lines.slice(i, i + 100); cmap += `${part.length} beginbfchar\n${part.join('\n')}\nendbfchar\n`; }
+  cmap += 'endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n';
+  const tu = w.stream('<<', latin1(cmap));
+  return w.add(`<< /Type /Font /Subtype /Type0 /BaseFont ${pdfName(base)} /Encoding /Identity-H /DescendantFonts [${cid} 0 R] /ToUnicode ${tu} 0 R >>`);
+}
+
+// --- objects and the file -----------------------------------------------------------------------------------------
+
+// Objects are kept in memory as strings or { dict, data } and serialised once, recording each byte offset for the
+// classic xref table (fixed 20-byte entries). A stream is compressed only if that actually shrinks it - tiny streams
+// grow under zlib. The second header line holds four bytes >= 0x80 so transfer tools treat the file as binary.
+class ObjectWriter {
+  constructor(compress) { this.compress = compress; this.objects = [null]; }
+  reserve() { this.objects.push(null); return this.objects.length - 1; }
+  set(n, body) { this.objects[n] = body; return n; }
+  add(body) { this.objects.push(body); return this.objects.length - 1; }
+  // dict: the opening of a dictionary without '>>' ('<<' alone for none); /Filter and /Length are appended.
+  stream(dict, data, { compress = this.compress } = {}) {
+    let bytes = data, d = dict;
+    if (compress && bytes.length > 32) { const z = zlibSync(bytes, { level: 6 }); if (z.length < bytes.length) { bytes = z; d += ' /Filter /FlateDecode'; } }
+    return this.add({ dict: `${d} /Length ${bytes.length} >>`, data: bytes });
+  }
+  finish(root, info) {
+    const parts = [];
+    let len = 0;
+    const push = (b) => { parts.push(b); len += b.length; };
+    push(latin1('%PDF-1.7\n%\xe2\xe3\xcf\xd3\n'));
+    const offsets = [];
+    for (let i = 1; i < this.objects.length; i++) {
+      offsets[i] = len;
+      const o = this.objects[i];
+      if (o && typeof o === 'object') { push(latin1(`${i} 0 obj\n${o.dict}\nstream\n`)); push(o.data); push(latin1('\nendstream\nendobj\n')); }
+      else push(latin1(`${i} 0 obj\n${o == null ? 'null' : o}\nendobj\n`));
+    }
+    const id = fileId(parts);
+    let x = `xref\n0 ${this.objects.length}\n0000000000 65535 f \n`;
+    for (let i = 1; i < this.objects.length; i++) x += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
+    x += `trailer\n<< /Size ${this.objects.length} /Root ${root} 0 R /Info ${info} 0 R /ID [<${id}> <${id}>] >>\nstartxref\n${len}\n%%EOF\n`;
+    push(latin1(x));
+    const out = new Uint8Array(len);
+    let p = 0;
+    for (const b of parts) { out.set(b, p); p += b.length; }
+    return out;
+  }
+}
+
+// 128-bit identifier from four FNV-1a lanes over the body (not cryptographic; it only has to differ between files).
+function fileId(parts) {
+  const h = [0x811c9dc5, 0x01000193, 0x9e3779b1, 0x85ebca6b];
+  for (const b of parts) for (let i = 0; i < b.length; i++) for (let k = 0; k < 4; k++) h[k] = Math.imul(h[k] ^ (b[i] + k), 0x01000193 + k * 2) >>> 0;
+  return h.map((v) => v.toString(16).toUpperCase().padStart(8, '0')).join('');
+}

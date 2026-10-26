@@ -1,0 +1,261 @@
+// prosody/suggest.js - what to put at the end of a line: the same word with other endings and suffixes (word
+// modifiers), and other words that rhyme, each with its distance to the target rhyme and its fit to the meter.
+//
+//   needOf(line) -> { syllables, stressFromEnd } | null   the shape the rhyming word should have (poem.js line)
+//   meterFit(W, need) -> 0…1
+//   modifiers(word, lang, { target, need, limit }) -> [S]       endings(word, lang) -> [{ ending, kind }]
+//   rhymeWords(target, lang, { need, exclude, limit }) -> [S]
+// S = { word, stem, ending, kind, attested, rhyme (compareRhyme), score (rhyme 0…1 or null), fit, total, W }
+// kinds: case, number, agreement, person, tense, aspect, degree, diminutive, derivation, postposition, word.
+// attested: the form is in the dictionary (dict-ru.js / dict-en.js, the Georgian lexicon and its paradigms); a form
+// built by rule and found nowhere is kept only when it rhymes best, marked attested: false.
+import { analyzeWord, normWord } from './words.js';
+import { rhymeUnit, compareRhyme } from './rhyme.js';
+import { splitEnding } from './morph.js';
+import { knownRu, wordsRu, lookupRu, RU_VOWELS } from './phon-ru.js';
+import { knownEn, wordsEn, pronounceEn, decodeEn } from './phon-en.js';
+import { lexicon } from '../lingua/kartuli-lexicon.js';
+import { declineNoun, verbTable, analyzeWord as analyzeKaWord } from '../lingua/kartuli-grammar.js';
+import { CODE_ARPA, VOWELS_ARPA } from './dict-codes.js';
+
+const WCACHE = new Map();
+const W = (w, lang) => { const k = lang + ':' + w; let x = WCACHE.get(k); if (!x) { if (WCACHE.size > 20000) WCACHE.clear(); x = analyzeWord(w, lang); WCACHE.set(k, x); } return x; };
+const vowels = (Wx) => Wx.syl.filter((s) => s.v >= 0).length;
+
+// The rhyming word must fill the slots the meter leaves after the words before it and keep the clausula.
+export function needOf(L) {
+  if (!L || !L.expected || !L.expected.length || !L.scan || L.endIndex === undefined) return null;
+  const before = L.scan.pos.filter((p) => p.w < L.endIndex && !p.elided).length;
+  const syllables = L.expected.length - before;
+  const clausula = L.expected.length - 1 - L.expected.map((s) => s.strong).lastIndexOf(true);
+  return syllables > 0 ? { syllables, stressFromEnd: clausula } : null;
+}
+
+export function meterFit(Wx, need) {
+  if (!need) return 1;
+  const n = vowels(Wx);
+  const map = Wx.syl.map((s, k) => k).filter((k) => Wx.syl[k].v >= 0);
+  const st = map.indexOf(Wx.stress >= 0 ? Wx.stress : map[0]);
+  const fromEnd = n - 1 - Math.max(0, st);
+  let f = 1 - 0.3 * Math.abs(n - need.syllables);
+  if (need.stressFromEnd !== null && need.stressFromEnd !== undefined && fromEnd !== need.stressFromEnd && Wx.lang !== 'ka') f -= 0.35;
+  return Math.max(0, Math.min(1, f));
+}
+
+// --- endings and derivations by language -------------------------------------------------------------------------------
+const RU_END = {
+  n: [['', 'case'], ['а', 'case'], ['я', 'case'], ['о', 'case'], ['е', 'case'], ['ы', 'number'], ['и', 'number'], ['у', 'case'], ['ю', 'case'], ['ой', 'case'], ['ей', 'case'], ['ою', 'case'], ['ею', 'case'], ['ом', 'case'], ['ем', 'case'], ['ами', 'case'], ['ями', 'case'], ['ах', 'case'], ['ях', 'case'], ['ов', 'case'], ['ев', 'case'], ['ам', 'case'], ['ям', 'case'], ['ь', 'case']],
+  a: [['ый', 'agreement'], ['ий', 'agreement'], ['ой', 'agreement'], ['ая', 'agreement'], ['яя', 'agreement'], ['ое', 'agreement'], ['ее', 'agreement'], ['ые', 'agreement'], ['ие', 'agreement'], ['ого', 'agreement'], ['его', 'agreement'], ['ому', 'agreement'], ['ему', 'agreement'], ['ым', 'agreement'], ['им', 'agreement'], ['ую', 'agreement'], ['юю', 'agreement'], ['ых', 'agreement'], ['их', 'agreement'], ['ыми', 'agreement'], ['ими', 'agreement'], ['ою', 'agreement'], ['ей', 'agreement'], ['', 'agreement'], ['а', 'agreement'], ['о', 'agreement'], ['ы', 'agreement']],
+  v: [['ть', 'aspect'], ['л', 'tense'], ['ла', 'tense'], ['ло', 'tense'], ['ли', 'tense'], ['т', 'person'], ['шь', 'person'], ['м', 'person'], ['те', 'person'], ['ю', 'person'], ['у', 'person'], ['ешь', 'person'], ['ет', 'person'], ['ем', 'person'], ['ете', 'person'], ['ут', 'person'], ['ют', 'person'], ['ишь', 'person'], ['ит', 'person'], ['им', 'person'], ['ите', 'person'], ['ат', 'person'], ['ят', 'person'], ['й', 'person'], ['йте', 'person'], ['в', 'aspect'], ['я', 'aspect']],
+};
+const ruSpell = (stem, end) => {
+  if (/[гкхжчшщ]$/.test(stem)) end = end.replace(/^ы/, 'и');
+  if (/[жчшщц]$/.test(stem)) end = end.replace(/^я/, 'а').replace(/^ю/, 'у');
+  return stem + end;
+};
+
+function genRu(s) {
+  const out = [];
+  let stem = s.stem, pos = s.pos || 'n';
+  // a past tense in -л: the formative л is the ending of the modifier
+  if (pos === 'v' && /[аеиоуыя]л$/.test(stem) && !s.ending) stem = stem.slice(0, -1);
+  if (pos === 'v' && /ть$|ти$/.test(stem)) stem = stem.replace(/(ть|ти)$/, '');
+  const postFor = (form) => (s.post ? (/[аеёиоуыэюя]$/.test(form) ? form + (s.post === 'ся' ? 'сь' : s.post) : form + s.post) : form);
+  for (const [e, kind] of RU_END[pos] || RU_END.n) out.push({ word: postFor(ruSpell(stem, e)), stem, ending: e, kind });
+  if (pos === 'n') {
+    const fem = /[ая]$/.test(s.ending);
+    const base = stem.replace(/[ьй]$/, '');
+    for (const [suf, ends] of fem ? [['очк', ['а', 'и', 'е', 'у', 'ой']], ['ечк', ['а', 'и', 'е', 'у']], ['ушк', ['а', 'и', 'е']], ['оньк', ['а', 'и']]] : [['ок', ['', 'а', 'у', 'ом']], ['ик', ['', 'а', 'у', 'ом']], ['ек', ['']], ['ышк', ['о', 'а']], ['ец', ['']]]) {
+      for (const e of ends) out.push({ word: ruSpell(base + suf, e), stem: base, ending: suf + e, kind: 'diminutive' });
+    }
+  }
+  if (pos === 'a') for (const e of ['ий', 'ая', 'ое', 'ие', 'ого', 'ой']) { out.push({ word: ruSpell(stem + 'еньк', e), stem, ending: 'еньк' + e, kind: 'diminutive' }); out.push({ word: ruSpell(stem + 'оват', e.replace(/^и/, 'ы')), stem, ending: 'оват' + e, kind: 'derivation' }); }
+  if (pos === 'v') {
+    const word = s.stem + s.ending + s.post;
+    for (const p of ['по', 'за', 'про', 'при', 'на', 'у']) if (!word.startsWith(p)) out.push({ word: p + word, stem: word, ending: p + '-', kind: 'aspect' });
+    // secondary imperfective: переписать → переписывать
+    if (/[аи]$/.test(stem)) for (const e of ['ть', 'л', 'ла', 'ли', 'ет', 'ют']) out.push({ word: postFor(stem.slice(0, -1) + 'ыва' + e), stem: stem.slice(0, -1), ending: 'ыва' + e, kind: 'aspect' });
+  }
+  return out;
+}
+
+const EN_SUF = [['', 'word'], ['s', 'number'], ['es', 'number'], ['ed', 'tense'], ['ing', 'aspect'], ['er', 'degree'], ['est', 'degree'], ['ly', 'derivation'], ['ness', 'derivation'], ['ful', 'derivation'], ['less', 'derivation'], ['ment', 'derivation'], ['y', 'derivation'], ['ish', 'derivation'], ['able', 'derivation'], ['eth', 'person'], ['est', 'person']];
+function enAdd(base, suf) {
+  if (!suf) return base;
+  if (/^[aeiouy]/.test(suf) && /[^aeiou]e$/.test(base) && suf !== 'y') return base.slice(0, -1) + suf;
+  if (/[^aeiou]y$/.test(base) && !/^i/.test(suf)) return base.slice(0, -1) + 'i' + suf;
+  if (/^[aeiouy]/.test(suf) && /^[^aeiou]*[aeiou][^aeiouwxy]$/.test(base)) return base + base.slice(-1) + suf;
+  return base + suf;
+}
+function genEn(s, word) {
+  const cands = [s.stem, s.stem + 'e', s.stem.replace(/(.)\1$/, '$1'), s.stem.replace(/i$/, 'y'), word].filter((x, i, a) => x && a.indexOf(x) === i);
+  const base = cands.find((x) => knownEn(x) && x !== word) || cands.find((x) => knownEn(x)) || word;
+  const out = [];
+  for (const [suf, kind] of EN_SUF) {
+    if (suf === 'es' && !/(s|x|z|ch|sh)$/.test(base)) continue;
+    if (suf === 's' && /(s|x|z|ch|sh)$/.test(base)) continue;
+    out.push({ word: enAdd(base, suf), stem: base, ending: suf, kind });
+  }
+  return out;
+}
+
+const KA_END = [['ი', 'case'], ['მა', 'case'], ['ს', 'case'], ['ის', 'case'], ['ით', 'case'], ['ად', 'case'], ['ო', 'case'], ['ითა', 'case'], ['ისა', 'case'], ['სა', 'case'], ['ადა', 'case'], ['ები', 'number'], ['ებმა', 'number'], ['ებს', 'number'], ['ების', 'number'], ['ებით', 'number'], ['ებისა', 'number'], ['ნი', 'number'], ['თა', 'number'], ['ში', 'postposition'], ['ზე', 'postposition'], ['თან', 'postposition'], ['იდან', 'postposition'], ['ისთვის', 'postposition'], ['ივით', 'postposition'], ['ისგან', 'postposition']];
+const KA_CASE_RE = /(ებ)?(ისთვის|ისგან|ივით|იდან|ითა|ისა|ადა|ით|ის|ად|მა|თან|ში|ზე|ნი|თა|სა|ი|ს|ო)$/;
+function genKa(s, word) {
+  const out = [];
+  if (s.lex && s.lex.pos !== 'v') {
+    try {
+      const d = declineNoun(s.lex);
+      for (const f of d.sg || []) out.push({ word: f.form, stem: d.stem, ending: f.form.slice(d.stem.length), kind: 'case' });
+      for (const f of d.pl || []) out.push({ word: f.form, stem: d.stem, ending: f.form.slice(d.stem.length), kind: 'number' });
+      for (const f of d.post || []) out.push({ word: f.form, stem: d.stem, ending: f.form.slice(d.stem.length), kind: 'postposition' });
+      for (const f of d.old || []) if (f && f.form) out.push({ word: f.form, stem: d.stem, ending: f.form.slice(d.stem.length), kind: 'number' });
+    } catch { /* a lexicon entry without a paradigm */ }
+  } else if (s.lex && s.lex.pos === 'v') {
+    const person = (s.tags && s.tags.s) || '3sg';
+    for (const sc of ['present', 'imperfect', 'future', 'aorist', 'optative', 'perfect']) {
+      try {
+        for (const f of verbTable(s.lex, sc)) if (f.s === person || sc === 'present') out.push({ word: String(f.form).replace(/-/g, ''), stem: '', ending: '', kind: f.s === person ? 'tense' : 'person' });
+      } catch { /* screeve not built for this verb */ }
+    }
+  }
+  // by rule: the stem without its case ending (and the plural -ებ-) and every case ending
+  const m = KA_CASE_RE.exec(word);
+  const stem = m && word.length - m[0].length >= 2 ? word.slice(0, -m[0].length) : word.replace(/ი$/, '');
+  const vstem = /[აეოუ]$/.test(stem);
+  for (const [e, kind] of KA_END) out.push({ word: stem + (vstem && /^ი/.test(e) ? e.slice(1) || 'ს' : e), stem, ending: e, kind });
+  return out;
+}
+
+let KA_FORMS = null, KA_POETIC = null;
+// the forms of the lexicon and its noun paradigms; KA_POETIC adds the old instrumental and genitive in -ითა / -ისა
+// that Rustaveli rhymes on (built by rule, not attested)
+function kaForms() {
+  if (KA_FORMS) return KA_FORMS;
+  KA_FORMS = new Set();
+  KA_POETIC = new Set();
+  for (const e of lexicon()) {
+    KA_FORMS.add(e.w);
+    if (e.pos === 'n' || e.pos === 'a') {
+      try {
+        const d = declineNoun(e);
+        for (const f of [...(d.sg || []), ...(d.pl || [])]) KA_FORMS.add(f.form);
+        if (d.stem && !/[აეოუ]$/.test(d.stem)) { KA_POETIC.add(d.stem + 'ითა'); KA_POETIC.add(d.stem + 'ისა'); }
+      } catch { /* skip */ }
+    }
+    if (e.flags && e.flags.p) KA_FORMS.add(String(e.flags.p).replace(/-/g, ''));
+    if (e.flags && e.flags.pt) for (const p of e.flags.pt) KA_FORMS.add(p);
+  }
+  return KA_FORMS;
+}
+const knownKa = (w) => kaForms().has(w) || analyzeKaWord(w).length > 0;
+const known = (w, lang) => (lang === 'ru' ? knownRu(w) : lang === 'ka' ? knownKa(w) : knownEn(w));
+
+function rank(list, lang, { target, need, limit, word }) {
+  const seen = new Set([word]);
+  const out = [];
+  for (const c of list) {
+    const w = normWord(c.word, lang);
+    if (!w || seen.has(w)) continue;
+    seen.add(w);
+    const Wc = W(w, lang);
+    if (!Wc.syl.some((s) => s.v >= 0)) continue;
+    const attested = known(w, lang);
+    const R = target ? compareRhyme(rhymeUnit(Wc), target) : null;
+    const fit = meterFit(Wc, need);
+    const total = (R ? 0.65 * R.score + 0.35 * fit : fit) - (attested ? 0 : 0.12);
+    out.push({ ...c, word: w, attested, rhyme: R, score: R ? R.score : null, fit, total, W: Wc });
+  }
+  out.sort((a, b) => b.total - a.total);
+  // forms found nowhere: only the three best, and only when they rhyme
+  const res = [];
+  let rule = 0;
+  for (const s of out) {
+    if (!s.attested) { if (rule >= 3 || (s.score !== null && s.score < 0.7)) continue; rule++; }
+    res.push(s);
+    if (res.length >= limit) break;
+  }
+  return res;
+}
+
+export function modifiers(word, lang, { target = null, need = null, limit = 12 } = {}) {
+  const w = normWord(word, lang).replace(/'/g, '');
+  if (!w) return [];
+  const s = splitEnding(w, lang);
+  const list = lang === 'ru' ? genRu(s) : lang === 'ka' ? genKa(s, w) : genEn(s, w);
+  return rank(list, lang, { target, need, limit, word: w });
+}
+
+// The endings to offer in the squares of a word: the modifiers' endings, best first, without the stem.
+export function endings(word, lang, opts = {}) {
+  const w = normWord(word, lang).replace(/'/g, '');
+  const s = splitEnding(w, lang);
+  return { stem: s.stem, ending: s.ending + s.post, options: modifiers(w, lang, { ...opts, limit: opts.limit || 8 }).filter((m) => m.word.startsWith(s.stem)).map((m) => ({ ending: m.word.slice(s.stem.length), kind: m.kind, word: m.word, score: m.score, attested: m.attested })) };
+}
+
+// --- rhyme candidates from the word lists -------------------------------------------------------------------------------
+const RU_CLASS = { а: 'a', я: 'a', о: 'o', ё: 'o', у: 'u', ю: 'u', э: 'e', е: 'e', ы: 'i', и: 'i' };
+const RU_LAST = { б: 'п', в: 'ф', г: 'к', д: 'т', ж: 'ш', з: 'с', ь: '', ъ: '' };
+function ruKey(w, stressV, yo) {
+  const L = [...w];
+  const vi = L.map((c, i) => (RU_VOWELS.includes(c) ? i : -1)).filter((i) => i >= 0);
+  if (!vi.length) return null;
+  const k = Math.max(0, Math.min(vi.length - 1, stressV));
+  const v = yo ? 'o' : RU_CLASS[L[vi[k]]];
+  let last = L[L.length - 1];
+  if (RU_LAST[last] !== undefined) last = RU_LAST[last] || L[L.length - 2] || '';
+  if (RU_VOWELS.includes(last)) last = RU_CLASS[last];
+  return v + (vi.length - 1 - k) + last;
+}
+function enKeyFromArpa(ph) {
+  let k = -1;
+  for (let i = ph.length - 1; i >= 0; i--) if (VOWELS_ARPA.has(ph[i].p) && ph[i].s === 1) { k = i; break; }
+  if (k < 0) for (let i = ph.length - 1; i >= 0; i--) if (VOWELS_ARPA.has(ph[i].p)) { k = i; break; }
+  if (k < 0) return null;
+  const after = ph.slice(k + 1).filter((x) => VOWELS_ARPA.has(x.p)).length;
+  return ph[k].p + after + (k === ph.length - 1 ? '' : ph[ph.length - 1].p);
+}
+const KA_V = 'აეიოუ';
+function kaKey(w) {
+  const vs = [...w].filter((c) => KA_V.includes(c));
+  if (!vs.length) return null;
+  return vs.slice(-2).join('') + w.slice(-1);
+}
+
+const INDEX = {};
+// Rhyme index built once per language: words bucketed by a coarse rhyme key (stressed vowel + what follows), so a
+// query scores only one bucket with the expensive aligner instead of all ~30 000 words.
+function index(lang) {
+  if (INDEX[lang]) return INDEX[lang];
+  const m = new Map();
+  const put = (k, w) => { if (k) (m.get(k) || m.set(k, []).get(k)).push(w); };
+  if (lang === 'ru') for (const w of wordsRu()) { const d = lookupRu(w); put(ruKey(w, d ? d[0].i : 0, d ? d[0].yo : false), w); }
+  else if (lang === 'en') for (const [w, code] of wordsEn()) { if (/'/.test(w)) continue; put(enKeyFromArpa(decodeEn(code)), w); }
+  else { kaForms(); for (const w of [...KA_FORMS, ...KA_POETIC]) if (!/[-\s]/.test(w)) put(kaKey(w), w); }
+  return (INDEX[lang] = m);
+}
+
+function targetKey(target, lang) {
+  if (lang === 'ru') {
+    const Wt = W(target.norm.split(' ')[0], 'ru');
+    const vi = Wt.syl.map((s, k) => k).filter((k) => Wt.syl[k].v >= 0);
+    return ruKey(target.norm.split(' ')[0], vi.indexOf(target.from), target.vowel === 'o' && /е/.test(target.text));
+  }
+  if (lang === 'en') return enKeyFromArpa(pronounceEn(target.norm).ph);
+  return kaKey(target.norm);
+}
+
+export function rhymeWords(target, lang, { need = null, exclude = [], limit = 24 } = {}) {
+  if (!target) return [];
+  const idx = index(lang);
+  const key = targetKey(target, lang);
+  let pool = key ? (idx.get(key) || []).slice() : [];
+  // not enough: the keys with the same vowel and syllable count
+  if (pool.length < limit * 4 && key) {
+    const pre = lang === 'en' ? (key.match(/^[A-Z]+\d+/) || [key])[0] : key.slice(0, 2);
+    for (const [k, ws] of idx) if (k !== key && k.startsWith(pre)) { pool = pool.concat(ws); if (pool.length > 1500) break; }
+  }
+  const ex = new Set([target.norm, ...exclude.map((x) => normWord(x, lang))]);
+  const list = pool.filter((w) => !ex.has(w)).slice(0, 1500).map((w) => ({ word: w, stem: w, ending: '', kind: 'word' }));
+  return rank(list, lang, { target, need, limit: limit * 2, word: target.norm }).filter((s) => s.score >= 0.6 && s.rhyme.kind !== 'identical').slice(0, limit);
+}

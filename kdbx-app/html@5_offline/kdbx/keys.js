@@ -1,0 +1,12 @@
+import{sha256}from"../crypto/sha2.js";import{bytesToUtf8,hexToBytes,bytesToHex,base64ToBytes,utf8ToBytes,wipe,concatBytes}from"../crypto/encoding.js";import{randomBytes}from"../crypto/random.js";import{parseXML,root,textOf,path,attr}from"../xml/xml.js";import{ProtectedValue}from"./protect.js";function keyFileKey(bytes){const b=bytes instanceof Uint8Array?bytes:new Uint8Array(bytes);if(b.length<4096*4){let text=null;try{text=bytesToUtf8(b,true);}catch{text=null;}
+if(text&&/<KeyFile[\s>]/.test(text)){const doc=parseXML(text);const r=root(doc);const version=textOf(path(r,'Meta','Version')).trim();const dataEl=path(r,'Key','Data');if(!dataEl)throw new Error('invalid key file: no Key/Data');const data=textOf(dataEl).replace(/\s+/g,'');if(version.startsWith('2.')){const key=hexToBytes(data);const hash=attr(dataEl,'Hash');if(hash&&bytesToHex(sha256(key).subarray(0,4)).toLowerCase()!==hash.toLowerCase())throw new Error('the key file is corrupted (hash mismatch)');return key;}
+if(version.startsWith('1.')||!version)return base64ToBytes(data);throw new Error('unsupported key file version '+version);}}
+if(b.length===32)return b.slice();if(b.length===64){const s=String.fromCharCode(...b);if(/^[0-9a-fA-F]{64}$/.test(s))return hexToBytes(s);}
+return sha256(b);}
+function generateKeyFile(){const key=randomBytes(32);const hex=bytesToHex(key).toUpperCase();const groups=hex.match(/.{8}/g);const hash=bytesToHex(sha256(key).subarray(0,4)).toUpperCase();const xml='<?xml version="1.0" encoding="utf-8"?>\n<KeyFile>\n\t<Meta>\n\t\t<Version>2.0</Version>\n\t</Meta>\n\t<Key>\n'
++`\t\t<Data Hash="${hash}">\n\t\t\t${groups.slice(0,4).join(' ')}\n\t\t\t${groups.slice(4).join(' ')}\n\t\t</Data>\n\t</Key>\n</KeyFile>\n`;return{bytes:utf8ToBytes(xml),key};}
+class KdbxCredentials{constructor({password=null,keyFile=null}={}){this.passwordHash=null;this.keyFileHash=null;if(password!=null){const pw=password instanceof ProtectedValue?password.getBytes():utf8ToBytes(String(password));this.passwordHash=sha256(pw);wipe(pw);}
+if(keyFile)this.keyFileHash=keyFileKey(keyFile);if(!this.passwordHash&&!this.keyFileHash)throw new Error('a password or a key file is required');}
+compositeKey(){const parts=[this.passwordHash,this.keyFileHash].filter(Boolean);const all=concatBytes(...parts);const out=sha256(all);wipe(all);return out;}
+destroy(){wipe(this.passwordHash,this.keyFileHash);this.passwordHash=this.keyFileHash=null;}}
+export{KdbxCredentials,generateKeyFile};

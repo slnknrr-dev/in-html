@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- newbuild-board/complex.html - complex page (buildings, price list, data import / export). An empty shell: info.js builds the UI into <main>; the four pages share this markup
+     except for title and entry module, so the shell header and nav are identical. Build strips these comments. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Newbuild Board — Complex</title>
+<!-- Favicon as an SVG data: URI (a 3x3 grid of units, three highlighted): no request, works offline. %23 = '#'. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Cpath fill='%23fff' d='M7 7h5v5H7zm6.5 0h5v5h-5zM20 7h5v5h-5zM7 13.5h5v5H7zm6.5 0h5v5h-5zM20 13.5h5v5h-5zM7 20h5v5H7zm6.5 0h5v5h-5zM20 20h5v5h-5z' opacity='.55'/%3E%3Cpath fill='%23fff' d='M13.5 7h5v5h-5zM7 20h5v5H7zM20 13.5h5v5h-5z'/%3E%3C/svg%3E">
+<!-- Cascade order is a contract: tokens + primitives (ed-), shell (ap-), this app (nb-). Equal specificity is
+     decided by source order, so app.css overrides the shared sheets without !important. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- Page registry read by common.js pageHref(): the build renames pages and rewrites <a href> reliably, string
+     literals in JS it would not. hidden = out of layout and of the accessibility tree. -->
+<a id="pg-board" href="index.html" hidden></a>
+<a id="pg-import" href="import.html" hidden></a>
+<a id="pg-mortgage" href="mortgage.html" hidden></a>
+<a id="pg-complex" href="complex.html" hidden></a>
+<!-- <main> landmark as the mount point; type="module" scripts are deferred, so #main exists when info.js runs. -->
+<main class="ap-main" id="main"></main>
+<script type="module" src="./info.js"></script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+<!doctype html>
+<!-- textile-studio/index.html - the page shell of Textile Studio. Everything visible is built by main.js into
+     <main id="main">; the HTML only provides the document metadata, the stylesheets in cascade order and the module.
+     Edited here, rebuilt into html@5_* by node singlefile.js (which inlines the CSS / JS and strips these comments). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit=cover: the app uses the full width on notched phones; content may extend under notches. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Textile Studio</title>
+<meta name="description" content="Textile Studio: model a body by sex, height, weight and features, draft garment patterns from its measurements, add layered details (linings, facings, lapels, collars, pockets, satin trims - a whole tuxedo), weave or knit the fabric, design repeat and placement prints, drape it all in 3D with a cloth simulation and export tiled print-at-home PDF patterns, SVG, DXF, cutting layouts and merch mockups.">
+<!-- color-scheme: native controls and scrollbars follow the theme; theme-color: the accent tints the mobile
+     browser chrome. The favicon is an inline SVG data URL (a shirt), so the page makes no extra request. -->
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#d0425b">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d0425b'/%3E%3Cpath d='M11 6 6 9.5l2.6 4.6 2.4-1.2V26h10V12.9l2.4 1.2L26 9.5 21 6a5 5 0 0 1-10 0z' fill='%23fff'/%3E%3Cpath d='M11 17h10M11 20.5h10' stroke='%23d0425b' stroke-width='1.6'/%3E%3C/svg%3E">
+<!-- Cascade order matters: shared primitives (ed-), the shell (ap-), then this app (tx-). Equal-specificity rules
+     in app.css win by coming last, which is how it adjusts shared components without !important. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<!-- class="ap" opts the body into the shared app shell layout of ui/app.css. -->
+<body class="ap">
+<main class="ap-main" id="main"></main>
+<!-- noscript: the app is entirely script-built; without JS the user gets an explanation instead of a blank page. -->
+<noscript><div class="ed-noscript">Textile Studio needs JavaScript.</div></noscript>
+<!-- type="module": deferred by default (runs after parsing, so #main exists) and enables the ES imports. -->
+<script type="module" src="./main.js"></script>
+</body>
+</html>

@@ -1,0 +1,1 @@
+const PAGE_SIZES={A4:{w:210,h:297},Letter:{w:215.9,h:279.4},Legal:{w:215.9,h:355.6},};export{PAGE_SIZES};

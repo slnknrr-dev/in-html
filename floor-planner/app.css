@@ -1,0 +1,298 @@
+/* floor-planner/app.css - Floor Planner: the editor (toolbar, page tabs, the stage with the plan, selection handles,
+   drawing overlay, zoom buttons, status and drawing bars, palette, inspector, summary and checks, layers, plan and
+   export cards, template dialog) and the seating page (guest list, plan, table cards), plus the print sheets.
+   Loaded third, after ui/base.css + ui/app.css; the plan's own shapes are styled by plan/svg.js planCss().
+
+   CONTRACT
+   - Namespace fp- (this app); plan-* classes belong to the shared plan renderer and are only given cursors here.
+   - Specificity budget: one class, two for state / context (.fp-tab.fp-on, .fp-stage[data-tool] .plan-sh).
+     !important only for .fp-r (beats .ap-table th/td text-align at 0,1,1) and print isolation.
+   - Chrome colours via --ed-* tokens. Exceptions, on purpose: the editing overlay (selection box, handles, drafts)
+     uses a fixed blue (#2563eb) because it is drawn ON the plan, whose paper is always white; theme-dependent
+     overlay colours would vanish on the white plan in light theme or glare in dark. Icon tiles (#fff) host
+     thumbnails drawn for white paper for the same reason.
+   - Editor state is reflected as attributes, not classes, where JS already has the value: data-tool on the stage
+     drives cursors, aria-pressed on toggles drives their look, so ARIA and visuals cannot diverge. */
+
+.fp-edit, .fp-seat { max-width: 1680px; }
+/* Visually hidden but announced (the standard clip pattern); display:none would also hide it from screen readers. */
+.fp-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.fp-bad { color: var(--ed-danger); }
+/* <a> styled as .ed-btn: .ed-btn sets no link colour or underline; tag+class (0,1,1) beats .ed-btn (0,1,0). */
+a.ed-btn { color: inherit; text-decoration: none; }
+
+/* ---------------------------------------------------------------- toolbar */
+.fp-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 10px; margin-bottom: 14px; }
+.fp-sep { width: 1px; align-self: stretch; margin: 2px 4px; background: var(--ed-border); }
+.fp-ib { padding: 0 8px; min-width: 34px; justify-content: center; }
+/* Toggle buttons styled from aria-pressed: the accessible state IS the visual state. */
+.fp-tg[aria-pressed="true"] { color: var(--ed-accent); border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.fp-tools .ed-seg-btn { gap: 5px; }
+.fp-snap { display: inline-flex; align-items: center; gap: 4px; color: var(--ed-muted); }
+.fp-step { width: auto; min-width: 84px; }
+/* Toolbar labels collapse to icons below 1100px; on phones every label after an icon is hidden. */
+@media (max-width: 1100px) { .fp-tl { display: none; } }
+@media (max-width: 560px) {
+  .fp-toolbar { gap: 4px; padding: 6px; }
+  .fp-sep { display: none; }
+  .fp-tb .ed-ic + * { display: none; }
+}
+
+/* ---------------------------------------------------------------- workspace */
+/* Three columns, centre = stage spanning all rows (grid areas). Side cards are placed by area names so the media
+   queries reorder them without touching DOM order. grid-template-rows: auto auto 1fr lets the last row absorb the
+   stage height. */
+.fp-work {
+  display: grid; gap: 14px; align-items: start;
+  grid-template-columns: minmax(250px, 290px) minmax(0, 1fr) minmax(290px, 340px);
+  grid-template-areas: "pal c insp" "lay c sum" "plan c exp";
+  grid-template-rows: auto auto 1fr;
+}
+.fp-center { grid-area: c; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.fp-a-insp { grid-area: insp; } .fp-a-pal { grid-area: pal; } .fp-a-sum { grid-area: sum; }
+.fp-a-lay { grid-area: lay; } .fp-a-plan { grid-area: plan; } .fp-a-exp { grid-area: exp; }
+/* Sticky stage only when the viewport is tall enough to show it whole (see the converter for the same rule). */
+@media (min-width: 1201px) and (min-height: 640px) { .fp-center { position: sticky; top: 72px; } }
+@media (max-width: 1200px) {
+  .fp-work { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "c c" "insp pal" "sum lay" "plan exp"; grid-template-rows: none; }
+}
+@media (max-width: 760px) {
+  .fp-work { grid-template-columns: minmax(0, 1fr); grid-template-areas: "c" "insp" "pal" "sum" "lay" "plan" "exp"; }
+}
+
+/* ---------------------------------------------------------------- pages */
+/* Page tabs scroll horizontally without a visible scrollbar (scrollbar-width:none); :empty hides the bar for
+   single-page plans. */
+.fp-pages { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+.fp-pages:empty { display: none; }
+.fp-tab {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--ed-border); background: var(--ed-panel); color: var(--ed-muted); font-weight: 600; font-size: 12.5px;
+}
+.fp-tab:hover { color: var(--ed-text); }
+.fp-tab.fp-on { color: var(--ed-accent-text); background: var(--ed-accent); border-color: var(--ed-accent); }
+.fp-tab-ic { padding: 0 8px; }
+
+/* ---------------------------------------------------------------- stage */
+.fp-stage-wrap { position: relative; }
+.fp-stage {
+  /* Two height declarations: 100vh first as a fallback, then 100dvh (dynamic viewport, excludes mobile URL bars) for
+     browsers that support it; the second wins where valid. touch-action:none hands every touch gesture to the
+     editor's pointer handlers (pan / pinch / drag) instead of page scrolling. user-select:none: dragging must not
+     select text labels. */
+  position: relative; height: max(380px, calc(100vh - 250px)); height: max(380px, calc(100dvh - 250px)); overflow: hidden;
+  border: 1px solid var(--ed-border); border-radius: 14px; background: var(--ed-stage); touch-action: none; cursor: default;
+  -webkit-user-select: none; user-select: none; outline: none;
+}
+.fp-stage:focus-visible { box-shadow: var(--ed-focus); }
+/* Cursor follows the active tool (data-tool written by main.js). */
+.fp-stage[data-tool="pan"] { cursor: grab; }
+.fp-stage[data-tool="draw"], .fp-stage[data-tool="outline"] { cursor: crosshair; }
+.fp-stage > svg.fp-svg { width: 100%; height: 100%; display: block; }
+.fp-svg .plan-sh { cursor: move; }
+/* While a drawing or pan tool is active, shapes must not show the move cursor (inherit the stage's). */
+.fp-stage[data-tool="draw"] .plan-sh, .fp-stage[data-tool="outline"] .plan-sh, .fp-stage[data-tool="pan"] .plan-sh { cursor: inherit; }
+/* File drag-over feedback: body class set by the drop handler. */
+body.fp-dropping .fp-stage { outline: 2px dashed var(--ed-accent); outline-offset: 2px; }
+@media (max-width: 760px) { .fp-stage { height: 62vh; height: 62dvh; min-height: 300px; } }
+
+/* Overlay strokes keep their pixel width at every zoom level (non-scaling-stroke), so handles stay clickable. */
+.fp-ov * { vector-effect: non-scaling-stroke; }
+.fp-selbox { fill: none; stroke: #2563eb; stroke-width: 1.5; stroke-dasharray: 5 3; pointer-events: none; }
+/* Resize handles: cursor per compass direction, matching the edge or corner they move. */
+.fp-h { fill: #fff; stroke: #2563eb; stroke-width: 1.5; cursor: pointer; }
+.fp-h[data-h="n"], .fp-h[data-h="s"] { cursor: ns-resize; }
+.fp-h[data-h="e"], .fp-h[data-h="w"] { cursor: ew-resize; }
+.fp-h[data-h="nw"], .fp-h[data-h="se"] { cursor: nwse-resize; }
+.fp-h[data-h="ne"], .fp-h[data-h="sw"] { cursor: nesw-resize; }
+.fp-hrot { fill: #2563eb; stroke: #fff; cursor: grab; }
+.fp-hv { fill: #fff; cursor: move; }
+.fp-hmid { fill: #dbeafe; stroke-dasharray: 2 2; cursor: copy; }
+.fp-hbox { fill: #eff6ff; }
+.fp-hl { stroke: #2563eb; stroke-width: 1.5; pointer-events: none; }
+.fp-marq { fill: rgba(37, 99, 235, .08); stroke: #2563eb; stroke-width: 1; stroke-dasharray: 4 3; pointer-events: none; }
+.fp-draft { fill: rgba(37, 99, 235, .08); stroke: #2563eb; stroke-width: 2; stroke-linejoin: round; pointer-events: none; }
+.fp-draft-close { stroke: #2563eb; stroke-width: 1; stroke-dasharray: 4 4; pointer-events: none; }
+.fp-draft-first { fill: rgba(37, 99, 235, .15); stroke: #2563eb; stroke-width: 1.5; pointer-events: none; }
+.fp-draft-pt { fill: #2563eb; pointer-events: none; }
+/* paint-order: stroke draws a white halo behind the text, readable over any wall or furniture line. */
+.fp-draft-len { fill: #1e3a8a; font-weight: 700; paint-order: stroke; stroke: #fff; stroke-width: 3; pointer-events: none; }
+.fp-dims text { fill: #475569; font-weight: 600; pointer-events: none; }
+
+/* Zoom buttons float over the stage corner; the panel background keeps them visible over the plan. */
+.fp-zoom { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
+.fp-zoom .ed-btn { background: var(--ed-panel); box-shadow: var(--ed-shadow-sm); }
+.fp-status { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--ed-muted); font-variant-numeric: tabular-nums; min-height: 18px; }
+.fp-status-hint { flex: 1 1 auto; text-align: end; }
+@media (max-width: 760px) { .fp-status-hint { display: none; } }
+.fp-drawbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px;
+  border: 1px solid var(--ed-accent); background: var(--ed-accent-weak);
+}
+/* [hidden] restated: .fp-drawbar sets display:flex, which would otherwise override the UA's hidden rule
+   (ui/base.css already forces [hidden] with !important; this is a local guarantee). */
+.fp-drawbar[hidden] { display: none; }
+.fp-draw-t { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; }
+.fp-drawbar .ed-select { width: auto; }
+.fp-lenwrap { display: inline-flex; align-items: center; gap: 4px; }
+.fp-len { width: 96px; }
+
+/* ---------------------------------------------------------------- palette */
+.fp-ptabs { flex-wrap: wrap; margin-bottom: 10px; height: auto; }
+/* auto-fill thumbnails, scrolling inside the card (max-height 46vh) so a long palette never pushes the page. */
+.fp-pgrid { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(74px, 1fr)); max-height: 46vh; overflow: auto; padding: 1px; }
+.fp-pitem {
+  display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px 4px; border-radius: 10px;
+  border: 1px solid var(--ed-border); background: var(--ed-panel-2); color: var(--ed-text); cursor: grab; min-height: 78px;
+}
+.fp-pitem:hover { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.fp-pimg { display: flex; width: 44px; height: 40px; border-radius: 6px; background: #fff; }
+.fp-pimg svg, .fp-ghost svg, .fp-insp-ic svg, .fp-obj-ic svg { width: 100%; height: 100%; display: block; }
+.fp-pname { font-size: 11px; line-height: 1.2; text-align: center; overflow-wrap: anywhere; }
+/* Drag ghost follows the pointer (position:fixed, moved by JS via transform); pointer-events:none so the drop target
+   underneath receives the events. */
+.fp-ghost { position: fixed; left: 0; top: 0; z-index: 200; width: 48px; height: 48px; pointer-events: none; border-radius: 8px; background: #fff; box-shadow: var(--ed-shadow); opacity: .9; }
+.fp-ghost-g { width: auto; height: auto; display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; color: #111; font-weight: 600; font-size: 13px; }
+
+/* ---------------------------------------------------------------- inspector */
+.fp-insp { display: flex; flex-direction: column; gap: 10px; }
+/* Cancels the shell's stacked-field margin inside the inspector, which uses its own gap. */
+.fp-insp .ed-field + .ed-field { margin-top: 0; }
+.fp-insp-h { display: flex; align-items: center; gap: 8px; margin: 0; }
+.fp-insp-ic { display: inline-flex; width: 30px; height: 30px; border-radius: 6px; background: #fff; border: 1px solid var(--ed-border); }
+.fp-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+.fp-grid2 .ed-field + .ed-field { margin-top: 0; }
+.fp-num { width: 100%; font-variant-numeric: tabular-nums; }
+.fp-kv { font-size: 12.5px; }
+.fp-edges { display: flex; flex-direction: column; gap: 4px; }
+.fp-edge { display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; align-items: center; gap: 6px; font-size: 12px; color: var(--ed-muted); }
+.fp-acts { margin-top: 2px; }
+.fp-empty { padding: 14px 6px; }
+.fp-keys summary { cursor: pointer; font-size: 12.5px; color: var(--ed-muted); }
+
+/* ---------------------------------------------------------------- summary */
+.fp-stats { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); margin-bottom: 10px; }
+.fp-stat { display: flex; flex-direction: column; gap: 2px; padding: 7px 9px; border-radius: 10px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); min-width: 0; }
+.fp-stat-l { font-size: 11px; color: var(--ed-muted); line-height: 1.2; }
+.fp-stat-v { font-size: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fp-twrap { max-height: 240px; margin-bottom: 6px; }
+.fp-table td, .fp-table th { padding: 4px 8px; }
+/* !important: .ap-table th/td set text-align:left at (0,1,1). */
+.fp-r { text-align: end !important; white-space: nowrap; }
+.fp-table tr.fp-on td { background: var(--ed-accent-weak); }
+.fp-link { border: 0; background: none; padding: 0; color: var(--ed-accent); font: inherit; text-align: start; cursor: pointer; }
+.fp-link:hover { text-decoration: underline; }
+.fp-chips { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 10px; }
+.fp-chip { display: inline-flex; gap: 6px; align-items: center; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--ed-border); background: var(--ed-panel-2); color: var(--ed-text); font-size: 12px; }
+.fp-chip b { color: var(--ed-accent); }
+.fp-chip.fp-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.fp-alltot { margin: 0 0 8px; }
+.fp-h3 { display: flex; align-items: center; gap: 8px; margin: 12px 0 6px; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-muted); }
+.fp-count { padding: 0 7px; border-radius: 999px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); font-size: 11px; }
+/* A zero problem count turns green: data-n written by JS, no extra class. */
+.fp-count[data-n="0"] { color: var(--ed-ok); }
+.fp-wlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow: auto; }
+.fp-w { display: flex; gap: 8px; align-items: flex-start; width: 100%; text-align: start; font-size: 12.5px; padding: 6px 9px; border-radius: 9px; border: 1px solid var(--ed-border); background: var(--ed-panel); color: var(--ed-text); }
+button.fp-w { cursor: pointer; }
+.fp-w .ed-ic { flex: none; margin-top: 1px; }
+.fp-w-error { border-color: color-mix(in srgb, var(--ed-danger) 45%, transparent); color: var(--ed-danger); }
+.fp-w-warn { border-color: color-mix(in srgb, var(--ed-warn) 45%, transparent); }
+.fp-w-warn .ed-ic { color: var(--ed-warn); }
+.fp-w-ok { color: var(--ed-ok); }
+
+/* ---------------------------------------------------------------- layers */
+.fp-layers { display: flex; flex-direction: column; gap: 4px; }
+/* Layer rows: visibility, lock, name, count, actions. */
+.fp-lrow { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto auto; align-items: start; gap: 2px; }
+.fp-layer > summary { display: flex; align-items: center; gap: 6px; min-height: 32px; padding: 0 6px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 13px; }
+.fp-layer > summary:hover { background: var(--ed-hover); }
+.fp-layer.fp-hidden > summary { color: var(--ed-faint); }
+.fp-lname { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fp-lcount { font-size: 11px; color: var(--ed-muted); }
+.fp-objs { list-style: none; margin: 2px 0 6px; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow: auto; }
+.fp-obj { display: flex; align-items: center; gap: 6px; width: 100%; padding: 3px 6px; border: 1px solid transparent; border-radius: 7px; background: none; color: var(--ed-text); font-size: 12.5px; text-align: start; }
+.fp-obj:hover { background: var(--ed-hover); }
+.fp-obj.fp-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.fp-obj-ic { flex: none; display: inline-flex; width: 20px; height: 20px; border-radius: 4px; background: #fff; }
+.fp-obj-n { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------------------------------------------------------- templates */
+.fp-tpls { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.fp-tpl { display: flex; flex-direction: column; gap: 4px; padding: 8px; border-radius: 12px; border: 1px solid var(--ed-border); background: var(--ed-panel-2); color: var(--ed-text); text-align: start; cursor: pointer; }
+.fp-tpl:hover, .fp-tpl:focus-visible { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+/* Template thumbnails on white: plan drawings are made for paper. */
+.fp-tpl-img { display: flex; align-items: center; justify-content: center; height: 130px; border-radius: 8px; background: #fff; padding: 4px; }
+.fp-tpl-img svg { max-width: 100%; max-height: 100%; width: auto; height: 100%; }
+.fp-empties { margin-top: 14px; }
+.fp-export .fp-grid2 { margin-bottom: 4px; }
+
+/* ---------------------------------------------------------------- seating */
+/* Seating page: guests | plan | table cards. 1200px: cards wrap under both; 760px: one column, plan first. */
+.fp-s-work { display: grid; gap: 14px; align-items: start; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr) minmax(250px, 320px); }
+@media (max-width: 1200px) { .fp-s-work { grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); } .fp-s-right { grid-column: 1 / -1; } }
+@media (max-width: 760px) { .fp-s-work { grid-template-columns: minmax(0, 1fr); } .fp-s-centre { order: -1; } }
+.fp-s-centre { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+@media (min-width: 761px) and (min-height: 640px) { .fp-s-centre { position: sticky; top: 72px; } }
+.fp-paste { min-height: 96px; }
+.fp-gstats { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 8px; }
+.fp-gstat { font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); color: var(--ed-muted); }
+.fp-glist { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 56vh; overflow: auto; }
+/* Guest row: drag handle, name, table select, remove. touch-action:none on the handle lets touch drag guests. */
+.fp-g { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(92px, 132px) auto; gap: 4px; align-items: center; }
+.fp-g-free .fp-gname { border-color: color-mix(in srgb, var(--ed-warn) 40%, var(--ed-border)); }
+.fp-ghandle { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 32px; border-radius: 7px; border: 1px solid var(--ed-border); background: var(--ed-panel-2); color: var(--ed-muted); cursor: grab; touch-action: none; }
+.fp-ghandle.fp-on { color: var(--ed-accent-text); background: var(--ed-accent); border-color: var(--ed-accent); }
+.fp-gtable { font-size: 12px; }
+.fp-pickbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px; border: 1px solid var(--ed-accent); background: var(--ed-accent-weak); font-size: 13px; }
+.fp-pickbar[hidden] { display: none; }
+.fp-splan-card { padding: 10px; }
+.fp-splan { border-radius: 10px; overflow: hidden; background: #fff; }
+.fp-splan svg { max-height: 72vh; }
+.fp-splan .plan-sh { cursor: pointer; }
+/* Stroke widths in plan units (metres), not pixels: the seating SVG scales with its container. */
+.fp-splan .fp-drop > circle, .fp-splan .fp-drop > rect { stroke: #2563eb; stroke-width: .12; }
+.fp-splan .fp-over > circle:last-of-type, .fp-splan .fp-over > rect { stroke: #dc2626; stroke-width: .1; }
+.fp-tcards { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); max-height: 76vh; overflow: auto; padding: 2px; }
+.fp-tcard { border: 1px solid var(--ed-border); border-radius: 10px; padding: 8px 10px; background: var(--ed-panel-2); }
+.fp-tcard header { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 4px; }
+.fp-tcard ol { margin: 0; padding-inline-start: 20px; font-size: 12.5px; }
+/* Note: the display:flex on .fp-tcard li above is overridden by display:list-item below (same specificity, later
+   wins), so the numbered markers show; the flex declarations are effectively dead. */
+.fp-tcard li { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.fp-tcard li::marker { color: var(--ed-muted); }
+.fp-tcard ol { list-style: decimal; }
+.fp-tcard li { display: list-item; }
+.fp-tcard li > span { display: inline; }
+/* float:inline-end: logical float, flips in RTL. */
+.fp-x { width: 22px; height: 22px; float: inline-end; }
+.fp-tcard.fp-over { border-color: var(--ed-danger); }
+.fp-tcard.fp-on { border-color: var(--ed-accent); box-shadow: 0 0 0 1px var(--ed-accent); }
+.fp-tcard.fp-drop { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.fp-tcount { font-variant-numeric: tabular-nums; color: var(--ed-muted); font-weight: 600; }
+.fp-over .fp-tcount { color: var(--ed-danger); }
+
+/* ---------------------------------------------------------------- print */
+/* Print container created by JS; body.fp-printing hides everything else while printing. */
+.fp-print { display: none; }
+@media print {
+  body.fp-printing { display: block; background: #fff; min-height: 0; margin: 0; color: #111; }
+  body.fp-printing > :not(#fp-print) { display: none !important; }
+  body.fp-printing .fp-print { display: block !important; }
+  .fp-sheet { font: 10pt/1.35 var(--ed-font); color: #111; }
+  .fp-sheet h1 { font-size: 15pt; margin: 0 0 4mm; }
+  .fp-sheet h2 { font-size: 12pt; margin: 6mm 0 2mm; }
+  .fp-sheet-plan svg { display: block; overflow: hidden; }
+  /* The plan fits the sheet width, capped at 170mm high so the summary still fits on the first page. */
+  .fp-sheet-fit svg { width: 100%; height: auto; max-height: 170mm; }
+  .fp-psum { margin-top: 4mm; break-inside: avoid; }
+  .fp-psum table { border-collapse: collapse; font-size: 9pt; }
+  .fp-psum td { padding: 1mm 3mm 1mm 0; border-bottom: 0.2mm solid #ccc; }
+  /* Table cards three per row on paper; break-inside:avoid keeps each table's guest list on one page. */
+  .fp-ptables { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4mm; }
+  .fp-ptable { break-inside: avoid; border: 0.2mm solid #999; border-radius: 2mm; padding: 2mm 3mm; }
+  .fp-ptable ol { margin: 1mm 0 0; padding-inline-start: 5mm; }
+  .fp-break { break-before: page; }
+  /* Guest index in three newspaper columns: compact alphabetical "who sits where". */
+  .fp-pindex { columns: 3; column-gap: 6mm; font-size: 9pt; }
+  .fp-pindex div { display: flex; justify-content: space-between; gap: 3mm; break-inside: avoid; border-bottom: 0.2mm dotted #bbb; }
+}

@@ -1,0 +1,6 @@
+import{P}from"./product.js";const fnSource=(fn)=>fn.toString().replace(/__P__/g,P.prefix);function featureClosure(features){const deps=P.runtime.deps||{};const out=new Set(features);const stack=[...out];while(stack.length){for(const d of deps[stack.pop()]||[])if(!out.has(d)){out.add(d);stack.push(d);}}
+return P.runtime.order.filter((f)=>out.has(f));}
+function buildRuntime(features){const fns=P.runtime.fns;const set=featureClosure(features);let s="(function(){'use strict';var R={};";for(const f of set){if(typeof fns[f]==='function')s+=`try{(${fnSource(fns[f])})(R)}catch(e){}\n`;if(f==='core'){for(const h of P.runtime.helpers||[])if(h.for.some((x)=>set.includes(x)))s+=`try{(${fnSource(h.fn)})(R)}catch(e){}\n`;}}
+return s+'})();';}
+function rtBoot(){(async function(){try{var s=document.getElementById('__P__-pack').textContent.replace(/\s+/g,'');var b=atob(s);var n=b.length;var u=new Uint8Array(n);for(var i=0;i<n;i++)u[i]=b.charCodeAt(i);var st=new Blob([u]).stream().pipeThrough(new DecompressionStream('deflate-raw'));var html=await new Response(st).text();document.open();document.write(html);document.close();}catch(e){var x=document.getElementById('__P__-nojs');if(x)x.hidden=false;}})();}
+export{buildRuntime,fnSource,rtBoot,featureClosure};

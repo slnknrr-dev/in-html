@@ -1,0 +1,5 @@
+import{formatYearMonth}from"../i18n/dates.js";import{uiText}from"./dict.js";function formatDate(ym,lang,fmt='month',doc){if(!ym)return'';if(ym==='present')return uiText('present',lang,doc);const m=/^(\d{4})(?:-(\d{1,2}))?/.exec(String(ym));if(!m)return String(ym);const y=+m[1];const mo=m[2]?+m[2]:0;if(!mo||mo>12||fmt==='year')return String(y);return formatYearMonth(y,mo,lang,fmt);}
+function parseYM(v,endOfYear){if(!v)return null;if(v==='present'){const d=new Date();return d.getUTCFullYear()*12+d.getUTCMonth();}
+const m=/^(\d{4})(?:-(\d{1,2}))?/.exec(v);if(!m)return null;return+m[1]*12+(m[2]?+m[2]-1:endOfYear?11:0);}
+function formatDuration(start,end,lang,doc){if(!start||!end)return'';const a=parseYM(start,false);const b=parseYM(end,true);if(a==null||b==null||b<a)return'';const total=b-a+1;const y=Math.floor(total/12);const mo=total%12;const out=[];if(y)out.push(uiText('dur.y',lang,doc,{n:y}));if(mo)out.push(uiText('dur.m',lang,doc,{n:mo}));return out.join(' ');}
+export{parseYM,formatDate,formatDuration};

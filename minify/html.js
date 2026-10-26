@@ -1,0 +1,250 @@
+// minify/html.js - HTML tokenizer and conservative minifier.
+//
+//   tokenizeHTML(src) -> tokens
+//     { t: 'text', v } | { t: 'comment', v } | { t: 'doctype', v } | { t: 'cdata', v }
+//     { t: 'open', name, attrs: [{ name, value, quote }], selfClose }   (name lower-cased; value null = bare)
+//     { t: 'close', name }
+//     { t: 'raw', name, v }   contents of script / style / textarea / title (follows their 'open' token)
+//   serializeTag(openToken) -> '<name a="b" c>'
+//   minifyHTML(src, { js(code, attrs), css(code), json(code) }) -> string
+//
+// Minification removes comments (except conditional ones), collapses whitespace runs to one space and
+// drops whitespace where the layout cannot depend on it (around block-level boxes, inside containers
+// whose whitespace-only children never render). <pre>, <textarea>, <listing> and <plaintext> keep their
+// text verbatim. Inline script/style contents are passed to the callbacks, if given.
+//
+// Why whitespace is only partly collapsed: in inline formatting contexts a space between two inline elements is
+// visible ("a <b>x</b>"), so collapsing runs to one space is always safe but removing them is safe only next to
+// block-level boxes or inside containers whose whitespace-only text never renders (tables, lists, head).
+
+// Raw-text elements: their content is not HTML, so '<' inside them must not start a tag during tokenisation.
+const RAW = new Set(['script', 'style', 'textarea', 'title', 'xmp']);
+const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source',
+  'track', 'wbr', 'param', 'keygen']);
+const VERBATIM = new Set(['pre', 'textarea', 'listing', 'plaintext', 'xmp']);
+// Elements that start/end a line box: whitespace next to them never renders.
+const BLOCK = new Set(['html', 'head', 'body', 'title', 'meta', 'link', 'style', 'script', 'noscript', 'base', 'template',
+  'div', 'p', 'section', 'article', 'aside', 'nav', 'header', 'footer', 'main', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'hgroup', 'ul', 'ol', 'li', 'dl', 'dt', 'dd', 'menu', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th',
+  'caption', 'colgroup', 'col', 'form', 'fieldset', 'legend', 'figure', 'figcaption', 'blockquote', 'pre', 'hr',
+  'address', 'details', 'summary', 'dialog', 'option', 'optgroup', 'br', 'search', 'datalist', 'source', 'track',
+  'param', 'center']);
+// Containers whose whitespace-only text children never render.
+const NO_TEXT = new Set(['html', 'head', 'ul', 'ol', 'menu', 'dl', 'table', 'thead', 'tbody', 'tfoot', 'tr', 'colgroup',
+  'select', 'datalist', 'optgroup', 'picture', 'video', 'audio', 'svg', 'g', 'defs', 'symbol', 'clippath', 'mask',
+  'lineargradient', 'radialgradient', 'pattern', 'filter', 'marker', 'object', 'frameset', 'map']);
+
+export function tokenizeHTML(src) {
+  const toks = [];
+  const n = src.length;
+  let i = 0;
+  let text = '';
+  const flush = () => {
+    if (text) toks.push({ t: 'text', v: text });
+    text = '';
+  };
+  while (i < n) {
+    const c = src[i];
+    if (c !== '<') {
+      const j = src.indexOf('<', i);
+      text += src.slice(i, j < 0 ? n : j);
+      i = j < 0 ? n : j;
+      continue;
+    }
+    if (src.startsWith('<!--', i)) {
+      flush();
+      const e = src.indexOf('-->', i + 4);
+      const end = e < 0 ? n : e + 3;
+      toks.push({ t: 'comment', v: src.slice(i, end) });
+      i = end;
+      continue;
+    }
+    if (src.startsWith('<![CDATA[', i)) {
+      flush();
+      const e = src.indexOf(']]>', i);
+      const end = e < 0 ? n : e + 3;
+      toks.push({ t: 'cdata', v: src.slice(i, end) });
+      i = end;
+      continue;
+    }
+    if (src[i + 1] === '!' || src[i + 1] === '?') {
+      flush();
+      const e = src.indexOf('>', i);
+      const end = e < 0 ? n : e + 1;
+      toks.push({ t: 'doctype', v: src.slice(i, end) });
+      i = end;
+      continue;
+    }
+    if (src[i + 1] === '/' && /[A-Za-z]/.test(src[i + 2] || '')) {
+      flush();
+      const e = src.indexOf('>', i);
+      const end = e < 0 ? n : e + 1;
+      const m = /^<\/([^\s/>]+)/.exec(src.slice(i, end));
+      toks.push({ t: 'close', name: m[1].toLowerCase() });
+      i = end;
+      continue;
+    }
+    if (!/[A-Za-z]/.test(src[i + 1] || '')) {
+      text += c;
+      i++;
+      continue;
+    }
+    flush();
+    // Open tag.
+    let j = i + 1;
+    while (j < n && !/[\s/>]/.test(src[j])) j++;
+    const tag = { t: 'open', name: src.slice(i + 1, j).toLowerCase(), attrs: [], selfClose: false };
+    for (;;) {
+      while (j < n && /[\s/]/.test(src[j])) {
+        if (src[j] === '/' && src[j + 1] === '>') { tag.selfClose = true; }
+        j++;
+      }
+      if (j >= n || src[j] === '>') { j++; break; }
+      let k = j;
+      while (k < n && !/[\s/>=]/.test(src[k])) k++;
+      if (k === j) k++; // stray '=' etc.
+      const name = src.slice(j, k);
+      j = k;
+      while (j < n && /\s/.test(src[j])) j++;
+      if (src[j] === '=') {
+        j++;
+        while (j < n && /\s/.test(src[j])) j++;
+        const q = src[j];
+        if (q === '"' || q === '\'') {
+          const e = src.indexOf(q, j + 1);
+          const end = e < 0 ? n : e;
+          tag.attrs.push({ name, value: src.slice(j + 1, end), quote: q });
+          j = end + 1;
+        } else {
+          let e = j;
+          while (e < n && !/[\s>]/.test(src[e])) e++;
+          tag.attrs.push({ name, value: src.slice(j, e), quote: '' });
+          j = e;
+        }
+      } else {
+        tag.attrs.push({ name, value: null, quote: '' });
+      }
+    }
+    i = j;
+    toks.push(tag);
+    if (RAW.has(tag.name) && !tag.selfClose) {
+      const re = new RegExp('</' + tag.name + '(?=[\\s/>])', 'i');
+      const m = re.exec(src.slice(i));
+      const end = m ? i + m.index : n;
+      toks.push({ t: 'raw', name: tag.name, v: src.slice(i, end) });
+      i = end;
+    }
+  }
+  flush();
+  return toks;
+}
+
+export function attr(tag, name) {
+  const a = tag.attrs.find((x) => x.name.toLowerCase() === name);
+  return a ? (a.value ?? '') : null;
+}
+
+export function setAttr(tag, name, value) {
+  const a = tag.attrs.find((x) => x.name.toLowerCase() === name);
+  if (value === null) {
+    if (a) tag.attrs.splice(tag.attrs.indexOf(a), 1);
+  } else if (a) {
+    a.value = value;
+    a.quote = '"';
+    a.encoded = false;
+  } else tag.attrs.push({ name, value, quote: '"', encoded: false });
+}
+
+// Values set through setAttr are plain text and get HTML-escaped; parsed values are written back verbatim.
+export function serializeTag(tag) {
+  let s = '<' + tag.name;
+  for (const a of tag.attrs) {
+    s += ' ' + a.name;
+    if (a.value === null) continue;
+    let v = a.value;
+    if (a.encoded === false) v = v.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    const q = a.encoded === false ? '"' : a.quote || (/[\s"'=<>`]/.test(v) || v === '' ? '"' : '');
+    if (q === '"' && a.encoded !== false && v.includes('"')) s += `='${v}'`;
+    else s += '=' + q + v + q;
+  }
+  return s + (tag.selfClose ? '/>' : '>');
+}
+
+const isBlockTok = (tk) => tk && (tk.t === 'open' || tk.t === 'close') && BLOCK.has(tk.name);
+
+export function minifyHTML(src, hooks = {}) {
+  const toks = tokenizeHTML(String(src));
+  const stack = [];
+  let verbatim = 0;
+  let out = '';
+  // Previous / next significant tokens (comments are dropped, so they do not count).
+  // Text tokens left adjacent by a dropped comment are merged: else each collapses to its own space ("a  b"), and a
+  // whitespace-only run next to a block tag is not recognised as droppable.
+  const kept = [];
+  for (const tk of toks) {
+    if (tk.t === 'comment' && !/^<!--\[if|^<!--<!\[endif/.test(tk.v)) continue;
+    const last = kept[kept.length - 1];
+    if (tk.t === 'text' && last && last.t === 'text') kept[kept.length - 1] = { ...last, v: last.v + tk.v };
+    else kept.push(tk);
+  }
+  for (let k = 0; k < kept.length; k++) {
+    const tk = kept[k];
+    switch (tk.t) {
+      case 'comment': case 'cdata': out += tk.v; break;
+      case 'doctype': out += /^<!doctype\s+html\s*>$/i.test(tk.v) ? '<!doctype html>' : tk.v; break;
+      case 'open': {
+        for (const a of tk.attrs) {
+          if (a.value === null || a.encoded === false) continue;
+          const name = a.name.toLowerCase();
+          if (name === 'class') a.value = a.value.trim().replace(/\s+/g, ' ');
+          else if (name === 'style' && hooks.css) a.value = hooks.css(a.value, true);
+        }
+        out += serializeTag(tk);
+        if (!VOID.has(tk.name) && !tk.selfClose) {
+          stack.push(tk.name);
+          if (VERBATIM.has(tk.name)) verbatim++;
+        }
+        break;
+      }
+      case 'close': {
+        const idx = stack.lastIndexOf(tk.name);
+        if (idx >= 0) {
+          for (const name of stack.splice(idx)) if (VERBATIM.has(name)) verbatim--;
+        }
+        out += `</${tk.name}>`;
+        break;
+      }
+      case 'raw': {
+        const open = kept[k - 1];
+        let v = tk.v;
+        if (tk.name === 'script') {
+          const type = (attr(open, 'type') || '').toLowerCase().trim();
+          const isJs = !type || type === 'module' || /^(text|application)\/(java|ecma)script$/.test(type);
+          if (attr(open, 'src') === null) {
+            if (isJs && hooks.js) v = hooks.js(v, open);
+            else if (/json$/.test(type) && hooks.json) v = hooks.json(v, open);
+          }
+        } else if (tk.name === 'style' && hooks.css) v = hooks.css(v, false);
+        out += v;
+        break;
+      }
+      case 'text': {
+        let v = tk.v;
+        if (verbatim > 0) { out += v; break; }
+        const parent = stack[stack.length - 1];
+        const prev = kept[k - 1], next = kept[k + 1];
+        if (!/\S/.test(v)) {
+          if (!parent || NO_TEXT.has(parent) || isBlockTok(prev) || isBlockTok(next) || !prev || !next) break;
+          out += ' ';
+          break;
+        }
+        v = v.replace(/\s+/g, ' ');
+        if (!prev || isBlockTok(prev)) v = v.replace(/^ /, '');
+        if (!next || isBlockTok(next)) v = v.replace(/ $/, '');
+        out += v;
+        break;
+      }
+    }
+  }
+  return out;
+}

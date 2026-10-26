@@ -1,0 +1,777 @@
+// icon-creator/main.js - Icon Creator: a small Aseprite-like pixel editor for application icons. One 256 px master
+// and up to five sizes (32 … 256) that follow it automatically or are drawn by hand; magic wand (Krita / Paint.NET
+// options) to cut backgrounds away, rectangle selection, pencil / eraser / line / rectangle / ellipse / bucket /
+// eyedropper / move with mirror drawing, outline and flips; import of large pictures through a square crop, of .ico
+// files and of projects; export as .ico (image/vnd.microsoft.icon) or .png; undo / redo; autosave in the browser.
+// Pixel logic lives in paint.js and doc.js (no DOM).
+//
+// Architecture:
+// - State: S.doc (the icon document, doc.js), S.n (the size being edited), S.zoom (screen px per icon px, 0 = refit
+//   on next render), S.opt (tool options, persisted separately from the document), S.drag (the gesture in progress),
+//   S.hover (cell under the pointer). E holds element references, built once per build().
+// - Two stacked canvases: .ic-pix holds the pixels at native size (1 canvas px = 1 icon px) and is scaled up by CSS
+//   with image-rendering:pixelated, so zooming costs nothing; .ic-over is the overlay at screen resolution (grid,
+//   selection outline, brush cursor, mirror axes) and receives all pointer events. Drawing the grid into a scaled
+//   pixel canvas would need it at zoom x size and would blur.
+// - Render tiers through changed(what): 'pixels' repaints only the canvas (cheap, per pointer move), 'sizes' and
+//   'all' also rebuild the size list and the previews. During a stroke, size/preview updates are debounced
+//   (changedSoon); the authoritative update runs once at pointerup (afterEdit).
+// - Persistence: options in localStorage under KEY-opt, the document as project JSON under KEY-doc, both debounced.
+//   Autosave silently gives up when storage is full (5 MB quota): losing autosave must not break editing.
+
+import './strings.js';
+import { card, download, range, seg, startApp, t, toast, toggle } from '../ui/app.js';
+import { debounce, h, lsGet, lsSet } from '../ui/dom.js';
+import { pickFiles } from '../ui/files.js';
+import { addIcons, iconEl } from '../ui/icons.js';
+import { confirmDialog, openDialog } from '../ui/overlays.js';
+import { ICO_MIME } from '../ico/ico.js';
+import { removeBackground, wandMask } from '../raster/wand.js';
+import {
+  MASTER, SIZES, centreSquare, createDoc, cropSquare, enabledSizes, exportICO, exportPNG, imageOf, importICO, loadProject,
+  makeAuto, makeCustom, record, redo, regenerate, saveProject, setMaster, undo,
+} from './doc.js';
+import {
+  clearSelected, combineMask, dab, ellipsePoints, fill, flipImage, hexOf, invertMask, linePoints, outline, plot, rectMask,
+  rectPoints, rgba, shift,
+} from './paint.js';
+
+addIcons({
+  pencil: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z',
+  eraser: 'M7 21h10M5.5 13.5l6-6 7 7-6 6H9z',
+  line: 'M5 19 19 5',
+  square: 'M4 4h16v16H4z',
+  circle: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z',
+  bucket: 'M19 11 11 3 3 11l8 8zM5 11h14M20 15s2 2.3 2 3.5a2 2 0 0 1-4 0c0-1.2 2-3.5 2-3.5z',
+  wand: 'M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8 19 13M17.8 6.2 19 5M12.2 6.2 11 5M3 21l9-9',
+  marquee: 'M4 7V4h3M10 4h4M17 4h3v3M20 10v4M20 17v3h-3M14 20h-4M7 20H4v-3M4 14v-4',
+  picker: 'M2 22l1-4 9-9 3 3-9 9zM14 6l4-4 4 4-4 4z',
+  move: 'M12 2v20M2 12h20M12 2 9 5M12 2l3 3M12 22l-3-3M12 22l3-3M2 12l3-3M2 12l3 3M22 12l-3-3M22 12l-3 3',
+  swap: 'M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7',
+  grid: 'M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18',
+  mirror: 'M12 3v18M8 7 4 12l4 5M16 7l4 5-4 5',
+  icon: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+});
+
+const LOGO = 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM16.5 13v7M13 16.5h7';
+const KEY = 'icon-creator';
+// The PICO-8 16-colour palette: designed for legible pixel art at tiny sizes (distinct hues and lightness steps), a
+// better starting set for 32 px icons than an arbitrary rainbow.
+const PALETTE = ['#000000', '#1d2b53', '#7e2553', '#008751', '#ab5236', '#5f574f', '#c2c3c7', '#fff1e8', '#ff004d', '#ffa300', '#ffec27', '#00e436', '#29adff', '#83769c', '#ff77a8', '#ffccaa'];
+// Tool shortcuts follow Aseprite/Photoshop conventions (B brush, E eraser, G bucket, W wand, M marquee, I eyedropper,
+// V move), so muscle memory from those editors transfers.
+const TOOLS = [
+  { id: 'pencil', icon: 'pencil', key: 'B' }, { id: 'eraser', icon: 'eraser', key: 'E' }, { id: 'line', icon: 'line', key: 'L' },
+  { id: 'rect', icon: 'square', key: 'R' }, { id: 'ellipse', icon: 'circle', key: 'O' }, { id: 'fill', icon: 'bucket', key: 'G' },
+  { id: 'wand', icon: 'wand', key: 'W' }, { id: 'select', icon: 'marquee', key: 'M' }, { id: 'picker', icon: 'picker', key: 'I' },
+  { id: 'move', icon: 'move', key: 'V' },
+];
+
+const defaults = () => ({
+  tool: 'pencil', size: 1, mirror: 'off', filled: false, grid: true,
+  fg: '#1d2b53', fgA: 255, bg: '#ffffff', bgA: 0,
+  wand: { tolerance: 32, contiguous: true, diagonal: false, metric: 'max', soft: 0, mode: 'replace' },
+  fillOpt: { tolerance: 0, contiguous: true },
+  recent: [],
+});
+// Saved options are merged over defaults (shallow): new option keys added in later versions get their default.
+// Note the merge is one level deep only: a saved `wand` object replaces the default one entirely.
+const S = { doc: null, n: MASTER, zoom: 0, opt: { ...defaults(), ...lsGet(KEY + '-opt', {}) }, drag: null, hover: null };
+const E = {};
+
+const img = () => imageOf(S.doc, S.n);
+const sel = () => S.doc.sel[S.n] || null;
+const saveOpt = debounce(() => lsSet(KEY + '-opt', S.opt), 300);
+const autosave = debounce(() => { try { localStorage.setItem(KEY + '-doc', saveProject(S.doc)); } catch { /* storage full or unavailable */ } }, 800);
+const sizeLabel = (n) => `${n} × ${n}`;
+
+// --- rendering ----------------------------------------------------------------------------------------------
+
+// Largest integer zoom that fits the stage. Integer only: a fractional zoom makes icon pixels alternate between
+// n and n+1 screen pixels, which distorts pixel art. Height is floored at 240 so a short window still gets a usable
+// board; 48x caps a 32 px icon at 1536 px.
+function fitZoom() {
+  const box = E.stage.getBoundingClientRect();
+  const room = Math.max(64, Math.min(box.width - 24, Math.max(240, box.height - 24)));
+  return Math.max(1, Math.min(48, Math.floor(room / S.n)));
+}
+
+// Copies an image into a canvas. Resizing a canvas clears and reallocates it, so it is done only when needed.
+// The data is copied into a new ImageData: the ImageData constructor would otherwise alias our buffer, and later
+// edits to the document would race with what the canvas holds.
+function paintCanvas(canvas, image) {
+  if (canvas.width !== image.width) { canvas.width = image.width; canvas.height = image.height; }
+  canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(image.data), image.width, image.height), 0, 0);
+}
+
+// Board render. --cell sizes the CSS checkerboard: two icon pixels per square at small sizes, four at 128+ (and at
+// least 4 px), so transparency stays readable without the checkers dominating.
+// Overlay at devicePixelRatio (capped at 2: 3x phones would quadruple overlay memory for no visible gain) with a
+// transform, so 1-px lines are crisp; +0.5 offsets put lines on pixel centres instead of straddling two pixels.
+// Grid only from zoom 6: below that the lines would cover most of each cell.
+function renderCanvas() {
+  const n = S.n;
+  if (!S.zoom) S.zoom = fitZoom();
+  const z = S.zoom, px = n * z;
+  paintCanvas(E.pix, img());
+  for (const c of [E.pix, E.over]) { c.style.width = px + 'px'; c.style.height = px + 'px'; }
+  E.board.style.width = px + 'px'; E.board.style.height = px + 'px';
+  E.board.style.setProperty('--cell', Math.max(4, z * (n >= 128 ? 4 : 2)) + 'px');
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  E.over.width = Math.round(px * dpr); E.over.height = Math.round(px * dpr);
+  const g = E.over.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, px, px);
+  if (S.opt.grid && z >= 6) {
+    g.strokeStyle = 'rgba(127,127,127,.28)';
+    g.lineWidth = 1;
+    g.beginPath();
+    for (let i = 1; i < n; i++) { g.moveTo(i * z + 0.5, 0); g.lineTo(i * z + 0.5, px); g.moveTo(0, i * z + 0.5); g.lineTo(px, i * z + 0.5); }
+    g.stroke();
+  }
+  if (S.opt.mirror !== 'off') {
+    g.strokeStyle = 'rgba(236,72,153,.7)';
+    g.setLineDash([4, 4]);
+    g.beginPath();
+    if (S.opt.mirror.includes('x')) { g.moveTo(px / 2, 0); g.lineTo(px / 2, px); }
+    if (S.opt.mirror.includes('y')) { g.moveTo(0, px / 2); g.lineTo(px, px / 2); }
+    g.stroke();
+    g.setLineDash([]);
+  }
+  const m = sel();
+  if (m) {
+    g.fillStyle = 'rgba(37,99,235,.22)';
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (m[y * n + x] >= 128) g.fillRect(x * z, y * z, z, z);
+    // outline: cell edges between selected and unselected pixels ("marching ants" without animation): every boundary
+    // edge of every selected cell, all in one path, stroked twice (white solid, then dark dashed) so it is visible on
+    // any colour. Coverage >= 128 counts as selected for display; soft edges still clip at their real coverage.
+    // Cost: O(n^2) fillRect + path per render, and renderCanvas runs on every pointer move; at 256 px that is 65 536
+    // cells, acceptable on desktop, the first thing to cache if profiling shows jank.
+    g.beginPath();
+    const on = (x, y) => x >= 0 && y >= 0 && x < n && y < n && m[y * n + x] >= 128;
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        if (!on(x, y)) continue;
+        if (!on(x, y - 1)) { g.moveTo(x * z, y * z); g.lineTo((x + 1) * z, y * z); }
+        if (!on(x, y + 1)) { g.moveTo(x * z, (y + 1) * z); g.lineTo((x + 1) * z, (y + 1) * z); }
+        if (!on(x - 1, y)) { g.moveTo(x * z, y * z); g.lineTo(x * z, (y + 1) * z); }
+        if (!on(x + 1, y)) { g.moveTo((x + 1) * z, y * z); g.lineTo((x + 1) * z, (y + 1) * z); }
+      }
+    }
+    g.lineWidth = 1.5; g.strokeStyle = '#fff'; g.stroke();
+    g.setLineDash([3, 3]); g.strokeStyle = '#111'; g.stroke(); g.setLineDash([]);
+  }
+  if (S.drag && S.drag.tool === 'select') {
+    const r = S.drag;
+    const x0 = Math.min(r.x0, r.x), y0 = Math.min(r.y0, r.y), x1 = Math.max(r.x0, r.x), y1 = Math.max(r.y0, r.y);
+    g.strokeStyle = '#2563eb'; g.lineWidth = 1.5; g.strokeRect(x0 * z + 0.5, y0 * z + 0.5, (x1 - x0 + 1) * z - 1, (y1 - y0 + 1) * z - 1);
+  }
+  if (S.hover && !S.drag && ['pencil', 'eraser', 'line', 'rect', 'ellipse'].includes(S.opt.tool)) {
+    const s = ['pencil', 'eraser'].includes(S.opt.tool) ? S.opt.size : 1, r0 = -Math.floor((s - 1) / 2);
+    g.strokeStyle = 'rgba(127,127,127,.9)'; g.lineWidth = 1;
+    g.strokeRect((S.hover.x + r0) * z + 0.5, (S.hover.y + r0) * z + 0.5, s * z - 1, s * z - 1);
+  }
+  // E.zoomOut is the zoom READOUT (an <output>), not the zoom-out button; the name is historic.
+  E.zoomOut.textContent = S.zoom * 100 + ' %';
+  E.pos.textContent = S.hover ? `${S.hover.x}, ${S.hover.y}` : '';
+}
+
+// Size list: thumbnail, kind (master / custom / automatic), make-custom / back-to-auto, include toggle. Every state
+// change is recorded first, so all of them are undoable. aria-pressed on the pick button marks the edited size.
+function renderSizes() {
+  E.sizes.replaceChildren(...SIZES.map((n) => {
+    const s = S.doc.sizes[n];
+    const thumb = h('canvas', { class: 'ic-thumb', 'aria-hidden': 'true' });
+    paintCanvas(thumb, imageOf(S.doc, n));
+    const on = toggle(s.on, (v) => { record(S.doc, n, 'ic.h.include'); s.on = v; changed('sizes'); });
+    on.setAttribute('aria-label', t('ic.include', { s: sizeLabel(n) }));
+    const kind = n === MASTER ? t('ic.master') : s.custom ? t('ic.custom') : t('ic.auto');
+    return h('div', { class: 'ic-size' + (n === S.n ? ' ic-cur' : '') + (s.on ? '' : ' ic-off') },
+      h('button', { type: 'button', class: 'ic-size-pick', 'aria-pressed': String(n === S.n), onclick: () => selectSize(n) },
+        h('span', { class: 'ic-thumb-wrap' }, thumb),
+        h('span', { class: 'ic-size-txt' }, h('b', {}, sizeLabel(n)), h('small', { class: s.custom ? 'ic-tag-custom' : '' }, kind))),
+      h('span', { class: 'ic-size-act' },
+        n === MASTER ? null : s.custom
+          ? h('button', { type: 'button', class: 'ed-btn ed-sm', title: t('ic.toAutoHint'), onclick: () => { record(S.doc, n, 'ic.h.auto'); makeAuto(S.doc, n); changed('all'); } }, iconEl('refresh'), t('ic.toAuto'))
+          : h('button', { type: 'button', class: 'ed-btn ed-sm', title: t('ic.toCustomHint'), onclick: () => { record(S.doc, n, 'ic.h.custom'); makeCustom(S.doc, n); selectSize(n); changed('all'); } }, iconEl('pencil'), t('ic.toCustom')),
+        on));
+  }));
+}
+
+// Previews on light, dark and checkerboard backgrounds: an icon must survive the taskbar in both themes, and the
+// checkerboard exposes stray semi-transparent pixels. On HiDPI screens (dpr > 1.5) each canvas is shown at half CSS
+// size, so one icon pixel maps to about one device pixel: the true physical size, as the OS would show it.
+function renderPreview() {
+  const list = enabledSizes(S.doc);
+  const tile = (bg) => h('div', { class: 'ic-pv-row ' + bg }, list.map((n) => {
+    const c = h('canvas', { class: 'ic-pv', title: sizeLabel(n), style: { width: n / (window.devicePixelRatio > 1.5 ? 2 : 1) + 'px' } });
+    paintCanvas(c, imageOf(S.doc, n));
+    return h('figure', { class: 'ic-pv-f' }, c, h('figcaption', {}, String(n)));
+  }));
+  E.preview.replaceChildren(list.length ? h('div', { class: 'ic-pv-wrap' }, tile('ic-pv-light'), tile('ic-pv-dark'), tile('ic-pv-check')) : h('p', { class: 'ed-hint' }, t('ic.noSizes')));
+}
+
+// Colour swatches use custom properties --c (colour) and --a (opacity) on an ::after layer above a checkerboard,
+// so a semi-transparent colour is shown honestly. Left click sets the foreground, right click the background
+// (the Aseprite/MS Paint convention); both reset alpha to opaque because a palette colour is a solid choice.
+function renderColors() {
+  E.fgSw.style.setProperty('--c', S.opt.fg); E.fgSw.style.setProperty('--a', S.opt.fgA / 255);
+  E.bgSw.style.setProperty('--c', S.opt.bg); E.bgSw.style.setProperty('--a', S.opt.bgA / 255);
+  E.fgIn.value = S.opt.fg; E.bgIn.value = S.opt.bg;
+  E.fgA.set(Math.round((S.opt.fgA / 255) * 100)); E.bgA.set(Math.round((S.opt.bgA / 255) * 100));
+  const sw = (c) => h('button', { type: 'button', class: 'ic-sw', style: { '--c': c }, title: c, 'aria-label': c, onclick: () => { S.opt.fg = c; S.opt.fgA = 255; renderColors(); saveOpt(); }, oncontextmenu: (e) => { e.preventDefault(); S.opt.bg = c; S.opt.bgA = 255; renderColors(); saveOpt(); } });
+  E.pal.replaceChildren(...PALETTE.map(sw));
+  E.recent.replaceChildren(...S.opt.recent.map(sw));
+  E.recentH.hidden = !S.opt.recent.length;
+}
+
+function renderTools() {
+  for (const b of E.tools.children) { const on = b.dataset.tool === S.opt.tool; b.classList.toggle('ed-on', on); b.setAttribute('aria-pressed', String(on)); }
+  renderOptions();
+}
+
+// The options bar shows only what applies to the current tool (contextual toolbar), rebuilt on tool change.
+// '=X' etc. are literal labels for seg(), not i18n keys.
+function renderOptions() {
+  const o = S.opt, parts = [];
+  const sizeR = () => h('label', { class: 'ic-opt' }, t('ic.opt.size'), range({ min: 1, max: 16, value: o.size, unit: ' px', onInput: (v) => { o.size = v; saveOpt(); } }));
+  const mirror = () => h('div', { class: 'ic-opt' }, iconEl('mirror'), seg([{ v: 'off', l: 'ic.opt.off' }, { v: 'x', l: '=X' }, { v: 'y', l: '=Y' }, { v: 'xy', l: '=XY' }], o.mirror, (v) => { o.mirror = v; saveOpt(); renderCanvas(); }, 'ic.opt.mirror'));
+  const chk = (label, obj, key) => h('label', { class: 'ic-opt ic-opt-check' }, toggle(obj[key], (v) => { obj[key] = v; saveOpt(); }), t(label));
+  const tol = (obj) => h('label', { class: 'ic-opt' }, t('ic.opt.tolerance'), range({ min: 0, max: 255, value: obj.tolerance, onInput: (v) => { obj.tolerance = v; saveOpt(); } }));
+  const mode = () => h('div', { class: 'ic-opt' }, seg([{ v: 'replace', l: 'ic.sel.replace' }, { v: 'add', l: 'ic.sel.add', icon: 'plus' }, { v: 'subtract', l: 'ic.sel.subtract', icon: 'minus' }, { v: 'intersect', l: 'ic.sel.intersect' }], o.wand.mode, (v) => { o.wand.mode = v; saveOpt(); }, 'ic.sel.mode'));
+  if (o.tool === 'pencil' || o.tool === 'eraser') parts.push(sizeR(), mirror());
+  else if (o.tool === 'line') parts.push(mirror());
+  else if (o.tool === 'rect' || o.tool === 'ellipse') parts.push(chk('ic.opt.filled', o, 'filled'), mirror());
+  else if (o.tool === 'fill') parts.push(tol(o.fillOpt), chk('ic.opt.contiguous', o.fillOpt, 'contiguous'));
+  else if (o.tool === 'wand') {
+    parts.push(tol(o.wand), chk('ic.opt.contiguous', o.wand, 'contiguous'), chk('ic.opt.diagonal', o.wand, 'diagonal'),
+      h('label', { class: 'ic-opt' }, t('ic.opt.metric'), seg([{ v: 'max', l: 'ic.opt.mMax' }, { v: 'rgba', l: '=RGBA' }, { v: 'perceptual', l: 'ic.opt.mPerceptual' }], o.wand.metric, (v) => { o.wand.metric = v; saveOpt(); })),
+      h('label', { class: 'ic-opt' }, t('ic.opt.soft'), range({ min: 0, max: 100, value: o.wand.soft, unit: ' %', onInput: (v) => { o.wand.soft = v; saveOpt(); } })),
+      mode());
+  } else if (o.tool === 'select') parts.push(mode());
+  parts.push(h('span', { class: 'ic-hint' }, t('ic.hint.' + o.tool)));
+  E.opts.replaceChildren(...parts);
+}
+
+function renderUndo() {
+  E.undo.disabled = !S.doc.undo.length; E.redo.disabled = !S.doc.redo.length;
+  E.undo.title = S.doc.undo.length ? t('ic.undoX', { x: t(S.doc.undo[S.doc.undo.length - 1].label || 'ic.h.edit') }) : t('ic.undo');
+  E.redo.title = S.doc.redo.length ? t('ic.redoX', { x: t(S.doc.redo[S.doc.redo.length - 1].label || 'ic.h.edit') }) : t('ic.redo');
+  E.selBar.hidden = !sel();
+  E.title.textContent = S.doc.name;
+  E.curSize.textContent = sizeLabel(S.n) + ' · ' + (S.n === MASTER ? t('ic.master') : S.doc.sizes[S.n].custom ? t('ic.custom') : t('ic.autoEdit'));
+}
+
+// 'pixels' (the edited size only, cheap) | 'all' (sizes, preview, history) | 'sizes'
+// ('sizes' and 'all' currently do the same work; the distinction documents intent at call sites.)
+function changed(what = 'all') {
+  renderCanvas();
+  if (what !== 'pixels') { renderSizes(); renderPreview(); }
+  renderUndo();
+  autosave();
+}
+const changedSoon = debounce(() => { renderSizes(); renderPreview(); }, 120);
+
+// Switching size refits zoom (a 32 px icon needs a far larger zoom than 256) and abandons any gesture in progress.
+function selectSize(n) {
+  S.n = n; S.zoom = 0; S.drag = null;
+  changed('sizes');
+}
+
+// --- drawing ------------------------------------------------------------------------------------------------
+
+const colorOf = (secondary) => (secondary ? rgba(S.opt.bg, S.opt.bgA) : rgba(S.opt.fg, S.opt.fgA));
+
+// Pointer -> icon cell via the overlay's CSS box: independent of zoom, dpr and scroll. floor (not round): cell k
+// spans [k, k+1). May return coordinates outside the board (drags that leave it); callers clamp or ignore.
+function cellAt(e) {
+  const r = E.over.getBoundingClientRect();
+  return { x: Math.floor(((e.clientX - r.left) / r.width) * S.n), y: Math.floor(((e.clientY - r.top) / r.height) * S.n) };
+}
+
+// Editing an automatic size makes it custom first (its own pixels from then on).
+function beginEdit(label) {
+  record(S.doc, S.n, label);
+  makeCustom(S.doc, S.n);
+}
+
+// Eraser = 'replace' with transparent black: blending transparency 'over' a pixel would change nothing.
+function stamp(p, secondary) {
+  const er = S.opt.tool === 'eraser';
+  const mir = S.opt.mirror === 'off' ? null : S.opt.mirror;
+  dab(img(), p.x, p.y, S.opt.size, er ? [0, 0, 0, 0] : colorOf(secondary), er ? 'replace' : 'over', sel(), mir);
+}
+
+// Shift constrains rect/ellipse to a square/circle: the larger extent wins, the sign keeps the drag direction
+// (`|| 1` makes a zero delta count as positive instead of collapsing the shape).
+function shapePoints(d) {
+  if (d.tool === 'line') return linePoints(d.x0, d.y0, d.x, d.y);
+  let x = d.x, y = d.y;
+  if (d.shift) { const s = Math.max(Math.abs(x - d.x0), Math.abs(y - d.y0)); x = d.x0 + Math.sign(x - d.x0 || 1) * s; y = d.y0 + Math.sign(y - d.y0 || 1) * s; }
+  return d.tool === 'rect' ? rectPoints(d.x0, d.y0, x, y, S.opt.filled) : ellipsePoints(d.x0, d.y0, x, y, S.opt.filled);
+}
+
+// Live shape preview by restore-and-redraw: the pixels at drag start (d.base) are put back, then the shape is drawn
+// at its current extent. No separate preview layer, and what you see is exactly what will be committed.
+// The Set dedupes mirrored copies (same reason as paint.js dab: 'over' with alpha must not hit a pixel twice).
+function drawShape(d) {
+  const im = img();
+  im.data.set(d.base);
+  const c = colorOf(d.secondary), n = S.n, m = sel();
+  const pts = shapePoints(d);
+  const set = new Set();
+  const mir = S.opt.mirror;
+  for (const [x, y] of pts) {
+    const all = [[x, y]];
+    if (mir.includes('x')) all.push([n - 1 - x, y]);
+    if (mir.includes('y')) all.push([x, n - 1 - y]);
+    if (mir === 'xy') all.push([n - 1 - x, n - 1 - y]);
+    for (const [a, b] of all) { const k = b * n + a; if (!set.has(k)) { set.add(k); plot(im, a, b, c, 'over', m); } }
+  }
+}
+
+// Eyedropper takes alpha too: picking a semi-transparent shadow pixel reproduces it exactly.
+function pick(p, secondary) {
+  const im = img();
+  if (p.x < 0 || p.y < 0 || p.x >= im.width || p.y >= im.height) return;
+  const i = (p.y * im.width + p.x) * 4;
+  const hex = hexOf(im.data[i], im.data[i + 1], im.data[i + 2]);
+  if (secondary) { S.opt.bg = hex; S.opt.bgA = im.data[i + 3]; } else { S.opt.fg = hex; S.opt.fgA = im.data[i + 3]; }
+  renderColors(); saveOpt();
+}
+
+// Most-recently-used colours: move-to-front, unique, 12 max (fits the 8-column palette grid in 1.5 rows).
+function rememberColor() {
+  const c = S.opt.fg;
+  S.opt.recent = [c, ...S.opt.recent.filter((x) => x !== c)].slice(0, 12);
+  renderColors(); saveOpt();
+}
+
+// Pointer down dispatches by tool. Conventions: right button = secondary (background) colour; Alt = temporary
+// eyedropper for colour tools; Shift/Alt modify selection mode (Shift add, Alt subtract, both intersect: Photoshop).
+// Middle button is ignored (reserved for panning in many editors). Pointer capture keeps strokes alive outside the
+// board. History is recorded at gesture start (beginEdit), so one stroke = one undo step however long it is.
+function onDown(e) {
+  if (e.button > 2 || (e.pointerType === 'mouse' && e.button === 1)) return;
+  e.preventDefault();
+  E.over.setPointerCapture(e.pointerId);
+  const p = cellAt(e), secondary = e.button === 2, tool = S.opt.tool, n = S.n;
+  if (tool === 'picker' || (e.altKey && ['pencil', 'line', 'rect', 'ellipse', 'fill'].includes(tool))) { pick(p, secondary); S.drag = { tool: 'picker', secondary }; return; }
+  if (p.x < 0 || p.y < 0 || p.x >= n || p.y >= n) { if (tool !== 'select' && tool !== 'move') return; }
+  if (tool === 'wand') {
+    const w = S.opt.wand;
+    const r = wandMask(img(), p.x, p.y, { tolerance: w.tolerance, contiguous: w.contiguous, diagonal: w.diagonal, metric: w.metric, soft: w.soft / 100 });
+    if (!r) return;
+    const mode = e.shiftKey && e.altKey ? 'intersect' : e.shiftKey ? 'add' : e.altKey ? 'subtract' : w.mode;
+    record(S.doc, n, 'ic.h.select');
+    S.doc.sel[n] = combineMask(sel(), r.mask, mode);
+    changed('pixels');
+    return;
+  }
+  if (tool === 'fill') {
+    beginEdit('ic.h.fill');
+    fill(img(), p.x, p.y, colorOf(secondary), { tolerance: S.opt.fillOpt.tolerance, contiguous: S.opt.fillOpt.contiguous, mode: 'replace', clip: sel() });
+    if (!secondary) rememberColor();
+    afterEdit();
+    return;
+  }
+  if (tool === 'select') { S.drag = { tool, x0: p.x, y0: p.y, x: p.x, y: p.y, mode: e.shiftKey && e.altKey ? 'intersect' : e.shiftKey ? 'add' : e.altKey ? 'subtract' : S.opt.wand.mode }; renderCanvas(); return; }
+  if (tool === 'move') {
+    beginEdit('ic.h.move');
+    S.drag = { tool, x0: p.x, y0: p.y, base: new Uint8ClampedArray(img().data), sel: sel() ? Uint8Array.from(sel()) : null };
+    return;
+  }
+  if (tool === 'pencil' || tool === 'eraser') {
+    beginEdit(tool === 'eraser' ? 'ic.h.erase' : 'ic.h.draw');
+    // Shift + click: a straight line from the last point (like Aseprite / Photoshop)
+    // S.last is per size (n): a line must not connect a point from another size's coordinate system.
+    if (e.shiftKey && S.last && S.last.n === n) for (const [x, y] of linePoints(S.last.x, S.last.y, p.x, p.y)) stamp({ x, y }, secondary);
+    else stamp(p, secondary);
+    S.drag = { tool, last: p, secondary };
+    changed('pixels');
+    return;
+  }
+  if (tool === 'line' || tool === 'rect' || tool === 'ellipse') {
+    beginEdit('ic.h.' + tool);
+    S.drag = { tool, x0: p.x, y0: p.y, x: p.x, y: p.y, base: new Uint8ClampedArray(img().data), secondary, shift: e.shiftKey };
+    drawShape(S.drag);
+    changed('pixels');
+  }
+}
+
+// Pointer move. Pencil strokes interpolate with Bresenham from the previous point (slice(1): that point is already
+// painted), because pointermove events are sparse at speed and would leave dotted lines otherwise.
+// Move tool: restore base, shift; the selection mask is shifted along by packing it into the alpha channel of a
+// temporary image so the same shift() routine moves it (one implementation instead of two).
+function onMove(e) {
+  const p = cellAt(e);
+  const inside = p.x >= 0 && p.y >= 0 && p.x < S.n && p.y < S.n;
+  S.hover = inside ? p : null;
+  const d = S.drag;
+  if (!d) { renderCanvas(); return; }
+  if (d.tool === 'picker') pick(p, d.secondary);
+  else if (d.tool === 'pencil' || d.tool === 'eraser') {
+    for (const [x, y] of linePoints(d.last.x, d.last.y, p.x, p.y).slice(1)) stamp({ x, y }, d.secondary);
+    d.last = p;
+    changedSoon();
+  } else if (d.tool === 'select') { d.x = p.x; d.y = p.y; }
+  else if (d.tool === 'move') {
+    const im = img();
+    im.data.set(d.base);
+    shift(im, p.x - d.x0, p.y - d.y0);
+    if (d.sel) {
+      const m = { width: S.n, height: S.n, data: new Uint8ClampedArray(S.n * S.n * 4) };
+      for (let i = 0; i < d.sel.length; i++) m.data[i * 4 + 3] = d.sel[i];
+      shift(m, p.x - d.x0, p.y - d.y0);
+      const out = new Uint8Array(d.sel.length);
+      for (let i = 0; i < out.length; i++) out[i] = m.data[i * 4 + 3];
+      S.doc.sel[S.n] = out;
+    }
+  } else if (d.base) { d.x = p.x; d.y = p.y; d.shift = e.shiftKey; drawShape(d); }
+  renderCanvas();
+}
+
+// Gesture end: commit. A click without drag in 'replace' selection mode deselects (the common "click outside to
+// deselect" expectation). Secondary-colour strokes do not enter the recent list (it tracks the foreground).
+function onUp() {
+  const d = S.drag;
+  if (!d) return;
+  S.drag = null;
+  if (d.tool === 'select') {
+    const n = S.n;
+    record(S.doc, n, 'ic.h.select');
+    S.doc.sel[n] = d.x0 === d.x && d.y0 === d.y && d.mode === 'replace' ? null : combineMask(sel(), rectMask(n, d.x0, d.y0, d.x, d.y), d.mode);
+    changed('pixels');
+    return;
+  }
+  if (d.tool === 'picker') return;
+  if (d.tool === 'pencil' || d.tool === 'eraser') { S.last = { n: S.n, ...d.last }; if (d.tool === 'pencil' && !d.secondary) rememberColor(); }
+  if (['line', 'rect', 'ellipse'].includes(d.tool) && !d.secondary) rememberColor();
+  afterEdit();
+}
+
+// After a change of pixels: a master change flows into every automatic size.
+function afterEdit() {
+  if (S.n === MASTER) regenerate(S.doc);
+  changed('all');
+}
+
+// --- commands -----------------------------------------------------------------------------------------------
+
+// Wrapper for one-shot commands: precondition, history, edit, propagate. Every image command goes through it, so
+// none can forget the record/makeCustom/regenerate sequence.
+function act(label, fn, { needSel = false } = {}) {
+  if (needSel && !sel()) { toast(t('ic.needSel'), 'warn'); return; }
+  beginEdit(label);
+  fn(img());
+  afterEdit();
+}
+
+// Command table: shared by buttons and keyboard shortcuts, so both always do the same thing.
+// removeBg seeds the wand from the image edges (the background usually touches them) with a perceptual metric and
+// soft edges, the same parameters the crop dialog uses. Zoom steps grow with zoom (~25% in, ~20% out) so they feel
+// proportional at 2x and at 40x.
+const CMD = {
+  clear: () => act('ic.h.clear', (im) => clearSelected(im, sel()), { needSel: true }),
+  fillSel: () => act('ic.h.fill', (im) => { const m = sel(), c = colorOf(false); for (let i = 0; i < m.length; i++) if (m[i]) plot(im, i % S.n, (i / S.n) | 0, c, 'over', m); }, { needSel: true }),
+  selectAll: () => { record(S.doc, S.n, 'ic.h.select'); S.doc.sel[S.n] = new Uint8Array(S.n * S.n).fill(255); changed('pixels'); },
+  deselect: () => { if (!sel()) return; record(S.doc, S.n, 'ic.h.select'); S.doc.sel[S.n] = null; changed('pixels'); },
+  invert: () => { record(S.doc, S.n, 'ic.h.select'); S.doc.sel[S.n] = sel() ? invertMask(sel(), S.n) : null; changed('pixels'); },
+  removeBg: () => act('ic.h.removeBg', (im) => removeBackground(im, { tolerance: S.opt.wand.tolerance || 32, seeds: 'edges', metric: 'perceptual', soft: 0.5 })),
+  outline: () => act('ic.h.outline', (im) => outline(im, colorOf(false))),
+  flipH: () => act('ic.h.flip', (im) => flipImage(im, true)),
+  flipV: () => act('ic.h.flip', (im) => flipImage(im, false)),
+  clearAll: () => act('ic.h.clear', (im) => im.data.fill(0)),
+  undo: () => { const l = undo(S.doc); if (l != null) { toast(t('ic.undone', { x: t(l || 'ic.h.edit') })); changed('all'); } },
+  redo: () => { const l = redo(S.doc); if (l != null) changed('all'); },
+  zoomIn: () => { S.zoom = Math.min(64, (S.zoom || 1) + Math.max(1, Math.round(S.zoom / 4))); renderCanvas(); },
+  zoomOut: () => { S.zoom = Math.max(1, S.zoom - Math.max(1, Math.round(S.zoom / 5))); renderCanvas(); },
+  zoomFit: () => { S.zoom = 0; renderCanvas(); },
+  swap: () => { [S.opt.fg, S.opt.bg, S.opt.fgA, S.opt.bgA] = [S.opt.bg, S.opt.fg, S.opt.bgA, S.opt.fgA]; renderColors(); saveOpt(); },
+};
+
+// --- files --------------------------------------------------------------------------------------------------
+
+// File name stem: drop a short extension, replace characters invalid in Windows file names.
+// KNOWN DEFECT: the extension pattern also strips a version-like suffix typed by the user in rename(): "Logo v1.2"
+// becomes "Logo v1". Fix: strip only known extensions (png|jpe?g|gif|webp|bmp|ico|cur|json|svg) or apply baseName
+// to imported file names only.
+const baseName = (name) => String(name || 'icon').replace(/\.[a-z0-9]{1,6}$/i, '').replace(/[\\/:*?"<>|]+/g, '_') || 'icon';
+
+// Any browser-decodable picture -> RGBA. createImageBitmap decodes off the main thread in most engines and honours
+// EXIF orientation. Pictures are capped at 4096 px on the long side: the result only feeds a 256 px crop, and a
+// 50 MP photo as RGBA would be 200 MB.
+async function decodePicture(file) {
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, 4096 / Math.max(bmp.width, bmp.height));
+  const c = h('canvas');
+  c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+  const g = c.getContext('2d');
+  g.drawImage(bmp, 0, 0, c.width, c.height);
+  if (bmp.close) bmp.close();
+  const d = g.getImageData(0, 0, c.width, c.height);
+  return { width: c.width, height: c.height, data: d.data };
+}
+
+// Format sniffing by extension OR magic bytes, because pasted/dropped files may have no name: '{' (0x7b) = project
+// JSON; 00 00 01|02 00 = ICO (type 1) or CUR (type 2) header. Anything else is tried as a picture.
+// Opening a project replaces the document (confirmed when there is history to lose); importing an icon or picture
+// is an undoable edit of the current document instead.
+async function openFiles(files) {
+  const f = files[0];
+  if (!f) return;
+  try {
+    const head = new Uint8Array(await f.slice(0, 8).arrayBuffer());
+    if (/\.json$/i.test(f.name) || head[0] === 0x7b) {
+      if (!(await confirmReplace())) return;
+      S.doc = loadProject(await f.text());
+      S.n = MASTER; S.zoom = 0;
+      changed('all');
+      toast(t('ic.opened', { name: f.name }), 'ok');
+      return;
+    }
+    if (/\.(ico|cur)$/i.test(f.name) || (head[0] === 0 && head[1] === 0 && (head[2] === 1 || head[2] === 2) && head[3] === 0)) {
+      record(S.doc, MASTER, 'ic.h.import');
+      const taken = importICO(S.doc, new Uint8Array(await f.arrayBuffer()));
+      S.doc.name = baseName(f.name);
+      S.n = MASTER; S.zoom = 0;
+      changed('all');
+      toast(taken.length ? t('ic.icoOpened', { sizes: taken.join(', ') }) : t('ic.opened', { name: f.name }), 'ok');
+      return;
+    }
+    const pic = await decodePicture(f);
+    const r = await cropDialog(pic, f.name);
+    if (!r) return;
+    record(S.doc, MASTER, 'ic.h.import');
+    const im = cropSquare(pic, r.rect, MASTER);
+    if (r.removeBg) removeBackground(im, { tolerance: r.tolerance, seeds: 'edges', metric: 'perceptual', soft: 0.5 });
+    setMaster(S.doc, im);
+    if (S.doc.name === 'icon') S.doc.name = baseName(f.name);
+    S.n = MASTER; S.zoom = 0;
+    changed('all');
+  } catch (err) {
+    toast(t('ic.openError', { msg: String((err && err.message) || err) }), 'error');
+  }
+}
+
+// Ask only when there is unsaved work to lose (non-empty undo history is the proxy).
+const confirmReplace = () => (S.doc.undo.length ? confirmDialog(t('ic.replaceTitle'), t('ic.replaceText'), t('ic.replace')) : Promise.resolve(true));
+
+/** Square crop of a large picture: drag the square, resize it by the corner handle or the slider, or fit the whole picture. */
+// The picture canvas has the picture's real size and is scaled by CSS (factor k); all crop maths runs in picture
+// pixels and converts with k only for display, so the result is exact regardless of the dialog size.
+// Clamping (place): the square may be larger than the picture (fit whole with transparent margins), so the allowed
+// x range is [min(0, W - size), max(0, W - size)], which covers both the "inside" and the "overhanging" case.
+// The 64 px live preview runs the same crop and background removal as the final import.
+// Keyboard: arrows move (Shift = 10 px), Alt + arrows resize; the box is focusable with a group role and label.
+function cropDialog(pic, name) {
+  const maxW = Math.min(560, window.innerWidth - 80), maxH = Math.min(420, window.innerHeight - 320);
+  const k = Math.min(1, maxW / pic.width, Math.max(120, maxH) / pic.height);
+  const W = Math.max(1, Math.round(pic.width * k)), H = Math.max(1, Math.round(pic.height * k));
+  const c = h('canvas', { class: 'ic-crop-c', width: pic.width, height: pic.height, style: { width: W + 'px', height: H + 'px' } });
+  c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pic.data), pic.width, pic.height), 0, 0);
+  let rect = centreSquare(pic.width, pic.height);
+  const box = h('div', { class: 'ic-crop-box', tabindex: '0', role: 'group', 'aria-label': t('ic.cropBox') }, h('span', { class: 'ic-crop-h' }));
+  const info = h('output', { class: 'ic-crop-info' });
+  const prev = h('canvas', { class: 'ic-crop-prev', width: 64, height: 64 });
+  const maxSize = () => Math.max(pic.width, pic.height);
+  const opts = { removeBg: false, tolerance: 40 };
+  const place = () => {
+    rect.size = Math.max(4, Math.min(maxSize(), rect.size));
+    rect.x = Math.max(Math.min(0, pic.width - rect.size), Math.min(Math.max(0, pic.width - rect.size), rect.x));
+    rect.y = Math.max(Math.min(0, pic.height - rect.size), Math.min(Math.max(0, pic.height - rect.size), rect.y));
+    Object.assign(box.style, { left: rect.x * k + 'px', top: rect.y * k + 'px', width: rect.size * k + 'px', height: rect.size * k + 'px' });
+    info.textContent = `${Math.round(rect.size)} × ${Math.round(rect.size)} px → 256 × 256`;
+    const sq = cropSquare(pic, rect, 64);
+    if (opts.removeBg) removeBackground(sq, { tolerance: opts.tolerance, seeds: 'edges', metric: 'perceptual', soft: 0.5 });
+    prev.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(sq.data), 64, 64), 0, 0);
+    slider.set(Math.round(rect.size));
+  };
+  const slider = range({ min: 4, max: maxSize(), value: rect.size, unit: ' px', onInput: (v) => { const cx = rect.x + rect.size / 2, cy = rect.y + rect.size / 2; rect.size = v; rect.x = cx - v / 2; rect.y = cy - v / 2; place(); } });
+  let drag = null;
+  box.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); box.setPointerCapture(e.pointerId);
+    drag = { resize: e.target.classList.contains('ic-crop-h'), x: e.clientX, y: e.clientY, r: { ...rect } };
+  });
+  box.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = (e.clientX - drag.x) / k, dy = (e.clientY - drag.y) / k;
+    if (drag.resize) rect.size = drag.r.size + Math.max(dx, dy);
+    else { rect.x = drag.r.x + dx; rect.y = drag.r.y + dy; }
+    place();
+  });
+  box.addEventListener('pointerup', () => { drag = null; });
+  box.addEventListener('keydown', (e) => {
+    const s = e.shiftKey ? 10 : 1;
+    const m = { ArrowLeft: [-s, 0], ArrowRight: [s, 0], ArrowUp: [0, -s], ArrowDown: [0, s] }[e.key];
+    if (!m) return;
+    e.preventDefault();
+    if (e.altKey) rect.size += m[0] + m[1]; else { rect.x += m[0]; rect.y += m[1]; }
+    place();
+  });
+  const fit = h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => { rect = { x: Math.min(0, (pic.width - maxSize()) / 2), y: Math.min(0, (pic.height - maxSize()) / 2), size: maxSize() }; place(); } }, t('ic.cropFit'));
+  const centre = h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => { rect = centreSquare(pic.width, pic.height); place(); } }, t('ic.cropCentre'));
+  const tolRow = h('label', { class: 'ic-opt', hidden: true }, t('ic.opt.tolerance'), range({ min: 1, max: 160, value: opts.tolerance, onInput: (v) => { opts.tolerance = v; place(); } }));
+  const bgRow = h('label', { class: 'ic-opt ic-opt-check' }, toggle(false, (v) => { opts.removeBg = v; tolRow.hidden = !v; place(); }), t('ic.cropRemoveBg'));
+  const body = h('div', { class: 'ic-crop' },
+    h('div', { class: 'ic-crop-stage', style: { width: W + 'px', height: H + 'px' } }, c, box),
+    h('div', { class: 'ic-crop-side' },
+      h('p', { class: 'ed-hint' }, t('ic.cropHint', { w: pic.width, h: pic.height })),
+      h('label', { class: 'ic-opt' }, t('ic.cropSize'), slider), info,
+      h('div', { class: 'ap-row' }, centre, fit),
+      bgRow, tolRow,
+      h('div', { class: 'ic-crop-prevwrap' }, prev)));
+  place();
+  return openDialog({
+    title: t('ic.cropTitle', { name }), body, wide: true, className: 'ic-crop-dlg',
+    buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('ic.cropUse'), value: 'ok', primary: true }],
+  }).then((v) => (v === 'ok' ? { rect: { ...rect }, ...opts } : null));
+}
+
+// ICO_MIME = image/vnd.microsoft.icon (the IANA-registered type; image/x-icon is the legacy alias).
+function exportIco() {
+  try {
+    download(exportICO(S.doc), baseName(S.doc.name) + '.ico', ICO_MIME);
+    toast(t('ic.exported', { sizes: enabledSizes(S.doc).join(', ') }), 'ok');
+  } catch { toast(t('ic.noSizes'), 'warn'); }
+}
+const exportPng = (n = S.n) => download(exportPNG(S.doc, n), `${baseName(S.doc.name)}-${n}.png`, 'image/png');
+// Several downloads from one click: browsers may ask permission for (or block) the second and later files.
+const exportAllPng = () => { for (const n of enabledSizes(S.doc)) exportPng(n); };
+const saveFile = () => download(saveProject(S.doc), baseName(S.doc.name) + '.icon.json', 'application/json');
+
+async function newDoc() {
+  if (!(await confirmReplace())) return;
+  S.doc = createDoc(); S.n = MASTER; S.zoom = 0;
+  changed('all');
+}
+
+async function rename() {
+  const v = await openDialog({
+    title: t('ic.rename'), body: h('label', { class: 'ed-field ed-field-col' }, h('span', { class: 'ed-label' }, t('ic.name.label')), h('input', { class: 'ed-input', id: 'ic-name', value: S.doc.name, maxlength: '80' })),
+    buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('dlg.ok'), value: 'ok', primary: true }],
+    onMount: ({ el }) => setTimeout(() => el.querySelector('#ic-name')?.select(), 0),
+  }).then((r) => (r === 'ok' ? document.getElementById('ic-name')?.value : null));
+  if (v == null) return;
+  S.doc.name = baseName(v.trim()) || 'icon';
+  changed('sizes');
+}
+
+// --- layout ---------------------------------------------------------------------------------------------------
+
+// Builds the whole UI. Called at boot and again on language change (all labels come from t()). The tools toolbar
+// is a role=toolbar with aria-pressed buttons; title shows the shortcut. The colour inputs are invisible
+// <input type=color> stretched over the swatches (the label wraps them), so the native picker opens on click while
+// the swatch shows alpha, which the native input cannot. Ctrl/Cmd + wheel zooms; a plain wheel still scrolls.
+function build() {
+  const main = document.querySelector('.ap-main');
+  main.classList.add('ic-main');
+  main.replaceChildren();
+  const tb = (ic, label, fn, extra = {}) => h('button', { type: 'button', class: 'ed-btn ed-sm', title: t(label), onclick: fn, ...extra }, iconEl(ic), h('span', { class: 'ic-tb-l' }, t(label)));
+  E.undo = h('button', { type: 'button', class: 'ed-iconbtn', onclick: CMD.undo, 'aria-label': t('ic.undo') }, iconEl('undo'));
+  E.redo = h('button', { type: 'button', class: 'ed-iconbtn', onclick: CMD.redo, 'aria-label': t('ic.redo') }, iconEl('redo'));
+  E.title = h('button', { type: 'button', class: 'ic-title', title: t('ic.rename'), onclick: rename });
+  const bar = h('div', { class: 'ic-bar' },
+    E.title,
+    h('span', { class: 'ed-spacer' }),
+    tb('filePlus', 'ic.new', newDoc), tb('folder', 'ic.open', async () => openFiles(await pickFiles({ accept: 'image/*,.ico,.cur,.json' }))),
+    tb('save', 'ic.save', saveFile), E.undo, E.redo,
+    h('button', { type: 'button', class: 'ed-btn ed-sm ed-primary', onclick: exportIco }, iconEl('download'), t('ic.exportIco')),
+    h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => exportPng() }, iconEl('image'), t('ic.exportPng')));
+
+  E.tools = h('div', { class: 'ic-tools', role: 'toolbar', 'aria-label': t('ic.tools'), 'aria-orientation': 'vertical' },
+    TOOLS.map((x) => h('button', { type: 'button', class: 'ic-tool', dataset: { tool: x.id }, title: `${t('ic.tool.' + x.id)} (${x.key})`, 'aria-label': t('ic.tool.' + x.id),
+      onclick: () => { S.opt.tool = x.id; saveOpt(); renderTools(); } }, iconEl(x.icon))));
+  E.fgIn = h('input', { type: 'color', class: 'ic-cin' }); E.bgIn = h('input', { type: 'color', class: 'ic-cin' });
+  E.fgIn.addEventListener('input', () => { S.opt.fg = E.fgIn.value; if (!S.opt.fgA) S.opt.fgA = 255; renderColors(); saveOpt(); });
+  E.bgIn.addEventListener('input', () => { S.opt.bg = E.bgIn.value; renderColors(); saveOpt(); });
+  E.fgSw = h('label', { class: 'ic-csw ic-fg', title: t('ic.fg') }, E.fgIn);
+  E.bgSw = h('label', { class: 'ic-csw ic-bg', title: t('ic.bg') }, E.bgIn);
+  const colors = h('div', { class: 'ic-colors' }, E.bgSw, E.fgSw,
+    h('button', { type: 'button', class: 'ed-iconbtn ed-sm ic-swap', title: t('ic.swap') + ' (X)', 'aria-label': t('ic.swap'), onclick: CMD.swap }, iconEl('swap')));
+  E.fgA = range({ min: 0, max: 100, value: 100, unit: ' %', onInput: (v) => { S.opt.fgA = Math.round((v / 100) * 255); renderColors(); saveOpt(); } });
+  E.bgA = range({ min: 0, max: 100, value: 0, unit: ' %', onInput: (v) => { S.opt.bgA = Math.round((v / 100) * 255); renderColors(); saveOpt(); } });
+  E.pal = h('div', { class: 'ic-pal' }); E.recent = h('div', { class: 'ic-pal ic-recent' });
+  E.recentH = h('div', { class: 'ic-recent-h' }, t('ic.recent'));
+
+  E.opts = h('div', { class: 'ic-opts' });
+  E.pix = h('canvas', { class: 'ic-pix', 'aria-hidden': 'true' });
+  E.over = h('canvas', { class: 'ic-over', role: 'img', 'aria-label': t('ic.canvas') });
+  E.board = h('div', { class: 'ic-board' }, E.pix, E.over);
+  E.stage = h('div', { class: 'ic-stage' }, E.board);
+  E.over.addEventListener('pointerdown', onDown);
+  E.over.addEventListener('pointermove', onMove);
+  E.over.addEventListener('pointerup', onUp);
+  E.over.addEventListener('pointercancel', onUp);
+  E.over.addEventListener('pointerleave', () => { S.hover = null; if (!S.drag) renderCanvas(); });
+  E.over.addEventListener('contextmenu', (e) => e.preventDefault());
+  E.stage.addEventListener('wheel', (e) => { if (!e.ctrlKey && !e.metaKey) return; e.preventDefault(); (e.deltaY < 0 ? CMD.zoomIn : CMD.zoomOut)(); }, { passive: false });
+  E.zoomOut = h('output', { class: 'ic-zoom' });
+  E.pos = h('output', { class: 'ic-pos' });
+  E.curSize = h('span', { class: 'ic-cursize' });
+  const sm = (ic, label, fn) => h('button', { type: 'button', class: 'ed-iconbtn ed-sm', title: t(label), 'aria-label': t(label), onclick: fn }, iconEl(ic));
+  const gridBtn = h('button', { type: 'button', class: 'ed-iconbtn ed-sm' + (S.opt.grid ? ' ed-on' : ''), title: t('ic.grid'), 'aria-label': t('ic.grid'), 'aria-pressed': String(S.opt.grid), onclick: (e) => { S.opt.grid = !S.opt.grid; e.currentTarget.classList.toggle('ed-on', S.opt.grid); e.currentTarget.setAttribute('aria-pressed', String(S.opt.grid)); saveOpt(); renderCanvas(); } }, iconEl('grid'));
+  const foot = h('div', { class: 'ic-foot' }, E.curSize, h('span', { class: 'ed-spacer' }), E.pos, sm('zoomOut', 'ic.zoomOut', CMD.zoomOut), E.zoomOut, sm('zoomIn', 'ic.zoomIn', CMD.zoomIn), sm('fitWidth', 'ic.zoomFit', CMD.zoomFit), gridBtn);
+  const actBtn = (ic, label, fn) => h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: fn }, ic ? iconEl(ic) : null, t(label));
+  E.selBar = h('div', { class: 'ic-selbar' }, h('b', {}, t('ic.selection')),
+    actBtn('trash', 'ic.clearSel', CMD.clear), actBtn('drop', 'ic.fillSel', CMD.fillSel), actBtn(null, 'ic.invert', CMD.invert), actBtn('close', 'ic.deselect', CMD.deselect));
+  const imgActs = h('div', { class: 'ic-acts' },
+    actBtn('wand', 'ic.removeBg', CMD.removeBg), actBtn('square', 'ic.outline', CMD.outline),
+    actBtn('flip', 'ic.flipH', CMD.flipH), actBtn('flip', 'ic.flipV', CMD.flipV), actBtn('trash', 'ic.clearAll', CMD.clearAll));
+
+  E.sizes = h('div', { class: 'ic-sizes' });
+  E.preview = h('div', { class: 'ic-preview' });
+  const drop = h('div', { class: 'ic-dropnote' }, iconEl('upload'), h('span', {}, t('ic.dropNote')));
+
+  main.append(bar, h('div', { class: 'ic-work' },
+    h('aside', { class: 'ic-left' }, E.tools, colors,
+      h('div', { class: 'ic-alpha' }, h('span', {}, t('ic.alphaFg')), E.fgA, h('span', {}, t('ic.alphaBg')), E.bgA),
+      E.pal, E.recentH, E.recent),
+    h('section', { class: 'ic-center' }, E.opts, E.selBar, E.stage, foot, imgActs, drop),
+    h('aside', { class: 'ic-right' }, card('ic.sizes', h('p', { class: 'ed-hint' }, t('ic.sizesHint')), E.sizes), card('ic.preview', E.preview))));
+  renderTools(); renderColors();
+  changed('all');
+}
+
+// Global shortcuts, ignored while typing in a field or when a dialog is open. Ctrl+Shift+Z and Ctrl+Y both redo
+// (macOS vs Windows habits). 1-5 pick sizes in SIZES order. Single letters are tool keys only without modifiers,
+// so browser shortcuts (Ctrl+L, Alt+D...) keep working.
+function onKey(e) {
+  if (e.target.closest?.('input, textarea, select, [contenteditable], .ed-dialog')) return;
+  const k = e.key, mod = e.ctrlKey || e.metaKey;
+  if (mod && (k === 'z' || k === 'Z')) { e.preventDefault(); (e.shiftKey ? CMD.redo : CMD.undo)(); return; }
+  if (mod && (k === 'y' || k === 'Y')) { e.preventDefault(); CMD.redo(); return; }
+  if (mod && (k === 'a' || k === 'A')) { e.preventDefault(); CMD.selectAll(); return; }
+  if (mod && (k === 'd' || k === 'D')) { e.preventDefault(); CMD.deselect(); return; }
+  if (mod && e.shiftKey && (k === 'i' || k === 'I')) { e.preventDefault(); CMD.invert(); return; }
+  if (mod && (k === 's' || k === 'S')) { e.preventDefault(); saveFile(); return; }
+  if (mod && (k === 'e' || k === 'E')) { e.preventDefault(); exportIco(); return; }
+  if (mod || e.altKey) return;
+  if (k === 'Delete' || k === 'Backspace') { if (sel()) { e.preventDefault(); CMD.clear(); } return; }
+  if (k === 'x' || k === 'X') { CMD.swap(); return; }
+  if (k === '[' || k === ']') { S.opt.size = Math.max(1, Math.min(16, S.opt.size + (k === ']' ? 1 : -1))); saveOpt(); renderOptions(); return; }
+  if (k === '+' || k === '=') { CMD.zoomIn(); return; }
+  if (k === '-') { CMD.zoomOut(); return; }
+  if (k === '0') { CMD.zoomFit(); return; }
+  if (/^[1-5]$/.test(k)) { selectSize(SIZES[+k - 1]); return; }
+  if (k === 'Escape' && sel()) { CMD.deselect(); return; }
+  const tool = TOOLS.find((x) => x.key === k.toUpperCase());
+  if (tool) { S.opt.tool = tool.id; saveOpt(); renderTools(); }
+}
+
+// Boot: restore the autosaved document (a corrupt autosave falls back to a new document instead of a dead page),
+// then build. Drop and paste work anywhere on the page: dragover must preventDefault for the drop to be allowed, and
+// only for file drags so text drags into inputs keep working. Resize refits zoom (debounced).
+function boot() {
+  try { const saved = localStorage.getItem(KEY + '-doc'); S.doc = saved ? loadProject(saved) : createDoc(); } catch { S.doc = createDoc(); }
+  startApp({ key: KEY, name: 'ic.name', logo: LOGO, offline: true, onLang: build });
+  build();
+  document.addEventListener('keydown', onKey);
+  // pictures, icons and projects dropped anywhere on the page or pasted
+  document.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
+  document.addEventListener('drop', (e) => { if (!e.dataTransfer?.files?.length) return; e.preventDefault(); openFiles([...e.dataTransfer.files]); });
+  document.addEventListener('paste', (e) => { if (e.target.closest?.('input, textarea')) return; const f = [...(e.clipboardData?.files || [])]; if (f.length) { e.preventDefault(); openFiles(f); } });
+  window.addEventListener('resize', debounce(() => { S.zoom = 0; renderCanvas(); }, 150));
+}
+
+boot();

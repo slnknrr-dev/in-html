@@ -1,0 +1,182 @@
+/* media-player/app.css - the media player: shell (desktop sidebar, mobile tabs, home theatre), library views,
+   player bar, now-playing sheet built from layouts, video stage, studio, forms. Colours come from the skin
+   (player/skins.js -> --mp-* custom properties, also mapped onto ui/base.css --ed-* tokens). */
+
+   /* CONTRACT
+      - Load order: ui/base.css, app.css, player.css (index.html). Rules here that reuse an `ed-` selector with the same
+        specificity as base.css (.ed-btn, .ed-btn.ed-primary) win by source order alone; moving this file before
+        base.css would silently restore the shared look.
+      - Namespace: `mp-` for everything owned by the player; `ed-` only when re-skinning a shared primitive.
+      - Specificity budget: one class (0,1,0); two for state or context (.mp-nav-a.mp-on, .mp-card:hover .mp-card-play).
+        View modes are a context attribute on the root (.mp-app[data-view="mobile"] X = 0,3,0 at least), so they beat
+        every desktop rule without !important; that is why desktop rules here must stay at <= two classes.
+      - Colours only via --mp-* tokens set inline on :root by player/skins.js: a skin (or dynamic cover colour) is a
+        token swap, never a stylesheet swap. Raw rgba() is used only for overlays that must darken any skin equally.
+      - Density: sizes that should scale with the "compact / comfortable" setting multiply by var(--mp-density, 1); the
+        fallback 1 keeps the layout sane before skins.js has run.
+      - color-mix(in oklab, ...) derives tints from the accent: oklab mixes perceptually, so a 22% tint looks equally
+        strong for a yellow and a blue accent (sRGB mixing would make blues muddy). Needs Chrome 111 / Safari 16.2 / FF 113. */
+
+/* Shell metrics as variables: the grid template and fixed overlays (player.css .mp-stage uses --mp-bar-h +
+   --mp-tabs-h) read the same numbers, and the mobile mode redefines them on .mp-app instead of rewriting rules.
+   --mp-tabs-h is 0px (with unit) on desktop: calc(var(--mp-bar-h) + 0) with a unitless 0 is invalid in calc(). */
+:root { --mp-side-w: 236px; --mp-bar-h: 84px; --mp-top-h: 56px; --mp-tabs-h: 0px; --mp-gap: calc(16px * var(--mp-density, 1)); }
+/* The page never scrolls as a whole (overflow: hidden on .mp-body): only .mp-main and .mp-side scroll, so the player
+   bar and top bar stay put without position: fixed and its iOS keyboard / toolbar glitches. */
+html, body { height: 100%; }
+.mp-body { margin: 0; background: var(--mp-bg); color: var(--mp-text); font-family: var(--mp-font); font-size: var(--mp-font-size, 15px); overflow: hidden; }
+/* 100dvh, not 100vh: on mobile browsers 100vh is the height with the URL bar hidden, so the bottom row (player bar)
+   would sit under the browser toolbar. Named areas let the mobile mode re-arrange rows by redefining the template. */
+.mp-app { display: grid; height: 100dvh; grid-template-columns: var(--mp-side-w) 1fr; grid-template-rows: var(--mp-top-h) 1fr var(--mp-bar-h); grid-template-areas: 'side top' 'side main' 'bar bar'; }
+/* Attribute on <html> (set by skins.js) rather than a class on .mp-app: the same switch also styles the now-playing
+   sheet (player.css), which is a separate subtree. */
+html[data-mp-background="gradient"] .mp-app { background: radial-gradient(1200px 700px at 80% -10%, color-mix(in oklab, var(--mp-accent) 22%, transparent), transparent 70%), var(--mp-bg); }
+/* Drop target overlay (main.js toggles .mp-dropping on dragover). A pseudo-element costs no DOM; pointer-events:
+   none, or the overlay itself would become the drop target and fire dragleave on the app underneath. */
+.mp-app.mp-dropping::after { content: ''; position: fixed; inset: 12px; border: 3px dashed var(--mp-accent); border-radius: var(--mp-radius-l); pointer-events: none; z-index: 50; }
+/* Duplicates ui/base.css (button { font: inherit; color: inherit }); harmless, kept so this file stands alone. */
+button { font: inherit; color: inherit; }
+a { color: inherit; }
+
+/* sidebar */
+/* border-inline-end and inset-inline-*: logical properties, so an RTL locale mirrors the shell without extra rules. */
+.mp-side { grid-area: side; display: flex; flex-direction: column; gap: 2px; padding: 12px 10px; overflow-y: auto; border-inline-end: 1px solid var(--mp-border); background: color-mix(in oklab, var(--mp-surface) 70%, transparent); }
+.mp-brand { display: flex; align-items: center; gap: 10px; padding: 6px 10px 14px; font-size: 1.05em; }
+.mp-nav { display: flex; flex-direction: column; gap: 2px; }
+/* Nav items: nowrap + ellipsis because translated labels (de, ka) are long and the sidebar width is fixed. */
+.mp-nav-a { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: var(--mp-btn-radius); text-decoration: none; color: var(--mp-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* outline: none is safe only because the background change is the focus indicator; :focus-visible keeps mouse clicks
+   from leaving a highlighted item behind. */
+.mp-nav-a:hover, .mp-nav-a:focus-visible { background: var(--mp-surface-2); color: var(--mp-text); outline: none; }
+.mp-nav-a.mp-on { background: color-mix(in oklab, var(--mp-accent) 22%, transparent); color: var(--mp-text); font-weight: 600; }
+.mp-nav-sub { font-size: .92em; padding-block: 5px; }
+.mp-nav-sep { height: 1px; background: var(--mp-border); margin: 8px 6px; }
+.mp-side-lists { display: flex; flex-direction: column; gap: 1px; }
+
+/* top bar */
+/* min-width: 0 on grid / flex children wherever text can be long: the default min-width: auto equals the content's
+   min-content width, and a long search query would widen the column and push the layout off screen. */
+.mp-top { grid-area: top; display: flex; align-items: center; gap: 8px; padding: 0 16px; min-width: 0; }
+.mp-search { max-width: 520px; flex: 1; border-radius: var(--mp-btn-radius); background: var(--mp-surface); }
+.mp-status { display: inline-flex; align-items: center; gap: 6px; font-size: .82em; color: var(--mp-muted); white-space: nowrap; }
+.mp-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mp-muted); }
+.mp-dot-ok { background: var(--mp-ok); } .mp-dot-bad { background: var(--mp-danger); }
+.mp-viewseg .ed-seg-btn { padding: 4px 8px; }
+.mp-lang { width: auto; }
+.mp-icon-btn { display: inline-grid; place-items: center; width: 36px; height: 36px; border: 0; border-radius: var(--mp-btn-radius); background: transparent; cursor: pointer; color: var(--mp-muted); flex: none; }
+.mp-icon-btn:hover, .mp-icon-btn:focus-visible { background: var(--mp-surface-2); color: var(--mp-text); outline: none; }
+.mp-icon-btn.mp-liked, .mp-liked { color: var(--mp-danger); }
+
+/* main */
+/* scroll-padding: scrollIntoView / keyboard focus keep 80px clear, so the focused row does not end under a sticky
+   toolbar. clamp() side padding: 14px on phones, 3vw in between, at most 36px on wide screens. */
+.mp-main { grid-area: main; overflow-y: auto; padding: 8px clamp(14px, 3vw, 36px) 40px; min-width: 0; scroll-padding: 80px; }
+.mp-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 10px 0 18px; }
+.mp-h1 { font-size: var(--mp-title-size, 26px); font-weight: var(--mp-title-weight, 700); margin: 0; line-height: 1.15; }
+.mp-sub { color: var(--mp-muted); margin: 6px 0 0; }
+.mp-muted { color: var(--mp-muted); } .mp-ok { color: var(--mp-ok); } .mp-bad { color: var(--mp-danger); }
+.mp-note { padding: 10px 14px; border-radius: var(--mp-radius); background: color-mix(in oklab, var(--mp-accent) 14%, var(--mp-surface)); }
+.mp-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.mp-section { margin: 26px 0; }
+.mp-section-h { font-size: 1.2em; margin: 0 0 12px; }
+.mp-empty { padding: 40px 10px; text-align: center; color: var(--mp-muted); display: grid; gap: 12px; justify-items: center; }
+.mp-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.mp-toolbar .ed-select { width: auto; }
+.mp-count { color: var(--mp-muted); font-size: .9em; }
+/* Re-skinning shared primitives: same selectors and specificity as ui/base.css (0,1,0 / 0,2,0); they win by order. */
+.ed-btn { border-radius: var(--mp-btn-radius); }
+.ed-btn.ed-primary { background: var(--mp-accent); color: var(--mp-on-accent); border-color: transparent; }
+/* Horizontal scroll strip; scrollbar-width: none hides the bar in Firefox / Chromium 121+, swiping still works. */
+.mp-tabs-bar { display: flex; gap: 4px; overflow-x: auto; margin: 4px 0 18px; padding-bottom: 2px; scrollbar-width: none; }
+.mp-tab { border: 1px solid var(--mp-border); background: transparent; border-radius: var(--mp-btn-radius); padding: 6px 14px; cursor: pointer; white-space: nowrap; color: var(--mp-muted); }
+.mp-tab.mp-on { background: var(--mp-accent); border-color: var(--mp-accent); color: var(--mp-on-accent); }
+
+/* cards and grids */
+/* auto-fill + minmax(card, 1fr): as many columns as fit, stretched to fill the row. auto-fill (not auto-fit) keeps
+   empty tracks, so a shelf with two albums does not blow them up to half the screen. */
+.mp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(150px * var(--mp-density, 1)), 1fr)); gap: var(--mp-gap); }
+/* A one-row shelf: grid-auto-flow: column + fixed column width makes extra items overflow sideways instead of
+   wrapping. scroll-snap proximity (not mandatory): snaps only near a card edge, so a fling is never cancelled. */
+.mp-shelf { display: grid; grid-auto-flow: column; grid-auto-columns: calc(150px * var(--mp-density, 1)); gap: var(--mp-gap); overflow-x: auto; padding-bottom: 8px; scroll-snap-type: x proximity; }
+.mp-card { position: relative; display: flex; flex-direction: column; gap: 4px; cursor: pointer; border-radius: var(--mp-radius); padding: 6px; outline: none; scroll-snap-align: start; min-width: 0; }
+.mp-card:hover, .mp-card:focus-visible { background: var(--mp-surface-2); }
+.mp-card:focus-visible { box-shadow: 0 0 0 3px var(--mp-accent); }
+/* aspect-ratio reserves the square before the image loads: no layout shift as covers arrive. overflow: hidden clips
+   the image to the radius. */
+.mp-card-art { position: relative; aspect-ratio: 1; border-radius: var(--mp-cover-radius); overflow: hidden; background: var(--mp-surface-2); box-shadow: var(--mp-shadow); }
+.mp-card-art .mp-cover { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mp-card.mp-artist .mp-card-art { border-radius: 50%; }
+.mp-collage { display: grid; grid-template-columns: 1fr 1fr; }
+/* A playlist collage with a single cover spans both columns and rows instead of leaving three empty quarters. */
+.mp-collage > .mp-cover:only-child { grid-column: 1 / -1; grid-row: 1 / span 2; }
+.mp-card-t { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px; }
+.mp-card-s { color: var(--mp-muted); font-size: .86em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Hover affordance: hidden with opacity (not display: none) so it stays focusable and the transition can run.
+   :focus-within in the next rule shows it for keyboard users, who never hover. */
+.mp-card-play { position: absolute; inset-inline-end: 8px; bottom: 8px; width: 42px; height: 42px; border-radius: 50%; border: 0; display: grid; place-items: center; background: var(--mp-accent); color: var(--mp-on-accent); opacity: 0; transform: translateY(6px); transition: .15s; cursor: pointer; box-shadow: var(--mp-shadow); }
+.mp-card:hover .mp-card-play, .mp-card:focus-within .mp-card-play { opacity: 1; transform: none; }
+.mp-card-pres { position: absolute; inset-inline-start: 6px; top: 6px; }
+.mp-card-prog { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(0, 0, 0, .35); }
+.mp-card-prog i { display: block; height: 100%; background: var(--mp-accent); }
+/* "Nominal" = a work known only by its card (no file, no link). Desaturated cover + ◌ marker: distinguishable
+   without relying on colour alone. */
+.mp-nominal .mp-cover { filter: saturate(.55) brightness(.92); }
+.mp-nominal .mp-card-t::after, .mp-nominal .mp-row-t::after { content: ' ◌'; color: var(--mp-muted); }
+.mp-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.mp-tile { display: grid; gap: 4px; padding: 16px; border-radius: var(--mp-radius-l); background: var(--mp-surface); text-decoration: none; border: 1px solid var(--mp-border); }
+.mp-tile:hover, .mp-tile:focus-visible { border-color: var(--mp-accent); outline: none; }
+.mp-tile span:last-child { color: var(--mp-muted); }
+
+/* rows */
+.mp-list { display: flex; flex-direction: column; gap: 2px; }
+/* Track row: cover / number | title block | right-hand meta. 1fr shrinks first; .mp-row-main needs min-width: 0
+   (below) for its ellipsis to work inside a grid track. */
+.mp-row { display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 12px; padding: 6px 8px; border-radius: var(--mp-radius); cursor: pointer; text-decoration: none; outline: none; min-height: calc(52px * var(--mp-density, 1)); }
+.mp-row:hover, .mp-row:focus-visible { background: var(--mp-surface-2); }
+.mp-row:focus-visible { box-shadow: inset 0 0 0 2px var(--mp-accent); }
+.mp-row.mp-playing .mp-row-t { color: var(--mp-accent); }
+.mp-row.mp-focus { background: color-mix(in oklab, var(--mp-accent) 16%, transparent); }
+.mp-row-cover { width: 44px; height: 44px; border-radius: calc(var(--mp-cover-radius) / 3); object-fit: cover; }
+/* tabular-nums: equal-width digits keep numbers and durations aligned down a column. */
+.mp-row-n { text-align: center; color: var(--mp-muted); font-variant-numeric: tabular-nums; }
+.mp-row-main { min-width: 0; }
+.mp-row-t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mp-row-s { color: var(--mp-muted); font-size: .86em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mp-row-r { display: flex; align-items: center; gap: 8px; color: var(--mp-muted); }
+.mp-row-d { font-variant-numeric: tabular-nums; font-size: .9em; min-width: 3.2em; text-align: end; }
+.mp-watched { color: var(--mp-ok); display: inline-flex; }
+.mp-pres { display: inline-flex; align-items: center; gap: 4px; font-size: .78em; padding: 2px 8px; border-radius: 999px; background: var(--mp-surface-2); color: var(--mp-muted); }
+.mp-pres.mp-small { padding: 2px 5px; background: color-mix(in oklab, var(--mp-bg) 60%, transparent); }
+.mp-pres .ed-ic svg { width: 13px; height: 13px; }
+.mp-pres-file { color: var(--mp-ok); } .mp-pres-source { color: var(--mp-accent); } .mp-pres-nominal { color: var(--mp-muted); }
+.mp-media-row { display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: var(--mp-radius); background: var(--mp-surface); }
+
+/* chips */
+.mp-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+/* --chip is set inline per tag (its colour); the fallback is the accent. Mixing it with the surface gives a tint that
+   follows light / dark skins without per-theme chip colours. */
+.mp-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: color-mix(in oklab, var(--chip, var(--mp-accent)) 18%, var(--mp-surface)); border: 1px solid color-mix(in oklab, var(--chip, var(--mp-accent)) 35%, transparent); cursor: pointer; font-size: .88em; text-decoration: none; }
+.mp-chip.mp-on { background: var(--mp-accent); color: var(--mp-on-accent); }
+.mp-chip-x { border: 0; background: none; padding: 0; display: inline-flex; cursor: pointer; opacity: .7; }
+.mp-chip-x svg { width: 14px; height: 14px; }
+.mp-chips-big .mp-chip { font-size: 1em; padding: 8px 14px; } .mp-chip small { color: var(--mp-muted); }
+
+/* hero */
+/* Detail-page header: cover column 180..280px, info takes the rest; align-items: end puts the title at the bottom
+   edge of the cover. The mobile mode stacks it (player.css). */
+.mp-hero { display: grid; grid-template-columns: minmax(180px, 280px) 1fr; gap: clamp(16px, 3vw, 36px); align-items: end; margin: 14px 0 22px; }
+.mp-hero-art { aspect-ratio: 1; border-radius: var(--mp-cover-radius); overflow: hidden; box-shadow: var(--mp-shadow); background: var(--mp-surface-2); }
+.mp-hero-art > .mp-cover { width: 100%; height: 100%; object-fit: cover; display: block; }
+.mp-hero-info { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.mp-kicker { text-transform: uppercase; letter-spacing: .08em; font-size: .78em; color: var(--mp-muted); display: flex; gap: 10px; align-items: center; }
+.mp-alt { display: flex; flex-wrap: wrap; gap: 12px; color: var(--mp-muted); margin: 0; }
+/* 70ch: readable measure for descriptions however wide the main column gets. */
+.mp-desc { max-width: 70ch; color: var(--mp-muted); margin: 0; line-height: 1.5; }
+.mp-trackbox { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; padding: 12px; border-radius: var(--mp-radius); background: var(--mp-surface); }
+.mp-trackbox label { display: grid; gap: 4px; font-size: .86em; color: var(--mp-muted); }
+.mp-trackbox .ed-select { width: auto; }
+.mp-inline { display: inline-flex; align-items: center; gap: 6px; }
+.mp-num { width: 5.5em; }
+.mp-seasonbar { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.mp-lyrics-static { white-space: pre-wrap; font-family: inherit; line-height: 1.6; color: var(--mp-muted); }
+.mp-years { display: grid; gap: 16px; } .mp-decade h3 { margin: 0 0 8px; }

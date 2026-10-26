@@ -1,0 +1,6 @@
+function createHistory({budget=512*1024*1024,maxEntries=150,onChange=()=>{}}={}){const entries=[];let index=-1,bytes=0,base=0;function trim(){while(entries.length>1&&(bytes>budget||entries.length>maxEntries)&&index>0){const e=entries.shift();bytes-=e.bytes||0;index--;base++;if(e.dispose)e.dispose();}}
+const h={get entries(){return entries;},get index(){return index;},get bytes(){return bytes;},get dropped(){return base;},get canUndo(){return index>=0;},get canRedo(){return index<entries.length-1;},push(entry){for(const e of entries.splice(index+1)){bytes-=e.bytes||0;if(e.dispose)e.dispose();}
+entries.push(entry);bytes+=entry.bytes||0;index=entries.length-1;trim();onChange(h);},undo(){if(index<0)return false;entries[index].undo();index--;onChange(h);return true;},redo(){if(index>=entries.length-1)return false;index++;entries[index].redo();onChange(h);return true;},jump(i){i=Math.max(-1,Math.min(entries.length-1,i));while(index>i){entries[index].undo();index--;}
+while(index<i){index++;entries[index].redo();}
+onChange(h);},clear(){for(const e of entries)if(e.dispose)e.dispose();entries.length=0;index=-1;bytes=0;base=0;onChange(h);},};return h;}
+export{createHistory};

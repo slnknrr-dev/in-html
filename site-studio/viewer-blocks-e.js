@@ -1,0 +1,1094 @@
+// site-studio/viewer-blocks-e.js - blocks built on the libraries of the repository: diagram (Mermaid-style text, or the
+// site map drawn from the pages), Markdown (GitHub-flavoured), formula (TeX → MathML), booking (price calendar with a
+// request form), event (date, place, add to calendar, RSVP), map (points and a route on an offline plan, links to
+// OpenStreetMap), estate (units as cards, table or a building chessboard, filters), donate (goal, progress, tiers, a
+// payment QR), data table (CSV with sorting, filtering and download), unit converter, barcode, contract (a text with
+// fields filled in by the visitor) and account (sign-in, registration and profile of backend sites).
+// Everything is rendered at export time; runtimes live in viewer-runtime-e.js. Blocks that collect data render the
+// form of the form block (formFieldsHTML) and are sent by the form feature (`formLike`).
+import { escapeAttr, escapeHTML } from '../html/escape.js';
+import { isObj, num, oneOf, own, str } from '../util/value.js';
+import { pickText } from '../i18n/text.js';
+import { uiText } from '../doc/dict.js';
+import { addItemBox, di, feature, fld, has, icon, needUi, noItems, plainIn, resolveHref, txt, ui } from '../doc/render.js';
+import { optList } from '../doc/schema.js';
+import { renderDiagram } from '../diagram/all.js';
+import { renderGFM } from '../markdown/gfm.js';
+import { HIGHLIGHT_CSS, HIGHLIGHT_CSS_DARK, highlight, langOf } from '../highlight/highlight.js';
+import { texToMathML } from '../math/tex.js';
+import { buildEvent } from '../calendar/ics.js';
+import { qrSVG } from '../qr/qr.js';
+import { encode } from '../barcode/linear.js';
+import { barcodeSVG } from '../barcode/svg.js';
+import { parseCSV } from '../csv/csv.js';
+import { chessboard, unitStatus } from '../estate/chessboard.js';
+import { KINDS, UNITS } from '../units/registry.js';
+import { b64encode } from '../codec/base64.js';
+import { BB_FORM_UI, bbFmDest, formFieldsHTML } from './viewer-blocks-b.js';
+import { siteMapSource as siteViewSource } from './site-map.js';
+import { formatDay, formatPrice } from './viewer-blocks-c.js';
+//
+// Why render at export time with the repository's own libraries (diagram/, markdown/, math/, qr/, barcode/): the
+// exported page stays a single self-contained file with no CDN scripts, works offline, and shows content to
+// crawlers and no-script readers. The runtime only adds interaction (calendar picking, sorting, filtering).
+// Library failures never break the page: every call into a parser/encoder is wrapped, falling back to the raw
+// source in <code> (formula), an empty string (barcode, QR in exports) or the error text (barcode in the editor).
+
+const arr = (v) => (Array.isArray(v) ? v : []);
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const day = (v) => (DAY_RE.test(str(v)) ? str(v) : '');
+const field = (key, type, required, half) => ({ id: 'f' + key, key, type, label: {}, ph: {}, options: {}, required: !!required, half: !!half });
+// Downloads (.ics, .csv, .mmd) are data: URLs built at export: no server, no Blob runtime needed. TextEncoder first so
+// non-ASCII text is base64-encoded as UTF-8 rather than mangled by btoa's Latin-1 limit.
+const dataURL = (mime, text) => `data:${mime};base64,${b64encode(new TextEncoder().encode(text))}`;
+const jsonAttr = (v) => escapeAttr(JSON.stringify(v));
+
+// The <form> of a data-collecting block: the same markup, usage and cfg.forms entry as the form block (rtForm sends
+// it), with extra inner HTML (hidden or read-only inputs the block's runtime fills) before the fields.
+// Reusing the form block's machinery (rather than a per-block submit) means one delivery pipeline: the same request
+// config, fallback channels (mailto / messenger / outbox), validation and result UI for booking, RSVP and contracts.
+// With a plain action (mailto or endpoint) the submit button works without JS; otherwise it is .lp-js-only and a
+// no-script note explains why nothing can be sent.
+function formHTML(ctx, b, inner, o = {}) {
+  const dest = bbFmDest(ctx, b);
+  const fields = arr(b.items).filter(isObj);
+  const body = formFieldsHTML(ctx, fields, { scope: b.id, path: 'items' });
+  const bid = escapeAttr(b.id);
+  if (ctx.edit) {
+    const lab = escapeHTML(plainIn(ctx, b.submit, ctx.lang) || uiText(o.submitKey || 'formSubmit', ctx.lang, ctx.doc));
+    return `<div class="lp-form ss-fm" data-lp-form="${bid}">${inner}${body}<div class="lp-field lp-form-actions"><span class="lp-btn lp-btn-primary">${lab}</span></div></div>`;
+  }
+  feature(ctx, 'form');
+  needUi(ctx, ...BB_FORM_UI);
+  if (dest.req && ctx.use.reqs instanceof Set) ctx.use.reqs.add(dest.req.id);
+  if (!(ctx.use.forms instanceof Map)) ctx.use.forms = new Map();
+  ctx.use.forms.set(str(b.id), { req: dest.req ? dest.req.id : null, fb: dest.fb, to: dest.to });
+  let fa = ` class="lp-form ss-fm" data-lp-form="${bid}" novalidate`;
+  if (dest.action) fa += ` action="${escapeAttr(dest.action)}" method="post"${dest.mailto ? ' enctype="text/plain"' : ''}`;
+  const label = has(ctx, b.submit) ? txt(ctx, b.submit) : ui(ctx, o.submitKey || 'formSubmit');
+  const ok = has(ctx, b.success) ? `<div class="lp-form-ok" data-lp-form-ok hidden>${txt(ctx, b.success)}</div>` : '';
+  return `<form${fa}>${inner}${body}<div class="lp-field lp-form-actions"><button type="submit" class="lp-btn lp-btn-primary${dest.action ? '' : ' lp-js-only'}">${label}</button></div>`
+    + `${dest.action ? '' : `<p class="lp-field lp-form-nojs">${ui(ctx, 'formNoJs')}</p>`}${ok}`
+    + '<div class="lp-form-result" data-lp-form-result role="status" aria-live="polite" tabindex="-1" hidden></div></form>';
+}
+
+// Schema fields shared by the data-collecting blocks (request, fallback channel and its address, success text).
+const FORM_SCHEMA = () => [
+  { key: 'req', type: 'req', label: 'f.req', hint: 'fh.formReq' },
+  { key: 'fallback', type: 'select', label: 'f.fallback', hint: 'fh.formFallback',
+    options: [...optList('mailto', 'whatsapp', 'telegram', 'outbox'), { v: 'none', l: 'o.fbNone' }] },
+  { key: 'to', type: 'text', label: 'f.to', hint: 'fh.formTo', when: { fallback: ['mailto', 'whatsapp', 'telegram'] } },
+  { key: 'submit', type: 'i18n', label: 'f.submit' },
+  { key: 'success', type: 'i18n', label: 'f.success', multiline: true, rows: 2 },
+];
+const FORM_ITEM_SCHEMA = () => [
+  { key: 'key', type: 'text', label: 'f.fieldKey', hint: 'fh.fieldKey' },
+  { key: 'type', type: 'select', label: 'f.fieldType', options: optList('text', 'email', 'tel', 'textarea', 'select', 'number', 'date', 'checkbox') },
+  { key: 'label', type: 'i18n', label: 'f.label' },
+  { key: 'ph', type: 'i18n', label: 'f.ph' },
+  { key: 'options', type: 'i18n', label: 'f.options', multiline: true, rows: 4, hint: 'fh.fieldOptions', when: { type: 'select' } },
+  { key: 'required', type: 'checkbox', label: 'f.required' },
+  { key: 'half', type: 'checkbox', label: 'f.half' },
+];
+// Random ids/keys avoid collisions between fields added in the same session; uid() is not used here, so ids are
+// shorter but still unique enough within one block.
+const formItemDefaults = () => ({ id: 'f' + Math.random().toString(36).slice(2, 10), key: 'field_' + Math.random().toString(36).slice(2, 6), type: 'text', label: {}, ph: {}, options: {}, required: false, half: false });
+const formDefaults = (items) => ({ req: null, fallback: 'mailto', to: '', submit: {}, success: {}, items });
+
+/* ---------- diagram ---------- */
+
+// idPrefix keeps SVG ids (markers, gradients) unique when several diagrams share one page; duplicate ids would make
+// arrowheads reference another diagram's defs. KNOWN DEFECT: Math.random makes the export non-deterministic
+// (identical documents produce different HTML, noisy diffs in a repository). Fix: derive the prefix from the block
+// id plus the theme.
+function diagramSVG(ctx, src, theme) {
+  const r = renderDiagram(src, { theme, idPrefix: 'dg-' + Math.random().toString(36).slice(2, 7) + '-' });
+  return r.svg;
+}
+
+function beDiagram(b, ctx) {
+  const src = b.mode === 'sitemap' ? siteViewSource(ctx.pd, oneOf(b.view, ['pages', 'nav', 'access', 'types'], 'pages'), { lang: ctx.lang }) : str(b.src).trim();
+  const cap = fld(ctx, b, 'caption', 'plain', 'figcaption', 'ss-dg-cap', 'phe.caption', { ecls: 'lp-opt' });
+  if (!src) return ctx.edit ? `<figure class="ss-dg">${'<div class="lp-empty">' + escapeHTML(uiText('phe.diagram', ctx.uiLang, ctx.doc)) + '</div>'}${cap}</figure>` : '';
+  const scheme = ctx.doc.theme && ctx.doc.theme.scheme;
+  let pic;
+  // With an auto scheme or a theme toggle the page can switch light/dark at run time, and SVG colours are baked in,
+  // so both renderings ship and CSS shows one (ss-dg-l / ss-dg-d). Doubles the bytes, but needs no runtime.
+  const dual = !ctx.edit && (scheme === 'auto' || !!(ctx.doc.output && ctx.doc.output.themeToggle));
+  if (dual) pic = `<div class="ss-dg-l">${diagramSVG(ctx, src, 'neutral')}</div><div class="ss-dg-d">${diagramSVG(ctx, src, 'dark')}</div>`;
+  else pic = `<div>${diagramSVG(ctx, src, scheme === 'dark' ? 'dark' : 'neutral')}</div>`;
+  const dl = b.download && !ctx.edit ? `<p class="ss-dg-dl"><a class="lp-btn lp-btn-ghost lp-btn-sm" download="diagram.mmd" href="${escapeAttr(dataURL('text/plain', src))}">${icon(ctx, 'download')}<span>${ui(ctx, 'dgSource')}</span></a></p>` : '';
+  if (dl) needUi(ctx, 'dgSource');
+  const cls = dual ? ' ss-dg-2' + (scheme === 'dark' ? ' ss-dg-dk' : scheme === 'auto' ? ' ss-dg-auto' : '') : '';
+  return `<figure class="ss-dg${cls}"><div class="ss-dg-pic">${pic}</div>${cap}${dl}</figure>`;
+}
+
+/* ---------- markdown ---------- */
+
+function beMarkdown(b, ctx) {
+  const src = str(pickText(b.text, ctx.lang, ctx.pd));
+  if (!src.trim()) return ctx.edit ? `<div class="lp-empty">${escapeHTML(uiText('phe.markdown', ctx.uiLang, ctx.doc))}</div>` : '';
+  const render = (l) => {
+    const s = str(pickText(b.text, l, ctx.pd));
+    return renderGFM(s, {
+      idPrefix: 'md-' + b.id + '-', diagram: (code) => diagramSVG(ctx, code, 'neutral'),
+      math: (tex, display) => { try { return texToMathML(tex, { display: !!display }); } catch (e) { return `<code>${escapeHTML(tex)}</code>`; } },
+      highlight: (code, lang) => highlight(code, langOf(lang) || lang),
+    }).html;
+  };
+  if (ctx.edit || ctx.langs.length < 2) return `<div class="ss-md">${render(ctx.lang)}</div>`;
+  // Group languages by identical output: untranslated text (same fallback in every language) is emitted once with a
+  // data-l list instead of N copies.
+  const seen = new Map();
+  for (const l of ctx.langs) { const h = render(l); if (!seen.has(h)) seen.set(h, []); seen.get(h).push(l); }
+  if (seen.size === 1) return `<div class="ss-md">${[...seen.keys()][0]}</div>`;
+  return [...seen].map(([h, ls]) => `<div class="ss-md" data-l="${escapeAttr(ls.join(' '))}" lang="${escapeAttr(ls[0])}">${h}</div>`).join('');
+}
+
+/* ---------- formula ---------- */
+
+// TeX to MathML at export: MathML Core renders natively in current browsers, so no MathJax/KaTeX payload. One display
+// formula per non-empty line.
+function beFormula(b, ctx) {
+  const lines = str(b.tex).split(/\n\s*\n|\n/).map((x) => x.trim()).filter(Boolean);
+  if (!lines.length) return ctx.edit ? `<div class="lp-empty">${escapeHTML(uiText('phe.formula', ctx.uiLang, ctx.doc))}</div>` : '';
+  let math = '';
+  for (const t of lines) {
+    let m = '';
+    try { m = texToMathML(t, { display: true }); } catch (e) { m = `<code>${escapeHTML(t)}</code>`; }
+    math += `<div class="ss-fx-row">${m}</div>`;
+  }
+  const cap = fld(ctx, b, 'caption', 'plain', 'figcaption', 'ss-fx-cap', 'phe.caption', { ecls: 'lp-opt' });
+  return `<figure class="ss-fx">${math}${cap}</figure>`;
+}
+
+/* ---------- booking ---------- */
+
+// Seasons from lines 'YYYY-MM-DD..YYYY-MM-DD | price | weekend price | label' (weekend and label optional).
+function seasonList(text) {
+  const out = [];
+  for (const ln of (typeof text === 'string' ? text : '').split(/\r?\n/)) {
+    const [range, price, weekend, ...label] = ln.split('|').map((x) => x.trim());
+    const m = /^(\d{4}-\d{2}-\d{2})\s*(?:\.\.|–|—|-{1,2}|to)\s*(\d{4}-\d{2}-\d{2})$/.exec(range || '');
+    if (m && num(price, NaN) >= 0) out.push({ from: m[1], to: m[2], price: num(price, 0), weekend: num(weekend, 0), label: label.join('|') });
+  }
+  // Cap: the list is parsed per night (nightPrice) for ~550 nights, so unbounded seasons would be quadratic.
+  return out.slice(0, 60);
+}
+
+// Price of one night: seasons (first match wins; weekend price of a season when set), else base / weekend price.
+// Weekend nights are Friday and Saturday (hotel convention: the night of the date). Dates are compared as ISO strings
+// (lexicographic = chronological for YYYY-MM-DD) and the weekday is computed in UTC so the visitor's time zone
+// cannot shift a date by one.
+// Perf note: seasonList(b.seasons) is re-parsed on every call; fine at 550 calls, a hoist would be the first fix.
+function nightPrice(b, d) {
+  const dow = new Date(d + 'T00:00:00Z').getUTCDay();
+  const wk = dow === 5 || dow === 6;
+  for (const s of seasonList(b.seasons)) {
+    if (d >= s.from && d <= s.to) return wk && num(s.weekend, 0) > 0 ? num(s.weekend, 0) : num(s.price, 0);
+  }
+  return wk && num(b.weekend, 0) > 0 ? num(b.weekend, 0) : num(b.price, 0);
+}
+
+// Booked ranges from lines 'YYYY-MM-DD..YYYY-MM-DD' (or one day per line).
+function bookedRanges(text) {
+  const out = [];
+  for (const ln of str(text).split(/\r?\n/)) {
+    const m = /^\s*(\d{4}-\d{2}-\d{2})\s*(?:(?:\.\.|–|—|-{1,2}|to)\s*(\d{4}-\d{2}-\d{2}))?\s*$/.exec(ln);
+    if (m) out.push([m[1], m[2] || m[1]]);
+  }
+  return out;
+}
+
+function beBooking(b, ctx) {
+  const cur = (ctx.doc.shop && ctx.doc.shop.currency) || 'USD';
+  const title = fld(ctx, b, 'title', 'plain', 'h3', 'lp-h lp-h3 ss-bk-t', 'phe.bookTitle', { ecls: 'lp-opt' });
+  const seasons = seasonList(b.seasons);
+  const fmt = (v, l) => formatPrice(v, cur, l, ctx.doc);
+  const rows = [`<tr><th scope="row">${ui(ctx, 'bkBase')}</th><td>${escapeHTML(fmt(num(b.price, 0), ctx.lang))}${num(b.weekend, 0) > 0 ? ' · ' + ui(ctx, 'bkWeekend') + ' ' + escapeHTML(fmt(num(b.weekend, 0), ctx.lang)) : ''}</td></tr>`];
+  seasons.forEach((s) => rows.push(`<tr><th scope="row">${s.label ? escapeHTML(s.label) : escapeHTML(formatDay(s.from, ctx.lang, ctx.doc) + ' – ' + formatDay(s.to, ctx.lang, ctx.doc))}</th><td>${escapeHTML(fmt(num(s.price, 0), ctx.lang))}${num(s.weekend, 0) > 0 ? ' · ' + ui(ctx, 'bkWeekend') + ' ' + escapeHTML(fmt(num(s.weekend, 0), ctx.lang)) : ''}</td></tr>`));
+  const table = `<table class="ss-bk-rates"><tbody>${rows.join('')}</tbody></table>`;
+  needUi(ctx, 'bkBase', 'bkWeekend', 'bkIn', 'bkOut', 'bkNights', 'bkTotal', 'bkPick', 'bkBusy', 'bkMin', 'bkPrev', 'bkNext');
+  const min = Math.round(num(b.minNights, 1, 1, 60));
+  const legend = `<p class="ss-bk-legend"><span class="ss-bk-sw ss-bk-free"></span>${ui(ctx, 'bkFree')} <span class="ss-bk-sw ss-bk-off"></span>${ui(ctx, 'bkBusy')}${min > 1 ? ' · ' + ui(ctx, 'bkMin', { n: min }) : ''}</p>`;
+  needUi(ctx, 'bkFree');
+  if (ctx.edit) {
+    return `<div class="ss-bk">${title}<div class="ss-bk-grid"><div class="ss-bk-cal ss-bk-cal-ph">${icon(ctx, 'calendar')}<span>${escapeHTML(uiText('phe.bookCal', ctx.uiLang, ctx.doc))}</span></div><div>${table}${formHTML(ctx, b, '', { submitKey: 'bkSend' })}</div></div></div>`;
+  }
+  feature(ctx, 'booking');
+  // Prices of the next 18 months per night, compressed as runs: [[from, price], …] (the runtime expands them).
+  // Run-length encoding: prices change rarely, so ~550 nights collapse to a handful of pairs in the attribute.
+  // KNOWN DEFECT: the window starts at the export date, so a page left unpublished-again for 18 months shows no
+  // prices for later dates. Fix: let the runtime compute prices from the rule (base / weekend / seasons) instead.
+  const start = new Date();
+  const from = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
+  const runs = [];
+  let last = null;
+  for (let k = 0; k < 550; k++) {
+    const d = new Date(from.getTime() + k * 864e5).toISOString().slice(0, 10);
+    const p = nightPrice(b, d);
+    if (p !== last) { runs.push([d, p]); last = p; }
+  }
+  const data = { cur, min, months: Math.round(num(b.months, 2, 1, 3)), runs, busy: bookedRanges(b.booked), from: from.toISOString().slice(0, 10) };
+  // Hidden readonly inputs carry the runtime's selection into the shared form submit, so the delivery pipeline needs
+  // no booking-specific code.
+  const inner = `<div class="ss-bk-sel" data-ss-bk-sel><input type="text" hidden readonly tabindex="-1" aria-hidden="true" name="checkin" data-ss-bk-in><input type="text" hidden readonly tabindex="-1" aria-hidden="true" name="checkout" data-ss-bk-out>`
+    + `<input type="text" hidden readonly tabindex="-1" aria-hidden="true" name="nights" data-ss-bk-n><input type="text" hidden readonly tabindex="-1" aria-hidden="true" name="total" data-ss-bk-sum><p class="ss-bk-sum" data-ss-bk-text aria-live="polite">${ui(ctx, 'bkPick')}</p></div>`;
+  needUi(ctx, 'bkSend');
+  return `<div class="ss-bk" data-ss-bk="${jsonAttr(data)}">${title}<div class="ss-bk-grid"><div class="ss-bk-cal lp-js-only" data-ss-bk-cal></div>`
+    + `<div>${table}${legend}${formHTML(ctx, b, inner, { submitKey: 'bkSend' })}</div></div></div>`;
+}
+
+/* ---------- event ---------- */
+
+function beEvent(b, ctx) {
+  const d = day(b.date);
+  const t0 = /^\d{2}:\d{2}$/.test(str(b.time)) ? b.time : '';
+  const t1 = /^\d{2}:\d{2}$/.test(str(b.endTime)) ? b.endTime : '';
+  const title = fld(ctx, b, 'title', 'plain', 'h3', 'lp-h lp-h3 ss-ev-t', 'phe.evTitle');
+  const text = fld(ctx, b, 'text', 'rich', 'div', 'ss-ev-text', 'phe.evText', { ecls: 'lp-opt' });
+  const place = fld(ctx, b, 'place', 'plain', 'p', 'ss-ev-place', 'phe.evPlace', { ecls: 'lp-opt' });
+  const when = d ? `<p class="ss-ev-when">${icon(ctx, 'calendar')}<time datetime="${escapeAttr(d + (t0 ? 'T' + t0 : ''))}">${escapeHTML(formatDay(d, ctx.lang, ctx.doc))}${t0 ? ', ' + escapeHTML(t0) + (t1 ? '–' + escapeHTML(t1) : '') : ''}</time></p>` : '';
+  const lat = num(b.lat, NaN, -90, 90);
+  const lng = num(b.lng, NaN, -180, 180);
+  let links = '';
+  if (!ctx.edit && d) {
+    // Stable UID (document + block): re-importing the .ics updates the calendar entry instead of duplicating it.
+    const ev = { uid: (ctx.doc.id || 'site') + '-' + b.id + '@site-studio', title: plainIn(ctx, b.title, ctx.lang), description: plainIn(ctx, b.text, ctx.lang).replace(/<[^>]+>/g, ''),
+      location: [plainIn(ctx, b.place, ctx.lang), str(b.address)].filter(Boolean).join(', '),
+      start: t0 ? `${d}T${t0}:00` : d, end: t0 && t1 ? `${d}T${t1}:00` : undefined, tz: str(b.tz) || undefined };
+    if (Number.isFinite(lat) && Number.isFinite(lng)) ev.geo = [lat, lng];
+    let ics = '';
+    try { ics = buildEvent(ev); } catch (e) { ics = ''; }
+    if (ics) links += `<a class="lp-btn lp-btn-secondary lp-btn-sm" download="event.ics" href="${escapeAttr(dataURL('text/calendar', ics))}">${icon(ctx, 'calendar')}<span>${ui(ctx, 'evIcs')}</span></a>`;
+    if (Number.isFinite(lat) && Number.isFinite(lng)) links += `<a class="lp-btn lp-btn-ghost lp-btn-sm" href="https://www.openstreetmap.org/?mlat=${lat}&amp;mlon=${lng}#map=17/${lat}/${lng}" target="_blank" rel="noopener noreferrer">${icon(ctx, 'map')}<span>${ui(ctx, 'evMap')}</span></a>`;
+    needUi(ctx, 'evIcs', 'evMap');
+  }
+  const addr = str(b.address) ? `<p class="ss-ev-addr">${icon(ctx, 'pin')}${escapeHTML(b.address)}</p>` : '';
+  const rsvp = b.rsvp ? `<div class="ss-ev-rsvp">${fld(ctx, b, 'rsvpTitle', 'plain', 'h4', 'lp-h lp-h4', 'phe.rsvpTitle', { ecls: 'lp-opt' })}${formHTML(ctx, b, '', { submitKey: 'evSend' })}</div>` : '';
+  if (rsvp) needUi(ctx, 'evSend');
+  if (!ctx.edit && !d && !has(ctx, b.title)) return '';
+  return `<article class="ss-ev${b.rsvp ? ' ss-ev-has-rsvp' : ''}"><div class="ss-ev-info">${title}${when}${place}${addr}${text}${links ? `<p class="ss-ev-links">${links}</p>` : ''}</div>${rsvp}</article>`;
+}
+
+/* ---------- map ---------- */
+
+// Web Mercator in [0..1]² (y down). Latitudes are clamped to ±85 (the item schema and num()) because the projection
+// diverges at the poles.
+// Why an offline plan instead of tiles: tiles need a third-party server (privacy, availability, API keys) and break
+// in file:// and offline exports. The plan shows relative positions; each point links to OpenStreetMap for detail.
+const merc = (lat, lng) => [(lng + 180) / 360, (1 - Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360)) / Math.PI) / 2];
+
+function beMap(b, ctx) {
+  const pts = arr(b.items).map((it, i) => ({ it, i, lat: num(it && it.lat, NaN, -85, 85), lng: num(it && it.lng, NaN, -180, 180) })).filter((p) => isObj(p.it) && Number.isFinite(p.lat) && Number.isFinite(p.lng));
+  const title = fld(ctx, b, 'title', 'plain', 'h3', 'lp-h lp-h3 ss-map-t', 'phe.mapTitle', { ecls: 'lp-opt' });
+  if (noItems(ctx, b)) return `<div class="ss-map">${title}${addItemBox(ctx)}</div>`;
+  if (!pts.length) return ctx.edit ? `<div class="ss-map">${title}<div class="lp-empty">${escapeHTML(uiText('phe.mapPoints', ctx.uiLang, ctx.doc))}</div></div>` : '';
+  const W = 800;
+  const H = Math.round(num(b.height, 420, 200, 900));
+  const xy = pts.map((p) => merc(p.lat, p.lng));
+  let x0 = Math.min(...xy.map((p) => p[0])), x1 = Math.max(...xy.map((p) => p[0]));
+  let y0 = Math.min(...xy.map((p) => p[1])), y1 = Math.max(...xy.map((p) => p[1]));
+  // Fit the bounding box into the viewBox preserving aspect (the larger normalized side wins); the minimum span keeps a
+  // single point (zero extent) from dividing by zero. 0.84 leaves a margin so edge markers are not clipped.
+  const span = Math.max(x1 - x0, (y1 - y0) * W / H, 0.0004);
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const sc = (W * 0.84) / span;
+  const P = (p) => [W / 2 + (p[0] - cx) * sc, H / 2 + (p[1] - cy) * sc];
+  const sp = xy.map(P);
+  // Background grid: a fixed 10 x 10 decorative grid (not scaled to distance; there are no tiles, so it works offline).
+  let grid = '';
+  for (let k = 1; k < 10; k++) grid += `<line x1="${(W * k) / 10}" y1="0" x2="${(W * k) / 10}" y2="${H}"/><line x1="0" y1="${(H * k) / 10}" x2="${W}" y2="${(H * k) / 10}"/>`;
+  const route = b.route && sp.length > 1 ? `<polyline class="ss-map-route" points="${sp.map((p) => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ')}"/>` : '';
+  const marks = sp.map((p, k) => `<g class="ss-map-pt" transform="translate(${p[0].toFixed(1)} ${p[1].toFixed(1)})"><circle r="13"/><text dy="4.5" text-anchor="middle">${k + 1}</text></g>`).join('');
+  const label = escapeAttr(plainIn(ctx, b.title, ctx.lang) || uiText('mapLabel', ctx.lang, ctx.doc));
+  needUi(ctx, 'mapLabel', 'mapOpen');
+  const svg = `<svg class="ss-map-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="${label}"><rect class="ss-map-bg" width="${W}" height="${H}"/><g class="ss-map-grid">${grid}</g>${route}${marks}</svg>`;
+  const list = pts.map((p, k) => {
+    const osm = `https://www.openstreetmap.org/?mlat=${p.lat}&amp;mlon=${p.lng}#map=17/${p.lat}/${p.lng}`;
+    const t = has(ctx, p.it.title) ? txt(ctx, p.it.title) : escapeHTML(`${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}`);
+    const note = has(ctx, p.it.text) ? `<span class="ss-map-note">${txt(ctx, p.it.text)}</span>` : '';
+    const open = ctx.edit ? '' : ` <a class="ss-map-osm" href="${osm}" target="_blank" rel="noopener noreferrer">${ui(ctx, 'mapOpen')}</a>`;
+    return `<li${di(ctx, p.i)}><span class="ss-map-n" aria-hidden="true">${k + 1}</span><span><strong>${t}</strong>${note}${open}</span></li>`;
+  }).join('');
+  return `<div class="ss-map">${title}<div class="ss-map-box">${svg}</div><ol class="ss-map-list">${list}</ol></div>`;
+}
+
+/* ---------- estate ---------- */
+
+const EST_VIEWS = ['cards', 'table', 'chess'];
+
+// Units carry data-ss-es-r/p/s (rooms, price, status) so the runtime filters by attribute without a JSON copy.
+// The chessboard (floors as rows, highest first) is the convention of property sales offices.
+function beEstate(b, ctx) {
+  const cur = (ctx.doc.shop && ctx.doc.shop.currency) || 'USD';
+  const view = oneOf(b.view, EST_VIEWS, 'cards');
+  const title = fld(ctx, b, 'title', 'plain', 'h3', 'lp-h lp-h3 ss-es-t', 'phe.esTitle', { ecls: 'lp-opt' });
+  if (noItems(ctx, b)) return `<div class="ss-es">${title}${addItemBox(ctx)}</div>`;
+  const units = arr(b.items).map((u, i) => ({ ...(isObj(u) ? u : {}), i, floor: num(u && u.floor, 1, -5, 200), rooms: num(u && u.rooms, 1, 0, 20), area: num(u && u.area, 0, 0, 100000), price: num(u && u.price, 0, 0, 1e12) }));
+  const st = (u) => unitStatus({ status: u.status });
+  const price = (u) => (u.price > 0 ? escapeHTML(formatPrice(u.price, cur, ctx.lang, ctx.doc)) : ui(ctx, 'esOnRequest'));
+  needUi(ctx, 'esOnRequest', 'esRooms', 'esArea', 'esFloor', 'esAll', 'esFree', 'esPerM2', 'esStudio', 'esShown');
+  for (const s of ['free', 'reserved', 'sold', 'closed']) needUi(ctx, 'es.' + s);
+  const rooms = (u) => (u.rooms ? ui(ctx, 'esRooms', { n: u.rooms }) : ui(ctx, 'esStudio'));
+  const attrs = (u) => ` data-ss-es-r="${u.rooms}" data-ss-es-p="${u.price}" data-ss-es-s="${st(u)}"${di(ctx, u.i)}`;
+  let body;
+  if (view === 'table') {
+    body = `<div class="ss-es-tw"><table class="ss-es-tb"><thead><tr><th>№</th><th>${ui(ctx, 'esFloor')}</th><th>${ui(ctx, 'esRooms', { n: '' })}</th><th>${ui(ctx, 'esArea')}</th><th>${ui(ctx, 'esPerM2')}</th><th></th></tr></thead><tbody>`
+      + units.map((u) => `<tr class="ss-es-${st(u)}"${attrs(u)}><td>${escapeHTML(str(u.num))}</td><td>${u.floor}</td><td>${rooms(u)}</td><td>${u.area ? u.area + ' m²' : ''}</td><td>${u.price && u.area ? escapeHTML(formatPrice(Math.round(u.price / u.area), cur, ctx.lang, ctx.doc)) : ''}</td><td><strong>${price(u)}</strong> <span class="ss-es-badge">${ui(ctx, 'es.' + st(u))}</span></td></tr>`).join('')
+      + '</tbody></table></div>';
+  } else if (view === 'chess') {
+    // KNOWN DEFECT: grid (estate/chessboard.js) is computed but its layout is unused; the rows below are rebuilt by hand,
+    // and the only use is the '!grid && !units.length' check, where units.length already decides. Fix: render from
+    // grid or drop the call.
+    let grid = null;
+    try { grid = chessboard(units.map((u) => ({ id: String(u.i), floor: u.floor, num: str(u.num), rooms: u.rooms, area: u.area, price: u.price, status: st(u), section: str(u.building) }))); } catch (e) { grid = null; }
+    const floors = [...new Set(units.map((u) => u.floor))].sort((a, z) => z - a);
+    body = '<div class="ss-es-chess" role="table">' + floors.map((f) => `<div class="ss-es-row" role="row"><span class="ss-es-fl" role="rowheader">${f}</span>`
+      + units.filter((u) => u.floor === f).map((u) => `<span class="ss-es-cell ss-es-${st(u)}" role="cell"${attrs(u)} title="${escapeAttr(str(u.num) + ' · ' + (u.area ? u.area + ' m²' : ''))}"><b>${u.rooms || 'S'}</b><small>${u.area ? Math.round(u.area) : ''}</small></span>`).join('') + '</div>').join('') + '</div>';
+    if (!grid && !units.length) body = '';
+  } else {
+    body = '<ul class="ss-es-cards">' + units.map((u) => `<li class="ss-es-card ss-es-${st(u)}"${attrs(u)}><p class="ss-es-top"><span class="ss-es-badge">${ui(ctx, 'es.' + st(u))}</span><span>№ ${escapeHTML(str(u.num))}${u.building ? ' · ' + escapeHTML(str(u.building)) : ''}</span></p>`
+      + `<p class="ss-es-main">${rooms(u)}${u.area ? ' · ' + u.area + ' m²' : ''} · ${ui(ctx, 'esFloor')} ${u.floor}</p><p class="ss-es-price">${price(u)}</p>${has(ctx, u.note) ? `<p class="ss-es-note">${txt(ctx, u.note)}</p>` : ''}</li>`).join('') + '</ul>';
+  }
+  let filters = '';
+  // Filters only above 3 units: for fewer, chips would be more UI than content.
+  if (!ctx.edit && b.filters && units.length > 3) {
+    feature(ctx, 'estate');
+    const rs = [...new Set(units.map((u) => u.rooms))].sort((a, z) => a - z);
+    filters = `<div class="ss-es-f lp-js-only" data-ss-es-f><div class="ss-es-chips" role="group">${`<button type="button" class="ss-chip" aria-pressed="true" data-ss-es-room="">${ui(ctx, 'esAll')}</button>`}`
+      + rs.map((r) => `<button type="button" class="ss-chip" aria-pressed="false" data-ss-es-room="${r}">${r ? r : ui(ctx, 'esStudio')}</button>`).join('')
+      + `</div><label class="ss-es-free"><input type="checkbox" data-ss-es-freeonly> ${ui(ctx, 'esFree')}</label><span class="ss-es-count" data-ss-es-count aria-live="polite"></span></div>`;
+  }
+  const stats = units.length ? `<p class="ss-es-sum">${ui(ctx, 'esShown', { n: units.filter((u) => st(u) === 'free').length, total: units.length })}</p>` : '';
+  return `<div class="ss-es ss-es-v-${view}" data-ss-es>${title}${filters}${stats}${body}</div>`;
+}
+
+/* ---------- donate ---------- */
+
+function beDonate(b, ctx) {
+  const cur = (ctx.doc.shop && ctx.doc.shop.currency) || 'USD';
+  const goal = num(b.goal, 0, 0, 1e12);
+  const raised = num(b.raised, 0, 0, 1e12);
+  const pct = goal > 0 ? Math.min(100, Math.round((raised / goal) * 100)) : 0;
+  const title = fld(ctx, b, 'title', 'plain', 'h3', 'lp-h lp-h3 ss-dn-t', 'phe.dnTitle');
+  const text = fld(ctx, b, 'text', 'rich', 'div', 'ss-dn-text', 'phe.dnText', { ecls: 'lp-opt' });
+  needUi(ctx, 'dnRaised', 'dnOf', 'dnBackers', 'dnGive', 'dnScan');
+  const bar = goal > 0 ? `<div class="ss-dn-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div>`
+    + `<p class="ss-dn-nums"><strong>${escapeHTML(formatPrice(raised, cur, ctx.lang, ctx.doc))}</strong> ${ui(ctx, 'dnOf')} ${escapeHTML(formatPrice(goal, cur, ctx.lang, ctx.doc))} · ${pct}%${num(b.backers, 0) > 0 ? ' · ' + ui(ctx, 'dnBackers', { n: Math.round(num(b.backers, 0)) }) : ''}</p>` : '';
+  const tiers = noItems(ctx, b) ? addItemBox(ctx) : arr(b.items).filter(isObj).map((t, i) => {
+    const href = str(t.link).trim() || str(b.link).trim();
+    // Scheme allowlist: a donation link is author data, and javascript: or data: in href would execute on click.
+    const safe = /^(https?:|mailto:)/i.test(href) ? href : '';
+    const amt = num(t.amount, 0) > 0 ? `<p class="ss-dn-amt">${escapeHTML(formatPrice(num(t.amount, 0), cur, ctx.lang, ctx.doc))}</p>` : '';
+    const btn = safe && !ctx.edit ? `<a class="lp-btn lp-btn-primary lp-btn-sm" href="${escapeAttr(safe)}" target="_blank" rel="noopener noreferrer">${ui(ctx, 'dnGive')}</a>` : `<span class="lp-btn lp-btn-primary lp-btn-sm">${ui(ctx, 'dnGive')}</span>`;
+    return `<li class="ss-dn-tier"${di(ctx, i)}>${amt}${has(ctx, t.title) || ctx.edit ? `<p class="ss-dn-tt">${txt(ctx, t.title)}</p>` : ''}${has(ctx, t.text) ? `<p class="ss-dn-tx">${txt(ctx, t.text)}</p>` : ''}${btn}</li>`;
+  }).join('');
+  let qr = '';
+  const link = str(b.link).trim();
+  if (link && b.qr) {
+    try { qr = `<figure class="ss-dn-qr">${qrSVG(link, { ec: 'M' })}<figcaption>${ui(ctx, 'dnScan')}</figcaption></figure>`; } catch (e) { qr = ''; }
+  }
+  const bank = str(b.bank).trim() ? `<pre class="ss-dn-bank">${escapeHTML(b.bank)}</pre>` : '';
+  return `<div class="ss-dn"><div class="ss-dn-head"><div>${title}${text}${bar}</div>${qr}</div>${tiers ? `<ul class="ss-dn-tiers">${tiers}</ul>` : ''}${bank}</div>`;
+}
+
+/* ---------- data table ---------- */
+
+function beDataTable(b, ctx) {
+  let rows = [];
+  // Delimiter sniffing from the header line: ';' (European Excel exports, where ',' is the decimal mark) or tab when
+  // the line has no comma; otherwise ','. Rows capped at 2000 to bound the page size.
+  const first = str(b.csv).split('\n')[0];
+  try { rows = parseCSV(str(b.csv), { delimiter: first.includes(';') && !first.includes(',') ? ';' : first.includes('\t') && !first.includes(',') ? '\t' : ',' }); } catch (e) { rows = []; }
+  if (!Array.isArray(rows)) rows = [];
+  rows = rows.filter((r) => Array.isArray(r) && r.some((c) => str(c).trim())).slice(0, 2000);
+  const title = fld(ctx, b, 'title', 'plain', 'h3', 'lp-h lp-h3 ss-dt-t', 'phe.dtTitle', { ecls: 'lp-opt' });
+  if (!rows.length) return ctx.edit ? `<div class="ss-dt">${title}<div class="lp-empty">${escapeHTML(uiText('phe.dtCsv', ctx.uiLang, ctx.doc))}</div></div>` : '';
+  const head = b.header !== false ? rows.shift() : null;
+  const n = Math.max(head ? head.length : 0, ...rows.map((r) => r.length));
+  // Numeric cells get tabular alignment (right); the test accepts grouped and decimal separators of any locale.
+  const isNum = (v) => /^-?[\d\s.,]+%?$/.test(str(v).trim()) && /\d/.test(str(v));
+  const th = head ? `<thead><tr>${Array.from({ length: n }, (_, k) => `<th scope="col"${b.sort && !ctx.edit ? ` aria-sort="none"` : ''}>${b.sort && !ctx.edit ? `<button type="button" class="ss-dt-sort" data-ss-dt-col="${k}">${escapeHTML(str(head[k]))}</button>` : escapeHTML(str(head[k]))}</th>`).join('')}</tr></thead>` : '';
+  const td = rows.map((r) => `<tr>${Array.from({ length: n }, (_, k) => `<td${isNum(r[k]) ? ' class="ss-dt-n"' : ''}>${escapeHTML(str(r[k]))}</td>`).join('')}</tr>`).join('');
+  let tools = '';
+  if (!ctx.edit && (b.filter || b.download)) {
+    needUi(ctx, 'dtFilter', 'dtDownload', 'dtRows');
+    if (b.filter || b.sort) feature(ctx, 'datatable');
+    tools = `<div class="ss-dt-tools">${b.filter ? `<input type="search" class="lp-input ss-dt-q lp-js-only" data-ss-dt-q placeholder="${escapeAttr(uiText('dtFilter', ctx.lang, ctx.doc))}" aria-label="${escapeAttr(uiText('dtFilter', ctx.lang, ctx.doc))}">` : ''}`
+      + `${b.download ? `<a class="lp-btn lp-btn-ghost lp-btn-sm" download="${escapeAttr((str(b.file) || 'table').replace(/[^\w.-]+/g, '-'))}.csv" href="${escapeAttr(dataURL('text/csv', '﻿' + str(b.csv)))}">${icon(ctx, 'download')}<span>${ui(ctx, 'dtDownload')}</span></a>` : ''}`
+      + `<span class="ss-dt-count" data-ss-dt-count aria-live="polite"></span></div>`;
+  } else if (!ctx.edit && b.sort) feature(ctx, 'datatable');
+  return `<div class="ss-dt" data-ss-dt>${title}${tools}<div class="ss-dt-w"><table class="ss-dt-tb">${th}<tbody>${td}</tbody></table></div></div>`;
+}
+
+/* ---------- unit converter ---------- */
+
+function beUnits(b, ctx) {
+  const kind = oneOf(b.kind, KINDS, 'length');
+  const list = Object.values(UNITS).filter((u) => u && u.kind === kind).sort((a, z) => a.ord - z.ord).slice(0, 24);
+  const title = fld(ctx, b, 'title', 'plain', 'h3', 'lp-h lp-h3 ss-un-t', 'phe.unTitle', { ecls: 'lp-opt' });
+  if (!list.length) return '';
+  // Unit names exist in en / ru / ka only; uk falls back to ru (closest), everything else to en.
+  const name = (u) => {
+    const l = ctx.lang.slice(0, 2);
+    const k = l === 'ru' || l === 'uk' ? 'ru' : l === 'ka' ? 'ka' : 'en';
+    const nm = (u.name && (u.name[k] || u.name.en)) || '';
+    const sym = (u.label && (u.label[k] || u.label.en)) || u.code;
+    return nm ? `${nm} (${sym})` : sym;
+  };
+  // Linear model value_base = v * factor + offset (offset for temperature scales); the runtime inverts it for 'to'.
+  // The initial result is pre-rendered so the no-script page shows a correct 1-unit conversion.
+  const units = list.map((u) => ({ c: u.code, f: typeof u.factor === 'number' ? u.factor : 1, o: typeof u.offset === 'number' ? u.offset : 0, n: name(u) }));
+  const from = units.find((u) => u.c === b.from) || units[0];
+  const to = units.find((u) => u.c === b.to) || units[1] || units[0];
+  const opts = (sel) => units.map((u) => `<option value="${escapeAttr(u.c)}"${u.c === sel.c ? ' selected' : ''}>${escapeHTML(u.n)}</option>`).join('');
+  needUi(ctx, 'unValue', 'unFrom', 'unTo', 'unSwap');
+  if (!ctx.edit) feature(ctx, 'units');
+  const id = 'un-' + escapeAttr(b.id);
+  return `<div class="ss-un" data-ss-un="${jsonAttr(units)}">${title}<div class="ss-un-row">`
+    + `<label class="ss-un-f"><span>${ui(ctx, 'unValue')}</span><input class="lp-input" type="number" step="any" inputmode="decimal" value="1" id="${id}-v" data-ss-un-v></label>`
+    + `<label class="ss-un-f"><span>${ui(ctx, 'unFrom')}</span><select class="lp-input lp-select" data-ss-un-a>${opts(from)}</select></label>`
+    + `<button type="button" class="lp-btn lp-btn-ghost ss-un-swap lp-js-only" data-ss-un-swap aria-label="${escapeAttr(uiText('unSwap', ctx.lang, ctx.doc))}">⇄</button>`
+    + `<label class="ss-un-f"><span>${ui(ctx, 'unTo')}</span><select class="lp-input lp-select" data-ss-un-b>${opts(to)}</select></label></div>`
+    + `<p class="ss-un-out" data-ss-un-out aria-live="polite">${escapeHTML(`1 ${from.c} = ${+(((1 * from.f + from.o) - to.o) / to.f).toPrecision(8)} ${to.c}`)}</p></div>`;
+}
+
+/* ---------- barcode ---------- */
+
+const BC_TYPES = ['ean13', 'ean8', 'upca', 'code128', 'code39', 'itf14', 'qr'];
+
+function beBarcode(b, ctx) {
+  const t = oneOf(b.kind, BC_TYPES, 'ean13');
+  const v = str(b.value).trim();
+  const cap = fld(ctx, b, 'caption', 'plain', 'figcaption', 'ss-bc-cap', 'phe.caption', { ecls: 'lp-opt' });
+  if (!v) return ctx.edit ? `<figure class="ss-bc"><div class="lp-empty">${escapeHTML(uiText('phe.barcode', ctx.uiLang, ctx.doc))}</div>${cap}</figure>` : '';
+  let svg = '';
+  try { svg = t === 'qr' ? qrSVG(v, { ec: 'M' }) : barcodeSVG(encode(t, v), { xdim: 2 }); } catch (e) { svg = ctx.edit ? `<div class="lp-empty">${escapeHTML(String(e && e.message || e))}</div>` : ''; }
+  if (!svg) return '';
+  return `<figure class="ss-bc ss-bc-${t === 'qr' ? 'qr' : 'lin'}">${svg}${cap}</figure>`;
+}
+
+/* ---------- contract ---------- */
+
+// Text with {{key}} placeholders: the visitor's answers (fields of the block) are filled in live; the filled text is
+// sent with the form (field "contract") and can be printed.
+function beContract(b, ctx) {
+  const title = fld(ctx, b, 'title', 'plain', 'h3', 'lp-h lp-h3 ss-ct-t', 'phe.ctTitle');
+  const src = str(pickText(b.body, ctx.lang, ctx.pd));
+  // Escape first, then substitute: placeholders are matched in already-escaped text, so author text cannot inject
+  // markup and slot names are restricted to [a-z][a-z0-9_]{0,31}.
+  const html = escapeHTML(src).replace(/\{\{\s*([a-z][a-z0-9_]{0,31})\s*\}\}/gi, (m, k) => `<mark class="ss-ct-slot" data-ss-ct-k="${escapeAttr(k)}">${escapeHTML(k)}</mark>`).replace(/\r?\n/g, '<br>');
+  needUi(ctx, 'ctPrint', 'ctSend');
+  const doc = `<div class="ss-ct-doc" data-ss-ct-doc>${html || (ctx.edit ? escapeHTML(uiText('phe.ctBody', ctx.uiLang, ctx.doc)) : '')}</div>`;
+  if (!ctx.edit) feature(ctx, 'contract');
+  const inner = '<input type="text" name="contract" data-ss-ct-out hidden readonly tabindex="-1" aria-hidden="true">';
+  const print = ctx.edit ? '' : `<p class="ss-ct-tools lp-js-only"><button type="button" class="lp-btn lp-btn-ghost lp-btn-sm" data-ss-ct-print>${icon(ctx, 'print')}<span>${ui(ctx, 'ctPrint')}</span></button></p>`;
+  return `<div class="ss-ct" data-ss-ct>${title}<div class="ss-ct-grid">${doc}<div>${formHTML(ctx, b, inner, { submitKey: 'ctSend' })}${print}</div></div></div>`;
+}
+
+/* ---------- account ---------- */
+
+const ACC_VIEWS = ['signin', 'signup', 'profile'];
+
+// Sign-in (password or a link by e-mail), registration and the profile of a backend site. The server answers
+// api/_auth/* (backend exports only); serverless and offline exports show a note instead of the forms.
+function beAccount(b, ctx) {
+  const view = oneOf(b.view, ACC_VIEWS, 'signin');
+  const title = fld(ctx, b, 'title', 'plain', 'h3', 'lp-h lp-h3 ss-acc-t', 'phe.accTitle', { ecls: 'lp-opt' });
+  const keys = ['accEmail', 'accPassword', 'accName', 'accSignIn', 'accSignUp', 'accLink', 'accLinkSent', 'accSignOut', 'accWrong', 'accTaken',
+    'accHello', 'accRole', 'accNoServer', 'accNeedSign', 'accSave', 'accSaved', 'accOr', 'accForgot', 'accNewPass', 'accWeak', 'accBlocked', 'accDone'];
+  needUi(ctx, ...keys);
+  // autocomplete tokens (username, current-password, new-password) let password managers fill and save correctly.
+  const input = (name, type, key, ac) => `<div class="lp-field"><label class="lp-label" for="acc-${escapeAttr(b.id)}-${name}">${ui(ctx, key)}</label>`
+    + `<input class="lp-input" id="acc-${escapeAttr(b.id)}-${name}" name="${name}" type="${type}"${ac ? ` autocomplete="${ac}"` : ''} required></div>`;
+  let form = '';
+  if (view === 'signin') {
+    form = `<form class="lp-form ss-acc-form" data-ss-acc="signin">${input('email', 'email', 'accEmail', 'username')}${b.password !== false ? input('password', 'password', 'accPassword', 'current-password') : ''}`
+      + `<div class="lp-field lp-form-actions">${b.password !== false ? `<button type="submit" class="lp-btn lp-btn-primary">${ui(ctx, 'accSignIn')}</button>` : ''}`
+      + `${b.link !== false ? `<button type="button" class="lp-btn ${b.password !== false ? 'lp-btn-ghost' : 'lp-btn-primary'}" data-ss-acc-link>${ui(ctx, 'accLink')}</button>` : ''}</div></form>`;
+  } else if (view === 'signup') {
+    form = `<form class="lp-form ss-acc-form" data-ss-acc="signup">${input('name', 'text', 'accName', 'name')}${input('email', 'email', 'accEmail', 'email')}${b.password !== false ? input('password', 'password', 'accPassword', 'new-password') : ''}`
+      + `<div class="lp-field lp-form-actions"><button type="submit" class="lp-btn lp-btn-primary">${ui(ctx, 'accSignUp')}</button></div></form>`;
+  } else {
+    form = `<div class="ss-acc-prof" data-ss-acc="profile"><p class="ss-acc-hello" data-ss-acc-hello></p><form class="lp-form ss-acc-form" data-ss-acc-edit hidden>${input('name', 'text', 'accName', 'name')}`
+      + `<div class="lp-field lp-form-actions"><button type="submit" class="lp-btn lp-btn-primary">${ui(ctx, 'accSave')}</button><button type="button" class="lp-btn lp-btn-ghost" data-ss-acc-out>${ui(ctx, 'accSignOut')}</button></div></form></div>`;
+  }
+  const msg = '<p class="ss-acc-msg" data-ss-acc-msg role="status" aria-live="polite" hidden></p>';
+  if (ctx.edit) return `<div class="ss-acc ss-acc-${view}">${title}${form.replace(/<form/g, '<div').replace(/<\/form>/g, '</div>')}</div>`;
+  // Accounts need a server; static exports degrade to an explanatory note rather than forms that cannot work.
+  if (!ctx.api) return `<div class="ss-acc ss-acc-${view}">${title}<p class="ss-acc-note">${ui(ctx, 'accNoServer')}</p></div>`;
+  feature(ctx, 'account');
+  // '#/account' becomes the address of that page in this package (a hash route, a file or a server path).
+  const after = str(b.after).trim() ? str(resolveHref(ctx, str(b.after).trim()) || '') : '';
+  return `<div class="ss-acc ss-acc-${view}" data-ss-acc-box${after ? ` data-ss-acc-after="${escapeAttr(after)}"` : ''}>${title}${form}${msg}</div>`;
+}
+
+/* ---------- registry ---------- */
+
+// Block registry: defaults, editor schema and renderer per type. formLike marks blocks submitted through the form
+// feature; noSource excludes them from binding to a content collection.
+const BT_E = {
+  diagram: {
+    category: 'data', icon: 'chart', container: false, variants: [],
+    i18nFields: ['caption'],
+    defaults: () => ({ mode: 'text', view: 'pages', src: 'flowchart LR\n  A[Visitor] --> B{Interested?}\n  B -- yes --> C[Order]\n  B -- no --> D[Newsletter]', caption: {}, download: false }),
+    schema: [
+      { key: 'mode', type: 'select', label: 'f.dgMode', options: [{ v: 'text', l: 'o.dg.text' }, { v: 'sitemap', l: 'o.dg.sitemap' }] },
+      { key: 'view', type: 'select', label: 'sm.view', when: { mode: 'sitemap' }, options: ['pages', 'nav', 'access', 'types'].map((v) => ({ v, l: 'sm.' + v })) },
+      { key: 'src', type: 'textarea', code: true, rows: 10, label: 'f.dgSrc', hint: 'fh.dgSrc', when: { mode: 'text' } },
+      { key: 'caption', type: 'i18n', label: 'f.caption' },
+      { key: 'download', type: 'checkbox', label: 'f.dgDownload' },
+    ],
+    render: beDiagram,
+  },
+  markdown: {
+    category: 'data', icon: 'text', container: false, variants: [],
+    i18nFields: ['text'],
+    defaults: () => ({ text: { en: '## Heading\n\nText with **bold**, `code` and a [link](https://codeberg.org).\n\n- [x] done\n- [ ] to do\n\n> [!TIP]\n> Alerts, tables, footnotes, math $E=mc^2$ and ```mermaid diagrams work too.' } }),
+    schema: [{ key: 'text', type: 'i18n', multiline: true, rows: 14, label: 'f.mdText', hint: 'fh.mdText' }],
+    render: beMarkdown,
+  },
+  formula: {
+    category: 'data', icon: 'code', container: false, variants: [],
+    i18nFields: ['caption'],
+    defaults: () => ({ tex: 'M = P \\cdot \\frac{r(1+r)^n}{(1+r)^n-1}', caption: {} }),
+    schema: [
+      { key: 'tex', type: 'textarea', code: true, rows: 5, label: 'f.fxTex', hint: 'fh.fxTex' },
+      { key: 'caption', type: 'i18n', label: 'f.caption' },
+    ],
+    render: beFormula,
+  },
+  booking: {
+    category: 'services', icon: 'calendar', container: false, variants: [], formLike: true, noSource: true,
+    i18nFields: ['title', 'submit', 'success'], itemI18nFields: ['label', 'ph', 'options'], itemLabel: 'key',
+    defaults: () => ({ title: {}, price: 100, weekend: 0, minNights: 2, months: 2, booked: '', seasons: '',
+      ...formDefaults([field('name', 'text', true, true), field('email', 'email', true, true), field('guests', 'number', false, true), field('message', 'textarea', false, false)]) }),
+    schema: [
+      { key: 'price', type: 'number', label: 'f.bkPrice', min: 0, max: 1e9, step: 1 },
+      { key: 'weekend', type: 'number', label: 'f.bkWeekend', hint: 'fh.bkWeekend', min: 0, max: 1e9, step: 1 },
+      { key: 'minNights', type: 'number', label: 'f.bkMin', min: 1, max: 60, step: 1 },
+      { key: 'months', type: 'number', label: 'f.bkMonths', min: 1, max: 3, step: 1 },
+      { key: 'booked', type: 'textarea', rows: 4, label: 'f.bkBooked', hint: 'fh.bkBooked' },
+      { key: 'seasons', type: 'textarea', rows: 4, label: 'f.bkSeasons', hint: 'fh.bkSeasons' },
+      ...FORM_SCHEMA(),
+    ],
+    itemSchema: FORM_ITEM_SCHEMA(), itemDefaults: formItemDefaults,
+    render: beBooking,
+  },
+  event: {
+    category: 'services', icon: 'ticket', container: false, variants: [], formLike: true, noSource: true,
+    i18nFields: ['title', 'text', 'place', 'rsvpTitle', 'submit', 'success'], itemI18nFields: ['label', 'ph', 'options'], itemLabel: 'key',
+    richFields: { text: 'rich' },
+    defaults: () => ({ title: {}, text: {}, place: {}, address: '', date: '', time: '', endTime: '', tz: '', lat: null, lng: null, rsvp: true, rsvpTitle: {},
+      ...formDefaults([field('name', 'text', true, true), field('email', 'email', true, true),
+        { ...field('answer', 'select', true, true), options: { en: 'Yes, I will come\nMaybe\nNo, sorry', ru: 'Да, приду\nВозможно\nНет, не смогу' } }, field('guests', 'number', false, true)]) }),
+    schema: [
+      { key: 'date', type: 'day', label: 'f.cdDate' }, { key: 'time', type: 'time', label: 'f.evStart' }, { key: 'endTime', type: 'time', label: 'f.evEnd' },
+      { key: 'tz', type: 'text', label: 'f.evTz', hint: 'fh.evTz' },
+      { key: 'address', type: 'text', label: 'f.evAddress' },
+      { key: 'lat', type: 'number', label: 'f.lat', min: -90, max: 90, step: 0.000001, nullable: true },
+      { key: 'lng', type: 'number', label: 'f.lng', min: -180, max: 180, step: 0.000001, nullable: true },
+      { key: 'rsvp', type: 'checkbox', label: 'f.evRsvp' },
+      ...FORM_SCHEMA().map((f) => ({ ...f, when: { ...(f.when || {}), rsvp: true } })),
+    ],
+    itemSchema: FORM_ITEM_SCHEMA(), itemDefaults: formItemDefaults,
+    render: beEvent,
+  },
+  map: {
+    category: 'services', icon: 'map', container: false, variants: [],
+    i18nFields: ['title'], itemI18nFields: ['title', 'text'], itemLabel: 'title',
+    defaults: () => ({ title: {}, height: 420, route: false, items: [] }),
+    schema: [
+      { key: 'height', type: 'number', label: 'f.height', min: 200, max: 900, step: 10, unit: 'px' },
+      { key: 'route', type: 'checkbox', label: 'f.mapRoute', hint: 'fh.mapRoute' },
+    ],
+    itemSchema: [
+      { key: 'title', type: 'i18n', label: 'f.title' }, { key: 'text', type: 'i18n', label: 'f.text' },
+      { key: 'lat', type: 'number', label: 'f.lat', min: -85, max: 85, step: 0.000001 }, { key: 'lng', type: 'number', label: 'f.lng', min: -180, max: 180, step: 0.000001 },
+    ],
+    itemDefaults: () => ({ title: {}, text: {}, lat: 41.6423, lng: 41.6339 }),
+    render: beMap,
+  },
+  estate: {
+    category: 'commerce', icon: 'home', container: false, variants: ['view'],
+    i18nFields: ['title'], itemI18nFields: ['note'], itemLabel: 'num',
+    defaults: () => ({ title: {}, view: 'cards', filters: true, items: [] }),
+    schema: [
+      { key: 'view', type: 'select', label: 'f.esView', options: EST_VIEWS.map((v) => ({ v, l: 'o.es.' + v })) },
+      { key: 'filters', type: 'checkbox', label: 'f.esFilters' },
+    ],
+    itemSchema: [
+      { key: 'num', type: 'text', label: 'f.esNum' }, { key: 'building', type: 'text', label: 'f.esBuilding' },
+      { key: 'floor', type: 'number', label: 'f.esFloor', min: -5, max: 200, step: 1 }, { key: 'rooms', type: 'number', label: 'f.esRooms', min: 0, max: 20, step: 1, hint: 'fh.esRooms' },
+      { key: 'area', type: 'number', label: 'f.esArea', min: 0, max: 100000, step: 0.1, unit: 'm²' }, { key: 'price', type: 'number', label: 'f.price', min: 0, max: 1e12, step: 1 },
+      { key: 'status', type: 'select', label: 'f.esStatus', options: ['free', 'reserved', 'sold', 'closed'].map((v) => ({ v, l: 'o.es.' + v })) },
+      { key: 'note', type: 'i18n', label: 'f.text' },
+    ],
+    itemDefaults: () => ({ num: '1', building: '', floor: 1, rooms: 1, area: 40, price: 0, status: 'free', note: {} }),
+    render: beEstate,
+  },
+  donate: {
+    category: 'commerce', icon: 'heart', container: false, variants: [],
+    i18nFields: ['title', 'text'], itemI18nFields: ['title', 'text'], itemLabel: 'title', richFields: { text: 'rich' },
+    defaults: () => ({ title: {}, text: {}, goal: 10000, raised: 0, backers: 0, link: '', qr: true, bank: '', items: [] }),
+    schema: [
+      { key: 'goal', type: 'number', label: 'f.dnGoal', min: 0, max: 1e12, step: 1 }, { key: 'raised', type: 'number', label: 'f.dnRaised', min: 0, max: 1e12, step: 1 },
+      { key: 'backers', type: 'number', label: 'f.dnBackers', min: 0, max: 1e9, step: 1 },
+      { key: 'link', type: 'text', label: 'f.dnLink', hint: 'fh.dnLink' }, { key: 'qr', type: 'checkbox', label: 'f.dnQr' },
+      { key: 'bank', type: 'textarea', rows: 4, label: 'f.dnBank', hint: 'fh.dnBank' },
+    ],
+    itemSchema: [{ key: 'amount', type: 'number', label: 'f.price', min: 0, max: 1e9 }, { key: 'title', type: 'i18n', label: 'f.title' }, { key: 'text', type: 'i18n', label: 'f.text' }, { key: 'link', type: 'text', label: 'f.href' }],
+    itemDefaults: () => ({ amount: 10, title: {}, text: {}, link: '' }),
+    render: beDonate,
+  },
+  datatable: {
+    category: 'data', icon: 'table', container: false, variants: [],
+    i18nFields: ['title'],
+    defaults: () => ({ title: {}, csv: 'Name,Value,Share\nAlpha,120,40%\nBeta,90,30%\nGamma,90,30%', header: true, sort: true, filter: true, download: true, file: 'table' }),
+    schema: [
+      { key: 'csv', type: 'textarea', code: true, rows: 10, label: 'f.dtCsv', hint: 'fh.dtCsv' },
+      { key: 'header', type: 'checkbox', label: 'f.dtHeader' }, { key: 'sort', type: 'checkbox', label: 'f.dtSort' },
+      { key: 'filter', type: 'checkbox', label: 'f.dtFilter' }, { key: 'download', type: 'checkbox', label: 'f.dtDownload' },
+      { key: 'file', type: 'text', label: 'f.dtFile', when: { download: true } },
+    ],
+    render: beDataTable,
+  },
+  units: {
+    category: 'data', icon: 'ruler', container: false, variants: [],
+    i18nFields: ['title'],
+    defaults: () => ({ title: {}, kind: 'area', from: 'm2', to: 'sqft' }),
+    schema: [
+      { key: 'kind', type: 'select', label: 'f.unKind', options: KINDS.map((k) => ({ v: k, l: 'o.un.' + k })) },
+      { key: 'from', type: 'text', label: 'f.unFrom', hint: 'fh.unCode' }, { key: 'to', type: 'text', label: 'f.unTo', hint: 'fh.unCode' },
+    ],
+    render: beUnits,
+  },
+  barcode: {
+    category: 'commerce', icon: 'tag', container: false, variants: [],
+    i18nFields: ['caption'],
+    defaults: () => ({ kind: 'ean13', value: '4006381333931', caption: {} }),
+    schema: [
+      { key: 'kind', type: 'select', label: 'f.bcKind', options: BC_TYPES.map((v) => ({ v, text: v.toUpperCase() })) },
+      { key: 'value', type: 'text', label: 'f.bcValue' }, { key: 'caption', type: 'i18n', label: 'f.caption' },
+    ],
+    render: beBarcode,
+  },
+  contract: {
+    category: 'services', icon: 'file', container: false, variants: [], formLike: true, noSource: true,
+    i18nFields: ['title', 'body', 'submit', 'success'], itemI18nFields: ['label', 'ph', 'options'], itemLabel: 'key',
+    defaults: () => ({ title: {}, body: { en: 'Agreement\n\nI, {{name}}, rent the apartment from {{checkin}} for {{nights}} nights and agree to the house rules.\n\nContact: {{email}}' },
+      ...formDefaults([field('name', 'text', true, true), field('email', 'email', true, true), field('checkin', 'date', true, true), field('nights', 'number', true, true), field('agree', 'checkbox', true, false)]) }),
+    schema: [{ key: 'body', type: 'i18n', multiline: true, rows: 12, label: 'f.ctBody', hint: 'fh.ctBody' }, ...FORM_SCHEMA()],
+    itemSchema: FORM_ITEM_SCHEMA(), itemDefaults: formItemDefaults,
+    render: beContract,
+  },
+  account: {
+    category: 'account', icon: 'user', container: false, variants: ['view'],
+    i18nFields: ['title'],
+    defaults: () => ({ title: {}, view: 'signin', password: true, link: true, after: '' }),
+    schema: [
+      { key: 'view', type: 'select', label: 'f.accView', options: ACC_VIEWS.map((v) => ({ v, l: 'o.acc.' + v })) },
+      { key: 'password', type: 'checkbox', label: 'f.accPassword', when: { view: ['signin', 'signup'] } },
+      { key: 'link', type: 'checkbox', label: 'f.accLink', hint: 'fh.accLink', when: { view: 'signin' } },
+      { key: 'after', type: 'text', label: 'f.accAfter', hint: 'fh.accAfter', suggest: 'anchors' },
+    ],
+    render: beAccount,
+  },
+};
+
+/* ---------- CSS ---------- */
+
+// Code colours of highlight/ inside Markdown blocks, light and (under the dark scheme) dark.
+function mdHighlightCSS() {
+  const rules = (css, pre) => css.split('}').map((r) => r.trim()).filter(Boolean).map((r) => r.replace(/(^|,)\s*\.hl-/g, '$1' + pre + '.hl-') + '}').join('\n');
+  return rules(HIGHLIGHT_CSS, '.ss-md ') + '\n' + rules(HIGHLIGHT_CSS_DARK, 'html[data-scheme=dark] .ss-md ') + '\n';
+  // (auto scheme: the dark colours also follow the system unless the visitor chose light)
+}
+
+// Per-block CSS (pruned per page via OWN_E). Prefix ss- marks blocks built on repository libraries (vs lp- landing
+// blocks), so their selectors cannot collide with the landing CSS.
+const CSS_BLOCKS_E = {
+  diagram: `
+.ss-dg{margin:0;display:flex;flex-direction:column;gap:10px}
+.ss-dg-pic{overflow:auto;padding:clamp(10px,2cqi,22px);border:1px solid var(--lp-border);border-radius:var(--lp-radius);background:var(--lp-surface)}
+.ss-dg-pic svg{display:block;max-width:100%;height:auto;margin-inline:auto}
+.ss-dg-2 .ss-dg-d,.ss-dg-dk .ss-dg-l{display:none}.ss-dg-dk .ss-dg-d{display:block}
+@media (prefers-color-scheme:dark){html:not([data-scheme=light]) .ss-dg-auto .ss-dg-l{display:none}html:not([data-scheme=light]) .ss-dg-auto .ss-dg-d{display:block}}
+html[data-scheme=dark] .ss-dg-2 .ss-dg-l{display:none}html[data-scheme=dark] .ss-dg-2 .ss-dg-d{display:block}
+html[data-scheme=light] .ss-dg-2 .ss-dg-l{display:block}html[data-scheme=light] .ss-dg-2 .ss-dg-d{display:none}
+.ss-dg-cap{color:var(--lp-muted);font-size:.92em;text-align:center}
+.ss-dg-dl{margin:0;text-align:center}
+`,
+  markdown: `
+.ss-md{line-height:1.65;overflow-wrap:anywhere}
+.ss-md>:first-child{margin-top:0}.ss-md>:last-child{margin-bottom:0}
+.ss-md h1,.ss-md h2,.ss-md h3,.ss-md h4{font-family:var(--lp-font-h);line-height:1.25;margin:1.4em 0 .5em}
+.ss-md h2{padding-bottom:.3em;border-bottom:1px solid var(--lp-border)}
+.ss-md pre{overflow:auto;padding:14px 16px;border-radius:var(--lp-radius-s);background:var(--lp-tint);font-size:.88em;line-height:1.5}
+.ss-md code{padding:.12em .36em;border-radius:5px;background:var(--lp-tint);font-size:.9em}
+.ss-md pre code{padding:0;background:none}
+.ss-md blockquote{margin:1em 0;padding:.2em 1em;border-inline-start:4px solid var(--lp-border);color:var(--lp-muted)}
+.ss-md table{border-collapse:collapse;display:block;overflow:auto;max-width:100%}
+.ss-md th,.ss-md td{padding:6px 12px;border:1px solid var(--lp-border)}
+.ss-md tr:nth-child(2n) td{background:var(--lp-tint)}
+.ss-md img{max-width:100%;height:auto}
+.ss-md ul.contains-task-list{list-style:none;padding-inline-start:1.2em}
+.ss-md .markdown-alert{margin:1em 0;padding:.6em 1em;border-inline-start:4px solid var(--lp-accent);border-radius:var(--lp-radius-s);background:var(--lp-tint)}
+.ss-md .markdown-alert-title{margin:0 0 .3em;font-weight:700}
+.ss-md .md-diagram{overflow:auto}.ss-md .md-diagram svg{max-width:100%;height:auto}
+.ss-md .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+.ss-md .footnotes{font-size:.88em;color:var(--lp-muted)}
+.ss-md .md-math-block{display:block;overflow:auto;text-align:center}
+` + mdHighlightCSS(),
+  formula: `
+.ss-fx{margin:0;display:flex;flex-direction:column;gap:10px;align-items:center;padding:clamp(12px,2.4cqi,24px);border:1px solid var(--lp-border);border-radius:var(--lp-radius);background:var(--lp-surface);overflow:auto}
+.ss-fx math{font-family:math,"Cambria Math","STIX Two Math","Latin Modern Math","Noto Sans Math",serif;font-size:1.25em}
+.ss-fx-row{max-width:100%;overflow:auto}
+.ss-fx-cap{color:var(--lp-muted);font-size:.92em}
+`,
+  booking: `
+.lp-b-booking{container:ss-bk/inline-size}
+.ss-bk-t{margin:0 0 16px}
+.ss-bk-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:clamp(16px,3cqi,32px);align-items:start}
+@container ss-bk (max-width:720px){.ss-bk-grid{grid-template-columns:1fr}}
+.ss-bk-cal{display:grid;gap:18px}
+.ss-bk-cal-ph{display:flex;align-items:center;justify-content:center;gap:10px;min-height:240px;border:1px dashed var(--lp-border);border-radius:var(--lp-radius);color:var(--lp-muted)}
+.ss-bk-cal-ph .lp-ic{width:28px;height:28px}
+.ss-bk-nav{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.ss-bk-nav button{min-width:44px;min-height:40px;border:1px solid var(--lp-border);font-size:1.3em;line-height:1}
+.ss-bk-nav button:disabled{opacity:.35}
+.ss-fm .ss-bk-sel,.ss-fm .ss-ct-out{grid-column:1/-1}
+.ss-bk-month{display:flex;flex-direction:column;gap:8px}
+.ss-bk-mt{margin:0;font-weight:700;text-transform:capitalize}
+.ss-bk-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}
+.ss-bk-dw{font-size:.72em;color:var(--lp-muted);text-align:center;padding-bottom:2px}
+.ss-bk-d{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:46px;padding:2px;border:1px solid var(--lp-border);border-radius:8px;background:var(--lp-bg);color:inherit;font:inherit;font-size:.9em;cursor:pointer;line-height:1.15}
+.ss-bk-d small{font-size:.66em;color:var(--lp-muted)}
+.ss-bk-d:hover:not(:disabled){border-color:var(--lp-accent)}
+.ss-bk-d:focus-visible{outline:2px solid var(--lp-accent);outline-offset:1px}
+.ss-bk-d:disabled{cursor:default;opacity:.42;text-decoration:line-through;background:var(--lp-tint)}
+.ss-bk-d[aria-pressed=true],.ss-bk-d.ss-bk-on{background:var(--lp-accent);border-color:var(--lp-accent);color:var(--lp-on-accent,#fff)}
+.ss-bk-d[aria-pressed=true] small,.ss-bk-d.ss-bk-on small{color:inherit}
+.ss-bk-d.ss-bk-mid{background:color-mix(in srgb,var(--lp-accent) 16%,var(--lp-bg))}
+.ss-bk-x{visibility:hidden}
+.ss-bk-rates{width:100%;border-collapse:collapse;margin:0 0 10px;font-size:.94em}
+.ss-bk-rates th,.ss-bk-rates td{padding:7px 0;border-bottom:1px solid var(--lp-border);text-align:start;vertical-align:top}
+.ss-bk-rates td{text-align:end;font-variant-numeric:tabular-nums}
+.ss-bk-legend{margin:0 0 14px;color:var(--lp-muted);font-size:.86em}
+.ss-bk-sw{display:inline-block;width:12px;height:12px;margin-inline:2px 4px;border-radius:3px;border:1px solid var(--lp-border);vertical-align:-1px}
+.ss-bk-off{background:var(--lp-tint);opacity:.6}
+.ss-bk-sum{margin:0 0 6px;padding:10px 12px;border-radius:var(--lp-radius-s);background:var(--lp-tint);font-weight:600}
+`,
+  event: `
+.lp-b-event{container:ss-ev/inline-size}
+.ss-ev{display:grid;grid-template-columns:minmax(0,1fr);gap:clamp(16px,3cqi,32px);padding:clamp(16px,3cqi,32px);border:1px solid var(--lp-border);border-radius:var(--lp-radius);background:var(--lp-surface);box-shadow:var(--lp-shadow)}
+.ss-ev-has-rsvp{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)}
+@container ss-ev (max-width:720px){.ss-ev-has-rsvp{grid-template-columns:1fr}}
+.ss-ev-t{margin:0 0 12px}
+.ss-ev-when,.ss-ev-addr,.ss-ev-place{display:flex;align-items:center;gap:8px;margin:0 0 6px}
+.ss-ev-when{font-weight:700;color:var(--lp-accent)}
+.ss-ev-place{font-weight:600}
+.ss-ev-addr{color:var(--lp-muted)}
+.ss-ev-text{margin-top:12px}
+.ss-ev-links{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 0}
+.ss-ev-rsvp h4{margin:0 0 12px}
+`,
+  map: `
+.ss-map-t{margin:0 0 14px}
+.ss-map-box{border:1px solid var(--lp-border);border-radius:var(--lp-radius);overflow:hidden;background:var(--lp-surface)}
+.ss-map-svg{display:block;width:100%;height:auto}
+.ss-map-bg{fill:color-mix(in srgb,var(--lp-accent) 5%,var(--lp-surface))}
+.ss-map-grid line{stroke:var(--lp-border);stroke-width:1}
+.ss-map-route{fill:none;stroke:var(--lp-accent);stroke-width:4;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:10 8;opacity:.75}
+.ss-map-pt circle{fill:var(--lp-accent);stroke:var(--lp-bg);stroke-width:3}
+.ss-map-pt text{fill:var(--lp-on-accent,#fff);font:700 13px/1 system-ui,sans-serif}
+.ss-map-list{list-style:none;margin:14px 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px 18px}
+.ss-map-list li{display:flex;gap:10px;align-items:flex-start}
+.ss-map-n{flex:none;display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;background:var(--lp-accent);color:var(--lp-on-accent,#fff);font-weight:700;font-size:.82em}
+.ss-map-note{display:block;color:var(--lp-muted);font-size:.92em}
+.ss-map-osm{font-size:.86em}
+`,
+  estate: `
+.lp-b-estate{container:ss-es/inline-size}
+.ss-es-t{margin:0 0 14px}
+.ss-es-f{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;margin:0 0 14px}
+.ss-es-chips{display:flex;flex-wrap:wrap;gap:6px}
+.ss-chip{padding:.4em .9em;border:1px solid var(--lp-border);border-radius:99px;background:var(--lp-bg);color:inherit;font:inherit;font-size:.9em;cursor:pointer}
+.ss-chip[aria-pressed=true]{background:var(--lp-accent);border-color:var(--lp-accent);color:var(--lp-on-accent,#fff)}
+.ss-es-free{display:inline-flex;gap:6px;align-items:center;font-size:.92em}
+.ss-es-count,.ss-es-sum{color:var(--lp-muted);font-size:.9em}
+.ss-es-sum{margin:0 0 10px}
+.ss-es-cards{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.ss-es-card{display:flex;flex-direction:column;gap:6px;padding:16px;border:1px solid var(--lp-border);border-radius:var(--lp-radius);background:var(--lp-surface)}
+.ss-es-card p{margin:0}
+.ss-es-top{display:flex;justify-content:space-between;gap:8px;color:var(--lp-muted);font-size:.86em}
+.ss-es-main{font-weight:600}
+.ss-es-price{font-family:var(--lp-font-h);font-size:1.3em;font-weight:700}
+.ss-es-note{color:var(--lp-muted);font-size:.9em}
+.ss-es-badge{display:inline-block;padding:.12em .6em;border-radius:99px;font-size:.78em;font-weight:700;background:var(--lp-tint)}
+.ss-es-free .ss-es-badge,.ss-es-card.ss-es-free .ss-es-badge{background:color-mix(in srgb,#16a34a 18%,transparent);color:#15803d}
+.ss-es-reserved .ss-es-badge{background:color-mix(in srgb,#f59e0b 22%,transparent);color:#b45309}
+.ss-es-sold,.ss-es-closed{opacity:.6}
+.ss-es-tw{overflow:auto}
+.ss-es-tb{width:100%;border-collapse:collapse;font-size:.94em;font-variant-numeric:tabular-nums}
+.ss-es-tb th,.ss-es-tb td{padding:8px 10px;border-bottom:1px solid var(--lp-border);text-align:start;white-space:nowrap}
+.ss-es-chess{display:flex;flex-direction:column;gap:4px;overflow:auto}
+.ss-es-row{display:flex;gap:4px;align-items:stretch}
+.ss-es-fl{flex:none;width:34px;display:flex;align-items:center;justify-content:flex-end;padding-inline-end:6px;color:var(--lp-muted);font-size:.82em}
+.ss-es-cell{flex:none;width:52px;min-height:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;border-radius:6px;border:1px solid var(--lp-border);font-size:.82em;line-height:1.1;background:var(--lp-bg)}
+.ss-es-cell.ss-es-free{background:color-mix(in srgb,#16a34a 16%,var(--lp-bg));border-color:color-mix(in srgb,#16a34a 40%,transparent)}
+.ss-es-cell.ss-es-reserved{background:color-mix(in srgb,#f59e0b 20%,var(--lp-bg))}
+.ss-es-cell small{color:var(--lp-muted)}
+[data-ss-es-hide]{display:none!important}
+`,
+  donate: `
+.lp-b-donate{container:ss-dn/inline-size}
+.ss-dn-head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:clamp(16px,3cqi,32px);align-items:start}
+@container ss-dn (max-width:600px){.ss-dn-head{grid-template-columns:1fr}}
+.ss-dn-t{margin:0 0 10px}
+.ss-dn-bar{height:14px;margin:16px 0 8px;border-radius:99px;background:var(--lp-tint);overflow:hidden}
+.ss-dn-bar span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--lp-accent),var(--lp-accent2,var(--lp-accent)))}
+.ss-dn-nums{margin:0;color:var(--lp-muted)}
+.ss-dn-nums strong{color:var(--lp-text);font-size:1.2em}
+.ss-dn-qr{margin:0;width:150px;text-align:center;font-size:.84em;color:var(--lp-muted)}
+.ss-dn-qr svg{display:block;width:100%;height:auto;border-radius:var(--lp-radius-s);background:#fff;padding:6px;box-sizing:border-box}
+.ss-dn-tiers{list-style:none;margin:20px 0 0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}
+.ss-dn-tier{display:flex;flex-direction:column;gap:6px;align-items:flex-start;padding:16px;border:1px solid var(--lp-border);border-radius:var(--lp-radius);background:var(--lp-surface)}
+.ss-dn-tier p{margin:0}
+.ss-dn-amt{font-family:var(--lp-font-h);font-size:1.5em;font-weight:700;color:var(--lp-accent)}
+.ss-dn-tt{font-weight:600}.ss-dn-tx{color:var(--lp-muted);font-size:.92em;flex:1}
+.ss-dn-bank{margin:16px 0 0;padding:12px 14px;border-radius:var(--lp-radius-s);background:var(--lp-tint);font-size:.88em;white-space:pre-wrap;overflow-wrap:anywhere}
+`,
+  datatable: `
+.ss-dt-t{margin:0 0 12px}
+.ss-dt-tools{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin:0 0 10px}
+.ss-dt-q{max-width:280px}
+.ss-dt-count{color:var(--lp-muted);font-size:.88em}
+.ss-dt-w{overflow:auto;border:1px solid var(--lp-border);border-radius:var(--lp-radius-s)}
+.ss-dt-tb{width:100%;border-collapse:collapse;font-size:.94em}
+.ss-dt-tb th,.ss-dt-tb td{padding:8px 12px;border-bottom:1px solid var(--lp-border);text-align:start}
+.ss-dt-tb thead th{position:sticky;top:0;background:var(--lp-surface);font-weight:700}
+.ss-dt-tb tbody tr:nth-child(2n){background:color-mix(in srgb,var(--lp-tint) 60%,transparent)}
+.ss-dt-n{text-align:end!important;font-variant-numeric:tabular-nums}
+.ss-dt-sort{all:unset;cursor:pointer;font-weight:700}
+.ss-dt-sort:focus-visible{outline:2px solid var(--lp-accent);outline-offset:2px}
+th[aria-sort=ascending] .ss-dt-sort::after{content:" ▲";font-size:.7em}
+th[aria-sort=descending] .ss-dt-sort::after{content:" ▼";font-size:.7em}
+`,
+  units: `
+.ss-un{padding:clamp(14px,2.4cqi,24px);border:1px solid var(--lp-border);border-radius:var(--lp-radius);background:var(--lp-surface)}
+.ss-un-t{margin:0 0 12px}
+.ss-un-row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.ss-un-f{display:flex;flex-direction:column;gap:4px;flex:1 1 160px;font-size:.88em;color:var(--lp-muted)}
+.ss-un-f .lp-input{font-size:1.1em;color:var(--lp-text)}
+.ss-un-swap{flex:none}
+.ss-un-out{margin:14px 0 0;font-family:var(--lp-font-h);font-size:1.3em;font-weight:700;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+`,
+  barcode: `
+.ss-bc{margin:0;display:inline-flex;flex-direction:column;gap:6px;align-items:center;padding:12px;border-radius:var(--lp-radius-s);background:#fff;color:#000;max-width:100%}
+.ss-bc svg{display:block;max-width:100%;height:auto}
+.ss-bc-qr svg{width:180px}
+.ss-bc-cap{font-size:.88em}
+`,
+  contract: `
+.lp-b-contract{container:ss-ct/inline-size}
+.ss-ct-t{margin:0 0 14px}
+.ss-ct-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:clamp(16px,3cqi,32px);align-items:start}
+@container ss-ct (max-width:720px){.ss-ct-grid{grid-template-columns:1fr}}
+.ss-ct-doc{padding:clamp(16px,3cqi,30px);border:1px solid var(--lp-border);border-radius:var(--lp-radius-s);background:var(--lp-surface);font-family:Georgia,"Times New Roman",serif;line-height:1.7}
+.ss-ct-slot{padding:0 .25em;border-radius:4px;background:color-mix(in srgb,var(--lp-accent) 16%,transparent);color:inherit}
+.ss-ct-slot.ss-ct-set{background:none;border-bottom:1px solid var(--lp-accent)}
+.ss-ct-tools{margin:10px 0 0}
+@media print{body.ss-ct-printing>*{display:none!important}body.ss-ct-printing>.ss-ct-print{display:block!important}}
+`,
+  account: `
+.ss-acc{max-width:440px;margin-inline:auto;padding:clamp(18px,3cqi,32px);border:1px solid var(--lp-border);border-radius:var(--lp-radius);background:var(--lp-surface);box-shadow:var(--lp-shadow)}
+.ss-acc-t{margin:0 0 16px}
+.ss-acc-form .lp-form-actions{display:flex;flex-wrap:wrap;gap:8px}
+.ss-acc-msg{margin:12px 0 0;padding:10px 12px;border-radius:var(--lp-radius-s);background:var(--lp-tint)}
+.ss-acc-msg[data-state=err]{background:color-mix(in srgb,#dc2626 14%,transparent)}
+.ss-acc-note{margin:0;color:var(--lp-muted)}
+.ss-acc-hello{margin:0 0 12px;font-weight:600}
+`,
+};
+
+const BLOCK_DEPS_E = { diagram: [], markdown: [], formula: [], booking: ['form'], event: ['form'], map: [], estate: [], donate: [], datatable: [], units: ['form'], barcode: [], contract: ['form'], account: ['form'] };
+
+const OWN_E = [
+  [/\.ss-dg/, 'diagram'], [/\.ss-md/, 'markdown'], [/\.ss-fx/, 'formula'], [/\.ss-bk/, 'booking'], [/\.ss-ev/, 'event'], [/\.ss-map/, 'map'],
+  [/\.ss-es|\.ss-chip/, 'estate'], [/\.ss-dn/, 'donate'], [/\.ss-dt/, 'datatable'], [/\.ss-un/, 'units'], [/\.ss-bc/, 'barcode'], [/\.ss-ct/, 'contract'], [/\.ss-acc/, 'account'],
+];
+
+/* ---------- viewer strings ---------- */
+
+const UI_E = {
+  en: {
+    dgSource: 'Diagram source (.mmd)',
+    bkBase: 'Per night', bkWeekend: 'Fri–Sat', bkIn: 'Check-in', bkOut: 'Check-out', bkNights: { one: '{n} night', other: '{n} nights' }, bkTotal: 'Total',
+    bkPick: 'Choose the dates of arrival and departure in the calendar.', bkBusy: 'Booked', bkFree: 'Available', bkMin: 'at least {n} nights', bkPrev: 'Previous month', bkNext: 'Next month', bkSend: 'Request booking',
+    evIcs: 'Add to calendar', evMap: 'Map', evSend: 'Send my answer',
+    mapLabel: 'Map', mapOpen: 'Open in OpenStreetMap',
+    esOnRequest: 'Price on request', esRooms: { one: '{n} room', other: '{n} rooms' }, esStudio: 'Studio', esArea: 'Area', esFloor: 'Floor', esAll: 'All', esFree: 'Available only', esPerM2: 'Per m²',
+    esShown: '{n} of {total} available', 'es.free': 'Available', 'es.reserved': 'Reserved', 'es.sold': 'Sold', 'es.closed': 'Not for sale',
+    dnRaised: 'Raised', dnOf: 'of', dnBackers: { one: '{n} supporter', other: '{n} supporters' }, dnGive: 'Support', dnScan: 'Scan to donate',
+    dtFilter: 'Filter rows…', dtDownload: 'Download CSV', dtRows: { one: '{n} row', other: '{n} rows' },
+    unValue: 'Value', unFrom: 'From', unTo: 'To', unSwap: 'Swap units',
+    ctPrint: 'Print', ctSend: 'Sign and send',
+    accEmail: 'E-mail', accPassword: 'Password', accName: 'Name', accSignIn: 'Sign in', accSignUp: 'Create account', accLink: 'Send me a sign-in link',
+    accLinkSent: 'Check your e-mail: we sent a sign-in link.', accSignOut: 'Sign out', accWrong: 'Wrong e-mail or password.', accTaken: 'This e-mail is already registered.',
+    accHello: 'Signed in as {name}', accRole: 'Role: {role}', accNoServer: 'Accounts work on the site with its server (backend export).', accNeedSign: 'Please sign in.',
+    accSave: 'Save', accSaved: 'Saved.', accOr: 'or', accForgot: 'Forgot the password?', accNewPass: 'New password', accWeak: 'The password needs at least 8 characters.',
+    accBlocked: 'This account is blocked.', accDone: 'Done.',
+  },
+  ru: {
+    dgSource: 'Исходник схемы (.mmd)',
+    bkBase: 'За ночь', bkWeekend: 'Пт–Сб', bkIn: 'Заезд', bkOut: 'Выезд', bkNights: { one: '{n} ночь', few: '{n} ночи', many: '{n} ночей', other: '{n} ночи' }, bkTotal: 'Итого',
+    bkPick: 'Выберите в календаре даты заезда и выезда.', bkBusy: 'Занято', bkFree: 'Свободно', bkMin: 'от {n} ночей', bkPrev: 'Предыдущий месяц', bkNext: 'Следующий месяц', bkSend: 'Забронировать',
+    evIcs: 'Добавить в календарь', evMap: 'Карта', evSend: 'Отправить ответ',
+    mapLabel: 'Карта', mapOpen: 'Открыть в OpenStreetMap',
+    esOnRequest: 'Цена по запросу', esRooms: { one: '{n} комната', few: '{n} комнаты', many: '{n} комнат', other: '{n} комнаты' }, esStudio: 'Студия', esArea: 'Площадь', esFloor: 'Этаж', esAll: 'Все', esFree: 'Только свободные', esPerM2: 'За м²',
+    esShown: 'Свободно {n} из {total}', 'es.free': 'Свободна', 'es.reserved': 'Бронь', 'es.sold': 'Продана', 'es.closed': 'Не продаётся',
+    dnRaised: 'Собрано', dnOf: 'из', dnBackers: { one: '{n} человек поддержал', few: '{n} человека поддержали', many: '{n} человек поддержали', other: '{n} человека поддержали' }, dnGive: 'Поддержать', dnScan: 'Отсканируйте, чтобы помочь',
+    dtFilter: 'Фильтр строк…', dtDownload: 'Скачать CSV', dtRows: { one: '{n} строка', few: '{n} строки', many: '{n} строк', other: '{n} строки' },
+    unValue: 'Значение', unFrom: 'Из', unTo: 'В', unSwap: 'Поменять единицы',
+    ctPrint: 'Печать', ctSend: 'Подписать и отправить',
+    accEmail: 'Эл. почта', accPassword: 'Пароль', accName: 'Имя', accSignIn: 'Войти', accSignUp: 'Создать аккаунт', accLink: 'Прислать ссылку для входа',
+    accLinkSent: 'Проверьте почту: мы отправили ссылку для входа.', accSignOut: 'Выйти', accWrong: 'Неверная почта или пароль.', accTaken: 'Эта почта уже зарегистрирована.',
+    accHello: 'Вы вошли как {name}', accRole: 'Роль: {role}', accNoServer: 'Учётные записи работают на сайте с сервером (экспорт backend).', accNeedSign: 'Войдите, пожалуйста.',
+    accSave: 'Сохранить', accSaved: 'Сохранено.', accOr: 'или', accForgot: 'Забыли пароль?', accNewPass: 'Новый пароль', accWeak: 'Пароль должен быть не короче 8 символов.',
+    accBlocked: 'Учётная запись заблокирована.', accDone: 'Готово.',
+  },
+  uk: {
+    dgSource: 'Вихідний код схеми (.mmd)',
+    bkBase: 'За ніч', bkWeekend: 'Пт–Сб', bkIn: 'Заїзд', bkOut: 'Виїзд', bkNights: { one: '{n} ніч', few: '{n} ночі', many: '{n} ночей', other: '{n} ночі' }, bkTotal: 'Разом',
+    bkPick: 'Оберіть у календарі дати заїзду та виїзду.', bkBusy: 'Зайнято', bkFree: 'Вільно', bkMin: 'від {n} ночей', bkPrev: 'Попередній місяць', bkNext: 'Наступний місяць', bkSend: 'Забронювати',
+    evIcs: 'Додати до календаря', evMap: 'Мапа', evSend: 'Надіслати відповідь',
+    mapLabel: 'Мапа', mapOpen: 'Відкрити в OpenStreetMap',
+    esOnRequest: 'Ціна за запитом', esRooms: { one: '{n} кімната', few: '{n} кімнати', many: '{n} кімнат', other: '{n} кімнати' }, esStudio: 'Студія', esArea: 'Площа', esFloor: 'Поверх', esAll: 'Усі', esFree: 'Лише вільні', esPerM2: 'За м²',
+    esShown: 'Вільно {n} з {total}', 'es.free': 'Вільна', 'es.reserved': 'Бронь', 'es.sold': 'Продана', 'es.closed': 'Не продається',
+    dnRaised: 'Зібрано', dnOf: 'з', dnBackers: { one: '{n} людина підтримала', few: '{n} людини підтримали', many: '{n} людей підтримали', other: '{n} людини підтримали' }, dnGive: 'Підтримати', dnScan: 'Відскануйте, щоб допомогти',
+    dtFilter: 'Фільтр рядків…', dtDownload: 'Завантажити CSV', dtRows: { one: '{n} рядок', few: '{n} рядки', many: '{n} рядків', other: '{n} рядка' },
+    unValue: 'Значення', unFrom: 'З', unTo: 'У', unSwap: 'Поміняти одиниці',
+    ctPrint: 'Друк', ctSend: 'Підписати й надіслати',
+    accEmail: 'Ел. пошта', accPassword: 'Пароль', accName: 'Ім’я', accSignIn: 'Увійти', accSignUp: 'Створити обліковий запис', accLink: 'Надіслати посилання для входу',
+    accLinkSent: 'Перевірте пошту: ми надіслали посилання для входу.', accSignOut: 'Вийти', accWrong: 'Неправильна пошта або пароль.', accTaken: 'Ця пошта вже зареєстрована.',
+    accHello: 'Ви увійшли як {name}', accRole: 'Роль: {role}', accNoServer: 'Облікові записи працюють на сайті із сервером (експорт backend).', accNeedSign: 'Будь ласка, увійдіть.',
+    accSave: 'Зберегти', accSaved: 'Збережено.', accOr: 'або', accForgot: 'Забули пароль?', accNewPass: 'Новий пароль', accWeak: 'Пароль має містити щонайменше 8 символів.',
+    accBlocked: 'Обліковий запис заблоковано.', accDone: 'Готово.',
+  },
+  de: {
+    dgSource: 'Diagrammquelle (.mmd)',
+    bkBase: 'Pro Nacht', bkWeekend: 'Fr–Sa', bkIn: 'Anreise', bkOut: 'Abreise', bkNights: { one: '{n} Nacht', other: '{n} Nächte' }, bkTotal: 'Gesamt',
+    bkPick: 'Wählen Sie An- und Abreise im Kalender.', bkBusy: 'Belegt', bkFree: 'Frei', bkMin: 'mindestens {n} Nächte', bkPrev: 'Voriger Monat', bkNext: 'Nächster Monat', bkSend: 'Buchung anfragen',
+    evIcs: 'Zum Kalender hinzufügen', evMap: 'Karte', evSend: 'Antwort senden',
+    mapLabel: 'Karte', mapOpen: 'In OpenStreetMap öffnen',
+    esOnRequest: 'Preis auf Anfrage', esRooms: { one: '{n} Zimmer', other: '{n} Zimmer' }, esStudio: 'Studio', esArea: 'Fläche', esFloor: 'Etage', esAll: 'Alle', esFree: 'Nur freie', esPerM2: 'Pro m²',
+    esShown: '{n} von {total} frei', 'es.free': 'Frei', 'es.reserved': 'Reserviert', 'es.sold': 'Verkauft', 'es.closed': 'Nicht im Verkauf',
+    dnRaised: 'Gesammelt', dnOf: 'von', dnBackers: { one: '{n} Unterstützer', other: '{n} Unterstützer' }, dnGive: 'Unterstützen', dnScan: 'Zum Spenden scannen',
+    dtFilter: 'Zeilen filtern…', dtDownload: 'CSV herunterladen', dtRows: { one: '{n} Zeile', other: '{n} Zeilen' },
+    unValue: 'Wert', unFrom: 'Von', unTo: 'Nach', unSwap: 'Einheiten tauschen',
+    ctPrint: 'Drucken', ctSend: 'Unterschreiben und senden',
+    accEmail: 'E-Mail', accPassword: 'Passwort', accName: 'Name', accSignIn: 'Anmelden', accSignUp: 'Konto erstellen', accLink: 'Anmeldelink senden',
+    accLinkSent: 'Prüfen Sie Ihre E-Mails: Wir haben einen Anmeldelink gesendet.', accSignOut: 'Abmelden', accWrong: 'Falsche E-Mail oder falsches Passwort.', accTaken: 'Diese E-Mail ist bereits registriert.',
+    accHello: 'Angemeldet als {name}', accRole: 'Rolle: {role}', accNoServer: 'Konten funktionieren auf der Website mit ihrem Server (Backend-Export).', accNeedSign: 'Bitte melden Sie sich an.',
+    accSave: 'Speichern', accSaved: 'Gespeichert.', accOr: 'oder', accForgot: 'Passwort vergessen?', accNewPass: 'Neues Passwort', accWeak: 'Das Passwort braucht mindestens 8 Zeichen.',
+    accBlocked: 'Dieses Konto ist gesperrt.', accDone: 'Erledigt.',
+  },
+  fr: {
+    dgSource: 'Source du diagramme (.mmd)',
+    bkBase: 'Par nuit', bkWeekend: 'Ven–sam', bkIn: 'Arrivée', bkOut: 'Départ', bkNights: { one: '{n} nuit', other: '{n} nuits' }, bkTotal: 'Total',
+    bkPick: 'Choisissez les dates d’arrivée et de départ dans le calendrier.', bkBusy: 'Réservé', bkFree: 'Libre', bkMin: 'au moins {n} nuits', bkPrev: 'Mois précédent', bkNext: 'Mois suivant', bkSend: 'Demander la réservation',
+    evIcs: 'Ajouter au calendrier', evMap: 'Carte', evSend: 'Envoyer ma réponse',
+    mapLabel: 'Carte', mapOpen: 'Ouvrir dans OpenStreetMap',
+    esOnRequest: 'Prix sur demande', esRooms: { one: '{n} pièce', other: '{n} pièces' }, esStudio: 'Studio', esArea: 'Surface', esFloor: 'Étage', esAll: 'Tous', esFree: 'Disponibles seulement', esPerM2: 'Par m²',
+    esShown: '{n} sur {total} disponibles', 'es.free': 'Disponible', 'es.reserved': 'Réservé', 'es.sold': 'Vendu', 'es.closed': 'Hors vente',
+    dnRaised: 'Collecté', dnOf: 'sur', dnBackers: { one: '{n} soutien', other: '{n} soutiens' }, dnGive: 'Soutenir', dnScan: 'Scannez pour donner',
+    dtFilter: 'Filtrer les lignes…', dtDownload: 'Télécharger le CSV', dtRows: { one: '{n} ligne', other: '{n} lignes' },
+    unValue: 'Valeur', unFrom: 'De', unTo: 'Vers', unSwap: 'Inverser les unités',
+    ctPrint: 'Imprimer', ctSend: 'Signer et envoyer',
+    accEmail: 'E-mail', accPassword: 'Mot de passe', accName: 'Nom', accSignIn: 'Se connecter', accSignUp: 'Créer un compte', accLink: 'M’envoyer un lien de connexion',
+    accLinkSent: 'Consultez vos e-mails : nous avons envoyé un lien de connexion.', accSignOut: 'Se déconnecter', accWrong: 'E-mail ou mot de passe incorrect.', accTaken: 'Cet e-mail est déjà inscrit.',
+    accHello: 'Connecté en tant que {name}', accRole: 'Rôle : {role}', accNoServer: 'Les comptes fonctionnent sur le site avec son serveur (export backend).', accNeedSign: 'Veuillez vous connecter.',
+    accSave: 'Enregistrer', accSaved: 'Enregistré.', accOr: 'ou', accForgot: 'Mot de passe oublié ?', accNewPass: 'Nouveau mot de passe', accWeak: 'Le mot de passe doit comporter au moins 8 caractères.',
+    accBlocked: 'Ce compte est bloqué.', accDone: 'Terminé.',
+  },
+  es: {
+    dgSource: 'Fuente del diagrama (.mmd)',
+    bkBase: 'Por noche', bkWeekend: 'Vie–sáb', bkIn: 'Llegada', bkOut: 'Salida', bkNights: { one: '{n} noche', other: '{n} noches' }, bkTotal: 'Total',
+    bkPick: 'Elija en el calendario las fechas de llegada y salida.', bkBusy: 'Reservado', bkFree: 'Libre', bkMin: 'mínimo {n} noches', bkPrev: 'Mes anterior', bkNext: 'Mes siguiente', bkSend: 'Solicitar reserva',
+    evIcs: 'Añadir al calendario', evMap: 'Mapa', evSend: 'Enviar mi respuesta',
+    mapLabel: 'Mapa', mapOpen: 'Abrir en OpenStreetMap',
+    esOnRequest: 'Precio a consultar', esRooms: { one: '{n} habitación', other: '{n} habitaciones' }, esStudio: 'Estudio', esArea: 'Superficie', esFloor: 'Planta', esAll: 'Todos', esFree: 'Solo disponibles', esPerM2: 'Por m²',
+    esShown: '{n} de {total} disponibles', 'es.free': 'Disponible', 'es.reserved': 'Reservado', 'es.sold': 'Vendido', 'es.closed': 'No a la venta',
+    dnRaised: 'Recaudado', dnOf: 'de', dnBackers: { one: '{n} donante', other: '{n} donantes' }, dnGive: 'Apoyar', dnScan: 'Escanee para donar',
+    dtFilter: 'Filtrar filas…', dtDownload: 'Descargar CSV', dtRows: { one: '{n} fila', other: '{n} filas' },
+    unValue: 'Valor', unFrom: 'De', unTo: 'A', unSwap: 'Intercambiar unidades',
+    ctPrint: 'Imprimir', ctSend: 'Firmar y enviar',
+    accEmail: 'Correo', accPassword: 'Contraseña', accName: 'Nombre', accSignIn: 'Entrar', accSignUp: 'Crear cuenta', accLink: 'Enviarme un enlace de acceso',
+    accLinkSent: 'Revise su correo: le enviamos un enlace de acceso.', accSignOut: 'Salir', accWrong: 'Correo o contraseña incorrectos.', accTaken: 'Este correo ya está registrado.',
+    accHello: 'Conectado como {name}', accRole: 'Rol: {role}', accNoServer: 'Las cuentas funcionan en el sitio con su servidor (exportación backend).', accNeedSign: 'Inicie sesión, por favor.',
+    accSave: 'Guardar', accSaved: 'Guardado.', accOr: 'o', accForgot: '¿Olvidó la contraseña?', accNewPass: 'Nueva contraseña', accWeak: 'La contraseña necesita al menos 8 caracteres.',
+    accBlocked: 'Esta cuenta está bloqueada.', accDone: 'Hecho.',
+  },
+  ka: {
+    dgSource: 'სქემის წყარო (.mmd)',
+    bkBase: 'ღამეში', bkWeekend: 'პარ–შაბ', bkIn: 'შესვლა', bkOut: 'გასვლა', bkNights: { one: '{n} ღამე', other: '{n} ღამე' }, bkTotal: 'სულ',
+    bkPick: 'აირჩიეთ კალენდარში შესვლისა და გასვლის თარიღები.', bkBusy: 'დაკავებულია', bkFree: 'თავისუფალია', bkMin: 'მინიმუმ {n} ღამე', bkPrev: 'წინა თვე', bkNext: 'შემდეგი თვე', bkSend: 'დაჯავშნის მოთხოვნა',
+    evIcs: 'კალენდარში დამატება', evMap: 'რუკა', evSend: 'პასუხის გაგზავნა',
+    mapLabel: 'რუკა', mapOpen: 'OpenStreetMap-ში გახსნა',
+    esOnRequest: 'ფასი მოთხოვნით', esRooms: { one: '{n} ოთახი', other: '{n} ოთახი' }, esStudio: 'სტუდიო', esArea: 'ფართობი', esFloor: 'სართული', esAll: 'ყველა', esFree: 'მხოლოდ თავისუფალი', esPerM2: 'მ²-ზე',
+    esShown: 'თავისუფალია {n} / {total}', 'es.free': 'თავისუფალი', 'es.reserved': 'დაჯავშნილი', 'es.sold': 'გაყიდული', 'es.closed': 'არ იყიდება',
+    dnRaised: 'შეგროვდა', dnOf: '-დან', dnBackers: { one: '{n} მხარდამჭერი', other: '{n} მხარდამჭერი' }, dnGive: 'მხარდაჭერა', dnScan: 'დაასკანერეთ შემოწირულობისთვის',
+    dtFilter: 'სტრიქონების ფილტრი…', dtDownload: 'CSV-ის ჩამოტვირთვა', dtRows: { one: '{n} სტრიქონი', other: '{n} სტრიქონი' },
+    unValue: 'მნიშვნელობა', unFrom: 'დან', unTo: 'ში', unSwap: 'ერთეულების გაცვლა',
+    ctPrint: 'ბეჭდვა', ctSend: 'ხელმოწერა და გაგზავნა',
+    accEmail: 'ელფოსტა', accPassword: 'პაროლი', accName: 'სახელი', accSignIn: 'შესვლა', accSignUp: 'ანგარიშის შექმნა', accLink: 'შესვლის ბმულის გამოგზავნა',
+    accLinkSent: 'შეამოწმეთ ელფოსტა: გამოგიგზავნეთ შესვლის ბმული.', accSignOut: 'გასვლა', accWrong: 'ელფოსტა ან პაროლი არასწორია.', accTaken: 'ეს ელფოსტა უკვე რეგისტრირებულია.',
+    accHello: 'შესული ხართ როგორც {name}', accRole: 'როლი: {role}', accNoServer: 'ანგარიშები მუშაობს საიტზე სერვერით (backend ექსპორტი).', accNeedSign: 'გთხოვთ, შეხვიდეთ.',
+    accSave: 'შენახვა', accSaved: 'შენახულია.', accOr: 'ან', accForgot: 'დაგავიწყდათ პაროლი?', accNewPass: 'ახალი პაროლი', accWeak: 'პაროლი უნდა იყოს მინიმუმ 8 სიმბოლო.',
+    accBlocked: 'ეს ანგარიში დაბლოკილია.', accDone: 'მზადაა.',
+  },
+};
+
+// Edit-mode placeholders (phe.*).
+const PHE = {
+  en: { caption: 'Caption', diagram: 'Write the diagram in the block settings', markdown: 'Write Markdown in the block settings', formula: 'Write formulas in the block settings',
+    bookTitle: 'Book your stay', bookCal: 'Calendar of free dates and prices (on the published page)', evTitle: 'Event name', evText: 'About the event', evPlace: 'Venue',
+    rsvpTitle: 'Will you come?', mapTitle: 'Map title', mapPoints: 'Add points with latitude and longitude', esTitle: 'Available units', dnTitle: 'Support us', dnText: 'What the money is for',
+    dtTitle: 'Table title', dtCsv: 'Paste CSV data in the block settings', unTitle: 'Converter title', barcode: 'Enter the value of the code', ctTitle: 'Contract title',
+    ctBody: 'Write the contract text in the block settings', accTitle: 'Title' },
+  ru: { caption: 'Подпись', diagram: 'Напишите схему в настройках блока', markdown: 'Напишите Markdown в настройках блока', formula: 'Напишите формулы в настройках блока',
+    bookTitle: 'Забронируйте проживание', bookCal: 'Календарь свободных дат и цен (на опубликованной странице)', evTitle: 'Название события', evText: 'О событии', evPlace: 'Место',
+    rsvpTitle: 'Вы придёте?', mapTitle: 'Заголовок карты', mapPoints: 'Добавьте точки с широтой и долготой', esTitle: 'Свободные объекты', dnTitle: 'Поддержите нас', dnText: 'На что пойдут деньги',
+    dtTitle: 'Заголовок таблицы', dtCsv: 'Вставьте данные CSV в настройках блока', unTitle: 'Заголовок конвертера', barcode: 'Введите значение кода', ctTitle: 'Название договора',
+    ctBody: 'Напишите текст договора в настройках блока', accTitle: 'Заголовок' },
+  uk: { caption: 'Підпис', diagram: 'Напишіть схему в налаштуваннях блоку', markdown: 'Напишіть Markdown у налаштуваннях блоку', formula: 'Напишіть формули в налаштуваннях блоку',
+    bookTitle: 'Забронюйте проживання', bookCal: 'Календар вільних дат і цін (на опублікованій сторінці)', evTitle: 'Назва події', evText: 'Про подію', evPlace: 'Місце',
+    rsvpTitle: 'Ви прийдете?', mapTitle: 'Заголовок мапи', mapPoints: 'Додайте точки з широтою та довготою', esTitle: 'Вільні об’єкти', dnTitle: 'Підтримайте нас', dnText: 'На що підуть гроші',
+    dtTitle: 'Заголовок таблиці', dtCsv: 'Вставте дані CSV у налаштуваннях блоку', unTitle: 'Заголовок конвертера', barcode: 'Введіть значення коду', ctTitle: 'Назва договору',
+    ctBody: 'Напишіть текст договору в налаштуваннях блоку', accTitle: 'Заголовок' },
+  de: { caption: 'Bildunterschrift', diagram: 'Schreiben Sie das Diagramm in die Blockeinstellungen', markdown: 'Schreiben Sie Markdown in die Blockeinstellungen', formula: 'Schreiben Sie Formeln in die Blockeinstellungen',
+    bookTitle: 'Aufenthalt buchen', bookCal: 'Kalender freier Tage und Preise (auf der veröffentlichten Seite)', evTitle: 'Name der Veranstaltung', evText: 'Über die Veranstaltung', evPlace: 'Ort',
+    rsvpTitle: 'Kommen Sie?', mapTitle: 'Kartentitel', mapPoints: 'Fügen Sie Punkte mit Breite und Länge hinzu', esTitle: 'Freie Einheiten', dnTitle: 'Unterstützen Sie uns', dnText: 'Wofür das Geld ist',
+    dtTitle: 'Tabellentitel', dtCsv: 'Fügen Sie CSV-Daten in die Blockeinstellungen ein', unTitle: 'Titel des Rechners', barcode: 'Geben Sie den Wert des Codes ein', ctTitle: 'Vertragstitel',
+    ctBody: 'Schreiben Sie den Vertragstext in die Blockeinstellungen', accTitle: 'Titel' },
+  fr: { caption: 'Légende', diagram: 'Écrivez le diagramme dans les réglages du bloc', markdown: 'Écrivez le Markdown dans les réglages du bloc', formula: 'Écrivez les formules dans les réglages du bloc',
+    bookTitle: 'Réservez votre séjour', bookCal: 'Calendrier des dates libres et des prix (sur la page publiée)', evTitle: 'Nom de l’événement', evText: 'À propos de l’événement', evPlace: 'Lieu',
+    rsvpTitle: 'Viendrez-vous ?', mapTitle: 'Titre de la carte', mapPoints: 'Ajoutez des points avec latitude et longitude', esTitle: 'Biens disponibles', dnTitle: 'Soutenez-nous', dnText: 'À quoi sert l’argent',
+    dtTitle: 'Titre du tableau', dtCsv: 'Collez les données CSV dans les réglages du bloc', unTitle: 'Titre du convertisseur', barcode: 'Saisissez la valeur du code', ctTitle: 'Titre du contrat',
+    ctBody: 'Écrivez le texte du contrat dans les réglages du bloc', accTitle: 'Titre' },
+  es: { caption: 'Pie', diagram: 'Escriba el diagrama en los ajustes del bloque', markdown: 'Escriba Markdown en los ajustes del bloque', formula: 'Escriba las fórmulas en los ajustes del bloque',
+    bookTitle: 'Reserve su estancia', bookCal: 'Calendario de fechas libres y precios (en la página publicada)', evTitle: 'Nombre del evento', evText: 'Sobre el evento', evPlace: 'Lugar',
+    rsvpTitle: '¿Vendrá?', mapTitle: 'Título del mapa', mapPoints: 'Añada puntos con latitud y longitud', esTitle: 'Inmuebles disponibles', dnTitle: 'Apóyenos', dnText: 'Para qué es el dinero',
+    dtTitle: 'Título de la tabla', dtCsv: 'Pegue datos CSV en los ajustes del bloque', unTitle: 'Título del conversor', barcode: 'Introduzca el valor del código', ctTitle: 'Título del contrato',
+    ctBody: 'Escriba el texto del contrato en los ajustes del bloque', accTitle: 'Título' },
+  ka: { caption: 'წარწერა', diagram: 'დაწერეთ სქემა ბლოკის პარამეტრებში', markdown: 'დაწერეთ Markdown ბლოკის პარამეტრებში', formula: 'დაწერეთ ფორმულები ბლოკის პარამეტრებში',
+    bookTitle: 'დაჯავშნეთ ბინა', bookCal: 'თავისუფალი დღეებისა და ფასების კალენდარი (გამოქვეყნებულ გვერდზე)', evTitle: 'ღონისძიების სახელი', evText: 'ღონისძიების შესახებ', evPlace: 'ადგილი',
+    rsvpTitle: 'მოხვალთ?', mapTitle: 'რუკის სათაური', mapPoints: 'დაამატეთ წერტილები განედითა და გრძედით', esTitle: 'თავისუფალი ობიექტები', dnTitle: 'მხარი დაგვიჭირეთ', dnText: 'რისთვის არის ფული',
+    dtTitle: 'ცხრილის სათაური', dtCsv: 'ჩასვით CSV მონაცემები ბლოკის პარამეტრებში', unTitle: 'გადამყვანის სათაური', barcode: 'შეიყვანეთ კოდის მნიშვნელობა', ctTitle: 'ხელშეკრულების სათაური',
+    ctBody: 'დაწერეთ ხელშეკრულების ტექსტი ბლოკის პარამეტრებში', accTitle: 'სათაური' },
+};
+for (const [l, m] of Object.entries(PHE)) for (const [k, v] of Object.entries(m)) UI_E[l]['phe.' + k] = v;
+
+export { BLOCK_DEPS_E, BT_E, CSS_BLOCKS_E, OWN_E, UI_E, nightPrice, bookedRanges, seasonList };

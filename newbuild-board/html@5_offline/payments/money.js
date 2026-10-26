@@ -1,0 +1,4 @@
+const EXP={BIF:0,CLP:0,DJF:0,GNF:0,ISK:0,JPY:0,KMF:0,KRW:0,PYG:0,RWF:0,UGX:0,UYI:0,VND:0,VUV:0,XAF:0,XOF:0,XPF:0,XAU:0,XAG:0,XPT:0,XPD:0,XDR:0,BHD:3,IQD:3,JOD:3,KWD:3,LYD:3,OMR:3,TND:3,CLF:4,UYW:4,};const COMMON_CURRENCIES=['EUR','USD','GBP','GEL','CHF','PLN','CZK','SEK','NOK','DKK','UAH','TRY','AMD','AZN','KZT','CAD','AUD','JPY'];function minorUnits(cur){const c=String(cur||'').toUpperCase();return Object.prototype.hasOwnProperty.call(EXP,c)?EXP[c]:2;}
+function toMinor(n,cur,digits){const d=digits==null?minorUnits(cur):digits;const v=Number(n);if(!Number.isFinite(v))return 0;const neg=v<0;const[ip,fp='']=Math.abs(v).toFixed(Math.min(20,d+4)).split('.');const frac=(fp+'0'.repeat(d+1)).slice(0,d+1);let i=Number(ip)*10**d+(d?Number(frac.slice(0,d)):0);if(Number(frac[d])>=5)i+=1;return neg?-i:i;}
+function fromMinor(i,cur,digits){const d=digits==null?minorUnits(cur):digits;return Number(i)/10**d;}
+export{toMinor,fromMinor,minorUnits,COMMON_CURRENCIES};

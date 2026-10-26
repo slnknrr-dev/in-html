@@ -1,0 +1,222 @@
+/* crypto-tool/tools.css — styles of the crypto tools pages (overview, hashing, encryption, encoding, passwords).
+   Loaded after ui/base.css + ui/app.css by every page of this folder.
+   
+   CONTRACT
+   - Namespace ct-. Shared ed- / ap- primitives are extended only in context (.ct-chips .ed-chip, .ap-card .ct-grid2 >
+     .ed-field), never redefined globally.
+   - Specificity budget: one or two classes. Attribute selectors [data-q] / [data-p] are (0,1,0) like a class: they only
+     set custom properties, the colour is consumed elsewhere through var(), so their order does not matter.
+   - Colours via --ed-* tokens; the strength palette (--ct-q-*) and the zxcvbn pattern palette (--ct-p-*) are declared on
+     :root with dark variants (media query guarded by :not([data-theme="light"]) and explicit [data-theme="dark"]).
+   - No !important.
+   - Hashes, keys and passwords are shown in monospace with word-break:break-all (they have no word boundaries) and
+     user-select:all where one click should select the whole value for copying. */
+
+.ct-tabs { margin-bottom: 2px; }
+.ct-tabs .ed-seg-btn { min-height: 32px; padding: 0 14px; font-size: 13px; }
+.ct-panel { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+/* Algorithm chips grouped by family */
+.ct-group + .ct-group { margin-top: 10px; }
+.ct-group-h { margin: 0 0 5px; font-size: 11px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--ed-faint); }
+.ct-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.ct-chips .ed-chip { height: 28px; }
+/* Toggle state from aria-pressed: the accessible state is the styling hook, so the two can never disagree. */
+.ct-chips .ed-chip[aria-pressed="true"] { background: var(--ed-accent-weak); border-color: var(--ed-accent); color: var(--ed-accent); }
+.ct-chip-note { margin-left: 4px; font-size: 10px; opacity: .75; }
+
+/* Digest tables */
+/* table-layout:fixed: column widths come from the first row/CSS, not from a 128-hex-digit digest that would widen the table. */
+.ct-table { table-layout: fixed; }
+.ct-table td { vertical-align: middle; }
+.ct-table .ct-algo { width: 130px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ct-table .ct-act { width: 40px; text-align: right; padding-left: 0; }
+/* Digests break anywhere (no spaces) and select whole on click (user-select:all). */
+.ct-digest { font: 12.5px/1.45 var(--ed-mono); word-break: break-all; user-select: all; }
+/* Matching row (expected checksum) tinted green: color-mix keeps the tint relative to the theme ok colour. */
+.ct-table tr.ct-match td { background: color-mix(in srgb, var(--ed-ok) 14%, transparent); }
+.ct-table tr.ct-match .ct-algo { color: var(--ed-ok); }
+.ct-muted-row td { color: var(--ed-muted); }
+
+/* Status badges */
+.ct-status { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.ct-status .ed-ic, .ct-status svg { width: 14px; height: 14px; }
+.ct-ok { color: var(--ed-ok); background: color-mix(in srgb, var(--ed-ok) 14%, transparent); }
+.ct-bad { color: var(--ed-danger); background: var(--ed-danger-weak); }
+.ct-wait { color: var(--ed-muted); background: var(--ed-hover); }
+.ct-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 24px; font-size: 13px; }
+.ct-line .ed-ic { color: var(--ed-muted); }
+
+/* Files */
+.ct-file { display: flex; flex-direction: column; gap: 10px; }
+/* Adjacent-sibling separator: no border on the first file, no :first-child override needed. */
+.ct-file + .ct-file { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--ed-border); }
+.ct-file-h { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ct-file-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-file-meta { color: var(--ed-muted); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ct-file-h .ed-spacer { flex: 1 1 auto; }
+
+/* Inputs and outputs */
+.ct-area { width: 100%; min-height: 140px; font: 13px/1.5 var(--ed-mono); white-space: pre-wrap; word-break: break-all; }
+.ct-area.ct-tall { min-height: 200px; }
+.ct-out { background: var(--ed-panel-2); }
+.ct-mono-in { font-family: var(--ed-mono); font-size: 12.5px; }
+.ct-key-row { display: flex; gap: 6px; align-items: center; }
+.ct-key-row > .ed-input { flex: 1 1 auto; font-family: var(--ed-mono); font-size: 12.5px; }
+.ct-pw-row { display: flex; gap: 4px; align-items: center; }
+.ct-pw-row > .ed-input { flex: 1 1 auto; }
+/* Two equal columns; collapses to one below 520px (media query at the end). */
+.ct-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ct-grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.ct-card-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.ct-card-row .ap-card-h { margin: 0; }
+
+/* Password hint of the encryption page */
+.ct-meter-l { margin-top: 4px; font-size: 12px; color: var(--ed-muted); }
+
+/* Generator output */
+.ct-gen-out { display: flex; gap: 6px; align-items: stretch; }
+.ct-gen-out > output { flex: 1 1 auto; min-width: 0; padding: 8px 10px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel-2);
+  font: 14px/1.45 var(--ed-mono); word-break: break-all; user-select: all; }
+
+/* Hub */
+/* Overview tiles: auto-fit + minmax(280px, 1fr) — as many tiles per row as fit. */
+.ct-hub { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 16px; }
+.ct-tile {
+  display: flex; flex-direction: column; gap: 8px; padding: 18px 20px; border-radius: 16px; text-decoration: none; color: inherit;
+  background: var(--ed-panel); border: 1px solid var(--ed-border); box-shadow: var(--ed-shadow-sm); transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+.ct-tile:hover { border-color: var(--ed-accent); box-shadow: var(--ed-shadow); transform: translateY(-1px); }
+.ct-tile h2 { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 18px; }
+.ct-tile h2 .ed-ic, .ct-tile h2 svg { width: 22px; height: 22px; color: var(--ed-accent); }
+.ct-tile p { margin: 0; color: var(--ed-muted); }
+/* margin-top:auto pushes the "Open" link to the bottom of equal-height tiles (flex column). */
+.ct-tile .ct-go { margin-top: auto; color: var(--ed-accent); font-weight: 600; }
+.ct-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.ct-tag { padding: 2px 8px; border-radius: 999px; background: var(--ed-hover); font-size: 12px; white-space: nowrap; }
+.ct-tag-weak { color: var(--ed-muted); }
+
+/* Encoding page */
+.ct-enc-file { padding: 10px 12px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel-2); }
+.ct-enc-select { width: auto; min-width: 200px; max-width: 100%; }
+.ct-enc-opts { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 16px; align-items: start; }
+/* Fields in a grid are spaced by the grid gap; the shared card rule adds margin-top between fields, cancelled here. */
+.ap-card .ct-enc-opts > .ed-field { margin-top: 0; }
+.ct-facts { margin-bottom: 8px; }
+.ct-link { padding: 0; border: 0; background: none; color: var(--ed-accent); font: inherit; font-weight: 600; text-align: start; cursor: pointer; }
+.ct-link:hover { text-decoration: underline; }
+.ct-exact { display: inline-block; margin-inline-start: 6px; padding: 0 6px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  color: var(--ed-ok); background: color-mix(in srgb, var(--ed-ok) 14%, transparent); }
+.ct-enc-table .ct-algo, .ct-enc-table .ct-col-name { width: 170px; }
+.ct-enc-table .ct-algo { white-space: normal; }
+.ct-enc-table .ct-col-act { width: 40px; }
+.ct-enc-table .ct-col-size { width: 90px; }
+.ct-enc-table .ct-size { width: 90px; text-align: end; white-space: nowrap; color: var(--ed-muted); font-variant-numeric: tabular-nums; }
+.ct-group-row th { padding-top: 14px; font-size: 11px; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; color: var(--ed-faint); text-align: start; }
+.ct-digest.ct-muted { color: var(--ed-muted); font-family: inherit; user-select: text; }
+
+/* Narrow screens: the input comes before the settings on the hashing page. */
+/* Hashing page on narrow screens: input first, settings after (order on the side column). */
+@media (max-width: 860px) { .ct-stage-first > .ap-side { order: 2; } }
+
+@media (max-width: 520px) {
+  .ct-grid2, .ct-grid3 { grid-template-columns: minmax(0, 1fr); }
+  .ct-table .ct-algo { width: 96px; }
+  .ct-enc-table .ct-algo, .ct-enc-table .ct-col-name { width: 112px; }
+  .ct-enc-table .ct-size, .ct-enc-table .ct-col-size { width: 64px; }
+  .ct-tabs { display: flex; width: 100%; }
+  .ct-tabs .ed-seg-btn { padding: 0 8px; }
+}
+
+/* Fields inside flex / grid containers are spaced by the container (app.css adds margins between card fields). */
+.ap-card .ed-fields > .ed-field + .ed-field, .ap-card .ct-grid2 > .ed-field, .ap-card .ct-grid3 > .ed-field { margin-top: 0; }
+.ct-key-row .ed-seg { flex: none; flex-wrap: nowrap; }
+
+/* Strength colours: KeePassXC's quality levels (bad and poor red, weak orange, good and excellent green) and the
+   match patterns of the checker. */
+:root {
+  --ct-q-bad: var(--ed-danger); --ct-q-poor: var(--ed-danger); --ct-q-weak: var(--ed-warn); --ct-q-good: #65a30d; --ct-q-excellent: var(--ed-ok);
+  --ct-p-dictionary: #2563eb; --ct-p-spatial: #9333ea; --ct-p-repeat: #c2410c; --ct-p-sequence: #0f766e; --ct-p-regex: #be185d; --ct-p-date: #be185d; --ct-p-bruteforce: #6b7280;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --ct-q-good: #a3e635; --ct-p-dictionary: #7aa2ff; --ct-p-spatial: #c084fc; --ct-p-repeat: #fb923c; --ct-p-sequence: #2dd4bf; --ct-p-regex: #f472b6; --ct-p-date: #f472b6; --ct-p-bruteforce: #9aa3b2; }
+}
+:root[data-theme="dark"] { --ct-q-good: #a3e635; --ct-p-dictionary: #7aa2ff; --ct-p-spatial: #c084fc; --ct-p-repeat: #fb923c; --ct-p-sequence: #2dd4bf; --ct-p-regex: #f472b6; --ct-p-date: #f472b6; --ct-p-bruteforce: #9aa3b2; }
+/* Quality level -> one variable --ct-q-c; meters, labels and estimates all read it. bad and poor share red, as KeePassXC. */
+[data-q="bad"] { --ct-q-c: var(--ct-q-bad); } [data-q="poor"] { --ct-q-c: var(--ct-q-poor); } [data-q="weak"] { --ct-q-c: var(--ct-q-weak); }
+[data-q="good"] { --ct-q-c: var(--ct-q-good); } [data-q="excellent"] { --ct-q-c: var(--ct-q-excellent); }
+
+/* KeePassXC-style meter (0..200 bits, marks at 40 / 75 / 100) */
+.ct-sm { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.ct-sm-bar { position: relative; height: 8px; border-radius: 999px; background: var(--ed-border); overflow: hidden; }
+/* Filled part: width set inline (percent of 0..200 bits); colour from the quality variable with the accent as fallback. */
+.ct-sm-bar > i { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--ct-q-c, var(--ed-accent)); transition: width .15s; }
+/* Threshold marks at 40/75/100 bits (left = bits / 2 %), drawn in the panel colour as gaps in the bar. */
+.ct-sm-bar > b { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--ed-panel); opacity: .85; }
+.ct-sm-text { display: flex; align-items: baseline; gap: 4px 16px; flex-wrap: wrap; }
+.ct-sm-bits { font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.ct-q { font-size: 13px; font-weight: 650; color: var(--ct-q-c); }
+.ct-sm .ed-hint { margin: 0; }
+
+/* Passwords page: settings | generated + checker; narrow screens: generated, settings, checker. */
+/* Passwords page: named grid areas so the narrow layout can reorder (generated output first) without touching the DOM order. */
+.ct-pw { display: grid; grid-template-columns: minmax(290px, 360px) minmax(0, 1fr); grid-template-areas: "set out" "set chk"; gap: 18px; align-items: start; }
+.ct-pw-set { grid-area: set; }
+.ct-pw-out { grid-area: out; }
+.ct-pw-chk { grid-area: chk; }
+@media (max-width: 860px) { .ct-pw { grid-template-columns: minmax(0, 1fr); grid-template-areas: "out" "set" "chk"; } }
+.ct-wideseg { display: flex; width: 100%; margin-bottom: 12px; }
+.ct-wideseg .ed-seg-btn { flex: 1 1 0; }
+.ct-rangenum { display: flex; align-items: center; gap: 10px; }
+.ct-rangenum .ed-range { flex: 1 1 auto; }
+.ct-num { width: 72px; flex: none; font-variant-numeric: tabular-nums; }
+.ct-gchip { font-family: var(--ed-mono); font-size: 12.5px; height: 30px; }
+.ct-own { min-height: 90px; font: 12.5px/1.45 var(--ed-mono); }
+.ct-sep { max-width: 120px; }
+.ct-pw-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.ct-count { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ed-muted); }
+.ct-pw-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 420px; overflow: auto; }
+.ct-pw-item { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ct-pw-val { flex: 1 1 auto; min-width: 0; padding: 6px 10px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel-2);
+  font: 13.5px/1.45 var(--ed-mono); word-break: break-all; user-select: all; }
+.ct-pw-one .ct-pw-val { padding: 10px 12px; font-size: 17px; }
+.ct-est { flex: none; min-width: 64px; text-align: end; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--ed-muted); }
+.ct-est[data-q] { color: var(--ct-q-c); }
+.ct-err { color: var(--ed-danger); }
+.ct-err .ed-ic { color: var(--ed-danger); }
+
+/* Checker */
+.ct-chk { display: flex; flex-direction: column; gap: 12px; }
+.ct-chk-empty { padding: 18px 12px; }
+.ct-fb { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: var(--ed-radius-sm); background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.ct-warn { font-weight: 600; color: var(--ed-text); }
+.ct-warn .ed-ic { color: var(--ed-warn); }
+.ct-sugg { margin: 0; padding-inline-start: 20px; font-size: 13px; color: var(--ed-muted); }
+.ct-sub { margin: 4px 0 0; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-muted); }
+.ct-decomp { display: flex; flex-wrap: wrap; gap: 4px 2px; }
+/* zxcvbn match token: tint and underline in the pattern colour (--ct-p from the data-p attribute). */
+.ct-m { display: inline-flex; flex-direction: column; align-items: stretch; min-width: 0; max-width: 100%; border-radius: 6px 6px 0 0;
+  background: color-mix(in srgb, var(--ct-p) 13%, transparent); border-bottom: 3px solid var(--ct-p); }
+.ct-m-t { padding: 3px 6px 1px; font: 15px/1.4 var(--ed-mono); white-space: pre-wrap; word-break: break-all; }
+.ct-m-l { padding: 0 6px 2px; font-size: 10.5px; font-weight: 600; color: var(--ct-p); white-space: nowrap; }
+/* Pattern kind -> --ct-p, consumed by .ct-m, .ct-m-l and .ct-dot. */
+[data-p="dictionary"] { --ct-p: var(--ct-p-dictionary); } [data-p="spatial"] { --ct-p: var(--ct-p-spatial); } [data-p="repeat"] { --ct-p: var(--ct-p-repeat); }
+[data-p="sequence"] { --ct-p: var(--ct-p-sequence); } [data-p="regex"] { --ct-p: var(--ct-p-regex); } [data-p="date"] { --ct-p: var(--ct-p-date); }
+[data-p="bruteforce"] { --ct-p: var(--ct-p-bruteforce); }
+.ct-dot { display: inline-block; width: 9px; height: 9px; margin-inline-end: 6px; border-radius: 50%; background: var(--ct-p); }
+.ct-mtable { max-height: none; }
+.ct-mtable td { vertical-align: middle; }
+.ct-mtable .ct-digest { user-select: text; }
+.ct-numcell { text-align: end; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ct-about { font-size: 13px; color: var(--ed-muted); }
+.ct-about summary { cursor: pointer; font-weight: 600; color: var(--ed-text); }
+.ct-about p { margin: 6px 0 0; }
+.ed-hint > .ed-ic, .ed-hint > svg { width: 14px; height: 14px; vertical-align: -2px; }
+.ct-times { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; }
+.ct-times dd { font-weight: 600; text-align: end; }
+@media (max-width: 520px) {
+  .ct-pw-one .ct-pw-val { font-size: 15px; }
+  .ct-est { min-width: 0; }
+  .ct-mtable .ap-table th, .ct-mtable .ap-table td { padding: 6px 7px; }
+  .ct-mtable .ap-table th:nth-child(2), .ct-mtable .ap-table td:nth-child(2) { display: none; }
+}

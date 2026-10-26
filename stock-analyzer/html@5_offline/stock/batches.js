@@ -1,0 +1,8 @@
+import{daysBetween}from"./calendar.js";const EPS=1e-9;const q6=(x)=>Math.round(x*1e6)/1e6;const cmp=(a,b)=>(a==null&&b==null?0:a==null?1:b==null?-1:a<b?-1:a>b?1:0);const fefoOrder=(x,y)=>cmp(x.expires,y.expires)||cmp(x.received,y.received);const daysLeft=(expires,today)=>(expires?daysBetween(today,expires):null);function batchState(expires,today,warnDays=3){const left=daysLeft(expires,today);if(left==null)return null;return left<0?'expired':left<=warnDays?'expiring':'ok';}
+const MARKDOWN_DEFAULTS=[{days:3,pct:20},{days:1,pct:50}];function markdownRule(left,rules=MARKDOWN_DEFAULTS){if(left==null||left<0)return null;return[...rules].sort((x,y)=>x.days-y.days).find((r)=>left<=r.days)??null;}
+function markdownFor(batches,rules,today){const b=batches.filter((x)=>x.qty>EPS&&x.expires).sort(fefoOrder)[0];if(!b)return null;const left=daysLeft(b.expires,today);if(left<0)return{batch:b.batch,expires:b.expires,daysLeft:left,pct:0,expired:true};const rule=markdownRule(left,rules);return rule?{batch:b.batch,expires:b.expires,daysLeft:left,pct:rule.pct}:null;}
+function markdownPrice(price,pct){if(!pct)return price;const scaled=Math.round(pct*10000);const v=price*(1_000_000-scaled);return Math.sign(v)*Math.round(Math.abs(v)/1_000_000);}
+function writeOffExpired(batches,today){const written=batches.filter((b)=>b.qty>EPS&&b.expires&&daysLeft(b.expires,today)<0);return{batches:batches.filter((b)=>!written.includes(b)),written,qty:q6(written.reduce((t,b)=>t+b.qty,0))};}
+function expirySummary(batches,today,warnDays=3){const s={ok:0,expiring:0,expired:0,none:0};for(const b of batches){const k=batchState(b.expires,today,warnDays)??'none';s[k]=q6(s[k]+b.qty);}
+return s;}
+export{writeOffExpired,daysLeft,markdownFor,markdownPrice,expirySummary};

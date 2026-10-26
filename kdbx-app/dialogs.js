@@ -1,0 +1,220 @@
+// kdbx-app/dialogs.js - dialogs of the vault: database settings (metadata, encryption, key derivation, master key), move to
+// group (a group, an entry or several entries), duplicate entries (KeePass options), entry history, attachment viewer,
+// busy overlay. The password generator is generator.js, the icon picker iconpicker.js.
+import { button, download, field, select, t, textInput, toast, toggle } from '../ui/app.js';
+import { h, lsGet, lsSet } from '../ui/dom.js';
+import { iconEl } from '../ui/icons.js';
+import { openDialog } from '../ui/overlays.js';
+import { pickFiles } from '../ui/files.js';
+import { KdbxCredentials, KdbxGroup, generateKeyFile } from '../kdbx/kdbx.js';
+import { bytesToUtf8 } from '../crypto/encoding.js';
+import { S, flatGroups, fmtDate, fmtSize, markDirty } from './state.js';
+import { secretInput } from './lock.js';
+import { strengthView } from './generator.js';
+
+// --- move ------------------------------------------------------------------------------------------------------
+
+// A group, an entry or several entries (array) to a group picked from the tree (a group cannot go into itself).
+// Resolves with the number of moved items.
+export async function moveDialog(items) {
+  const list = (Array.isArray(items) ? items : [items]).filter((x) => x.parent);
+  if (!list.length) return 0;
+  const db = S.db;
+  const group = list.length === 1 && list[0] instanceof KdbxGroup ? list[0] : null;
+  const groups = flatGroups(db, group).filter(({ g }) => !group || g !== group.parent);
+  if (!groups.length) return 0;
+  const from = list[0].parent;
+  let target = groups.some(({ g }) => g === from) ? from.uuid : groups[0].g.uuid;
+  const sel = select(groups.map(({ g, depth }) => ({ v: g.uuid, l: '=' + '\u2003'.repeat(depth) + (g.parent ? g.name : g.name || t('kx.root')) })), target, (v) => { target = v; });
+  const title = list.length > 1 ? t('kx.moveTitleN', { n: list.length }) : t('kx.moveTitle', { name: group ? group.name : list[0].get('Title') || t('kx.noTitle') });
+  const r = await openDialog({ title, body: field('kx.target', sel), buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('kx.move'), value: 'ok', primary: true }] });
+  if (r !== 'ok') return 0;
+  const to = db.getGroup(target);
+  if (!to) return 0;
+  let n = 0;
+  for (const it of list) {
+    if (it.parent === to) continue;
+    try { db.move(it, to); n++; } catch (e) { toast(e.message, 'error'); }
+  }
+  if (n) { markDirty(); toast(t('kx.movedN', { n, name: to.name || t('kx.root') }), 'ok'); }
+  return n;
+}
+
+// --- duplicate -------------------------------------------------------------------------------------------------------
+
+const DUP_KEY = 'kdbx-vault-dup';
+// KeePass's "Duplicate entry" options (remembered): title suffix, user name and password as field references to the
+// original, copy the history. Resolves with the copies (each placed after its original) or null.
+export async function duplicateDialog(entries) {
+  const o = { suffix: true, references: false, history: false, ...(lsGet(DUP_KEY, {}) || {}) };
+  const body = h('div', { class: 'ed-fields' },
+    field('kx.dup.suffixL', toggle(!!o.suffix, (v) => { o.suffix = v; })),
+    field('kx.dup.refs', toggle(!!o.references, (v) => { o.references = v; }), 'kx.dup.refsHint'),
+    field('kx.dup.history', toggle(!!o.history, (v) => { o.history = v; })));
+  const r = await openDialog({
+    title: entries.length > 1 ? t('kx.dup.titleN', { n: entries.length }) : t('kx.dup.title'), body,
+    buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('kx.duplicate'), value: 'ok', primary: true }],
+  });
+  if (r !== 'ok') return null;
+  lsSet(DUP_KEY, { suffix: !!o.suffix, references: !!o.references, history: !!o.history });
+  const copies = entries.map((e) => S.db.duplicateEntry(e, { suffix: o.suffix ? t('kx.dup.suffix') : '', references: !!o.references, history: !!o.history }));
+  markDirty();
+  return copies;
+}
+
+// --- history ----------------------------------------------------------------------------------------------------
+
+export async function historyDialog(entry) {
+  const db = S.db;
+  const list = h('div', { class: 'kx-history' });
+  let close = null;
+  const paint = () => {
+    list.textContent = '';
+    if (!entry.history.length) { list.append(h('div', { class: 'ap-empty' }, t('kx.noHistory'))); return; }
+    [...entry.history].reverse().forEach((old) => {
+      const fields = h('dl', { class: 'ap-kv', hidden: true }, [...old.fields].flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, typeof v === 'string' ? v : '••••••')]));
+      list.append(h('div', { class: 'kx-hist-item' },
+        h('div', { class: 'kx-hist-h' }, iconEl('clock'), h('strong', {}, fmtDate(old.times.lastModification)), h('span', { class: 'ed-muted kx-ellipsis' }, old.get('Title')),
+          h('span', { class: 'ed-spacer' }),
+          h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => { fields.hidden = !fields.hidden; } }, t('kx.show')),
+          h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => {
+            entry.pushHistory(db);
+            entry.fields = new Map([...old.fields].map(([k, v]) => [k, typeof v === 'string' ? v : v.clone()]));
+            entry.binaries = new Map(old.binaries);
+            entry.tags = [...old.tags];
+            entry.times.touch();
+            markDirty();
+            toast(t('kx.restored'), 'ok');
+            if (close) close('restored');
+          } }, t('kx.restore'))),
+        fields));
+    });
+  };
+  paint();
+  return openDialog({ title: t('kx.historyTitle', { n: entry.history.length }), body: list, wide: true, onMount: ({ close: c }) => { close = c; } });
+}
+
+// --- attachments ------------------------------------------------------------------------------------------------
+
+const IMG = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', svg: 'image/svg+xml', ico: 'image/x-icon' };
+// Raster images preview through a blob URL in <img>; SVG is deliberately not previewed as an image (shown as text
+// instead): attachments come from untrusted databases and SVG is active content in other contexts. Text preview only
+// for strict UTF-8 without control characters, capped at 200 000 characters.
+export function attachmentDialog(name, bin) {
+  const ext = (name.split('.').pop() || '').toLowerCase();
+  let body;
+  if (IMG[ext] && ext !== 'svg') {
+    const url = URL.createObjectURL(new Blob([bin.data], { type: IMG[ext] }));
+    body = h('div', { class: 'kx-att-view' }, h('img', { src: url, alt: name, onload: () => setTimeout(() => URL.revokeObjectURL(url), 1000) }));
+  } else {
+    let text = null;
+    try { text = bytesToUtf8(bin.data, true); } catch { text = null; }
+    body = text != null && !/[\u0000-\u0008\u000e-\u001f]/.test(text.slice(0, 4096))
+      ? h('pre', { class: 'ap-pre kx-att-text' }, text.length > 200000 ? text.slice(0, 200000) + '\n…' : text)
+      : h('div', { class: 'ap-empty' }, t('kx.binaryNoPreview', { size: fmtSize(bin.size) }));
+  }
+  return openDialog({ title: name, body, wide: true, buttons: [{ label: t('ap.download'), icon: 'download', value: 'dl' }, { label: t('dlg.close'), value: null, primary: true }] })
+    .then((r) => { if (r === 'dl') download(bin.data, name); });
+}
+
+// --- busy overlay -------------------------------------------------------------------------------------------------
+
+// role=alertdialog overlay that blocks interaction during save / key derivation; returns set() and close() instead of a promise.
+export function busy(text) {
+  const bar = h('i'), label = h('div', { class: 'kx-progress-l' }, text);
+  const el = h('div', { class: 'ed-backdrop kx-busy', role: 'alertdialog', 'aria-live': 'polite' }, h('div', { class: 'ed-dialog kx-busy-box' },
+    h('div', { class: 'ed-spinner' }), label, h('div', { class: 'ap-progress' }, bar)));
+  (document.getElementById('ed-overlays') || document.body).append(el);
+  return {
+    set: (p, txt) => { bar.style.width = Math.round(p * 100) + '%'; if (txt) label.textContent = txt; },
+    close: () => el.remove(),
+  };
+}
+
+// --- settings -------------------------------------------------------------------------------------------------------
+
+export async function settingsDialog() {
+  const db = S.db, m = db.meta, hd = db.header;
+  const d = {
+    name: m.name, description: m.description, defaultUser: m.defaultUser, recycleBin: m.recycleBinEnabled, historyMaxItems: m.historyMaxItems,
+    cipher: hd.cipher, compression: hd.compression, kdf: hd.kdf.type,
+    memory: Math.round((hd.kdf.memory || 64 * 1048576) / 1048576), iterations: hd.kdf.iterations || 2, parallelism: hd.kdf.parallelism || 2, rounds: hd.kdf.rounds || 100000,
+    changeKey: false, keyFile: null,
+  };
+  const num = (k, min, max, label) => field(label, textInput(String(d[k]), (v) => { d[k] = Math.max(min, Math.min(max, Math.floor(+v || min))); }, { type: 'number', min, max, inputmode: 'numeric' }));
+  const kdfBox = h('div', { class: 'kx-grid3' });
+  const paintKdf = () => {
+    kdfBox.textContent = '';
+    // Only the limits of the formats (KDBX stores 64-bit rounds; Argon2: memory < 4 TiB, lanes < 2^24): a costly setting
+    // simply takes longer to open and save.
+    if (d.kdf === 'aes') kdfBox.append(num('rounds', 1, Number.MAX_SAFE_INTEGER, 'kx.rounds'));
+    else kdfBox.append(num('memory', 1, 4194303, 'kx.memory'), num('iterations', 1, 4294967295, 'kx.iterations'), num('parallelism', 1, 16777215, 'kx.parallelism'));
+    kdfBox.append(h('div', { class: 'ed-hint' }, t('kx.kdfCostHint')));
+  };
+  paintKdf();
+  const p1 = secretInput('', { autocomplete: 'new-password', 'aria-label': t('kx.newPassword') });
+  const p1meter = strengthView({ compact: true });
+  p1.input.addEventListener('input', () => p1meter.set(p1.input.value));
+  const p2 = secretInput('', { autocomplete: 'new-password', 'aria-label': t('kx.repeat') });
+  const keyLabel = h('span', { class: 'kx-ellipsis ed-muted' }, t('kx.noKeyFile'));
+  const keyBox = h('div', { class: 'ed-fields', hidden: true },
+    field('kx.newPassword', h('div', {}, p1.row, p1meter.el)), field('kx.repeat', p2.row),
+    field('kx.keyFile', h('div', { class: 'kx-key-row' },
+      button('kx.newKeyFile', 'plus', () => { const kf = generateKeyFile(); d.keyFile = kf.bytes; download(kf.bytes, (m.name || 'Passwords') + '.keyx', 'application/xml'); keyLabel.textContent = t('kx.keyFileSaved'); }),
+      button('kx.chooseKeyFile', 'key', async () => { const [f] = await pickFiles({}); if (f) { d.keyFile = new Uint8Array(await f.arrayBuffer()); keyLabel.textContent = f.name; } }),
+      keyLabel)));
+  const err = h('div', { class: 'kx-error', role: 'alert' });
+  const body = h('div', { class: 'ed-fields' },
+    h('h3', { class: 'kx-sec-h' }, t('kx.general')),
+    field('kx.dbName', textInput(d.name, (v) => { d.name = v; })),
+    field('kx.description', textInput(d.description, (v) => { d.description = v; }, { multiline: true, rows: 2 })),
+    field('kx.defaultUser', textInput(d.defaultUser, (v) => { d.defaultUser = v; })),
+    h('div', { class: 'kx-grid2' },
+      field('kx.useRecycleBin', toggle(d.recycleBin, (v) => { d.recycleBin = v; })),
+      num('historyMaxItems', -1, 1000, 'kx.historyMax')),
+    h('h3', { class: 'kx-sec-h' }, t('kx.security')),
+    h('div', { class: 'kx-grid2' },
+      field('kx.cipher', select([{ v: 'aes256', l: '=AES-256' }, { v: 'chacha20', l: '=ChaCha20' }], d.cipher, (v) => { d.cipher = v; })),
+      field('kx.kdf', select([{ v: 'argon2id', l: '=Argon2id' }, { v: 'argon2d', l: '=Argon2d' }, { v: 'aes', l: '=AES-KDF' }], d.kdf, (v) => { d.kdf = v; paintKdf(); }))),
+    kdfBox,
+    h('div', { class: 'ed-hint' }, t('kx.kdfHint')),
+    field('kx.compression', toggle(d.compression, (v) => { d.compression = v; })),
+    h('h3', { class: 'kx-sec-h' }, t('kx.masterKey')),
+    field('kx.changeKey', toggle(false, (v) => { d.changeKey = v; keyBox.hidden = !v; })),
+    keyBox,
+    h('div', { class: 'ed-hint' }, t('kx.formatHint', { v: `${hd.major}.${hd.minor}` })),
+    err);
+  const r = await openDialog({
+    title: t('kx.settings'), body, wide: true,
+    buttons: [{ label: t('dlg.cancel'), value: null }, {
+      label: t('dlg.apply'), primary: true, value: 'ok',
+      onClick: () => {
+        err.textContent = '';
+        if (d.changeKey) {
+          if (p1.input.value !== p2.input.value) { err.textContent = t('kx.mismatch'); return false; }
+          if (!p1.input.value && !d.keyFile) { err.textContent = t('kx.needKey'); return false; }
+        }
+        return true;
+      },
+    }],
+  });
+  if (r !== 'ok') return false;
+  const now = new Date();
+  if (m.name !== d.name) { m.name = d.name; m.nameChanged = now; }
+  if (m.description !== d.description) { m.description = d.description; m.descriptionChanged = now; }
+  if (m.defaultUser !== d.defaultUser) { m.defaultUser = d.defaultUser; m.defaultUserChanged = now; }
+  m.recycleBinEnabled = d.recycleBin;
+  m.historyMaxItems = d.historyMaxItems;
+  m.settingsChanged = now;
+  hd.cipher = d.cipher;
+  hd.compression = d.compression;
+  hd.kdf = d.kdf === 'aes' ? { type: 'aes', rounds: d.rounds, salt: hd.kdf.salt }
+    : { type: d.kdf, memory: d.memory * 1048576, iterations: d.iterations, parallelism: d.parallelism, version: 0x13, salt: hd.kdf.salt };
+  if (d.changeKey) {
+    db.credentials = new KdbxCredentials({ password: p1.input.value || null, keyFile: d.keyFile });
+    m.masterKeyChanged = now;
+  }
+  markDirty();
+  toast(t('kx.settingsApplied'), 'ok');
+  return true;
+}

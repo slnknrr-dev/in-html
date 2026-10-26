@@ -1,0 +1,17 @@
+const SECRETISH=/(token|password|passwd|secret|hash|api[_-]?key|smtp|credential|private[_-]?key)/i;function stripSecrets(value){const walk=(v)=>{if(Array.isArray(v))return v.map(walk);if(v&&typeof v==='object'){const o={};for(const[k,x]of Object.entries(v))if(!SECRETISH.test(k))o[k]=walk(x);return o;}
+return v;};return walk(value);}
+const asStr=(v)=>String(v??'').trim();const lang2=(v)=>{const s=asStr(v).toLowerCase();return/^[a-z]{2}$/.test(s)?s:'';};function cleanLocales(v){const out=[];for(const x of Array.isArray(v)?v:String(v??'').split(',')){const s=lang2(x);if(s&&!out.includes(s))out.push(s);}
+return out;}
+const CLEANERS={string:asStr,bool:(v)=>v===true||v==='true'||v===1||v==='1',int:(v)=>Math.round(Number(v)||0),uint:(v)=>Math.max(0,Math.round(Number(v)||0)),lang:lang2,locales:cleanLocales,url:(v)=>{const s=asStr(v);return s===''||/^https?:\/\/[^\s/]+/i.test(s)?s:'';},flags:(v)=>Object.fromEntries(Object.entries(v&&typeof v==='object'&&!Array.isArray(v)?v:{}).map(([k,x])=>[k,!!x])),object:(v)=>(v&&typeof v==='object'?v:undefined),any:(v)=>v,};function defineConfig(spec){const schema={};for(const[k,c]of Object.entries(spec)){if(SECRETISH.test(k))throw new Error(`config: "${k}" looks like a secret and cannot be an overridable key`);const fn=typeof c==='function'?c:CLEANERS[c];if(!fn)throw new Error(`config: unknown cleaner "${c}" for ${k}`);schema[k]=fn;}
+return schema;}
+function normalizeLayer(raw,schema){const src=raw&&typeof raw==='object'?raw:{};const out={};for(const k of Object.keys(src)){if(!Object.prototype.hasOwnProperty.call(schema,k)||src[k]===undefined)continue;const v=schema[k](src[k]);if(v!==undefined)out[k]=v;}
+return stripSecrets(out);}
+const has=(o,k)=>!!o&&Object.prototype.hasOwnProperty.call(o,k);function mergeLayers(layers,schema=null){const out={};const keys=schema?Object.keys(schema):[...new Set(layers.flatMap((l)=>Object.keys(l||{})))];for(const l of layers)for(const k of keys)if(has(l,k))out[k]=l[k];return out;}
+function snapshotConfig(layers,schema=null){const keys=schema?Object.keys(schema):[...new Set(layers.flatMap((l)=>Object.keys(l.values||{})))];const out={};for(const k of keys){const with_=layers.filter((l)=>has(l.values,k));const top=with_[with_.length-1];out[k]=top?{value:top.values[k],source:top.name,shadowed:with_.slice(0,-1).map((l)=>l.name)}:{value:undefined,source:null,shadowed:[]};}
+return out;}
+function normalizeHost(raw){let h=asStr(raw).toLowerCase();if(!h)return'';if(h.startsWith('[')){const end=h.indexOf(']');if(end>0)h=h.slice(0,end+1);}
+else{const colon=h.lastIndexOf(':');if(colon>0&&/^\d+$/.test(h.slice(colon+1)))h=h.slice(0,colon);}
+while(h.endsWith('.'))h=h.slice(0,-1);return h;}
+function resolveHost(rawHost,rows){const host=normalizeHost(rawHost);const live=(rows||[]).filter((r)=>r.enabled!==false);const primary=live.find((r)=>r.isPrimary)||live[0]||null;const byName=(h)=>live.find((r)=>normalizeHost(r.host)===h)||live.find((r)=>(r.aliases||[]).some((a)=>normalizeHost(a)===h))||null;if(host){const exact=byName(host);if(exact)return{row:exact,matched:true,host};if(host.startsWith('www.')){const bare=byName(host.slice(4));if(bare)return{row:bare,matched:true,host};}}
+return{row:primary,matched:false,host};}
+export{CLEANERS,SECRETISH,defineConfig,resolveHost,normalizeLayer,snapshotConfig,mergeLayers};

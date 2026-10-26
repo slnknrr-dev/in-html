@@ -1,0 +1,442 @@
+// formula/lookup.js - lookup, reference and dynamic-array functions: VLOOKUP, HLOOKUP, LOOKUP, MATCH, XMATCH,
+// XLOOKUP, INDEX, OFFSET, INDIRECT, ADDRESS, HYPERLINK, TRANSPOSE, UNIQUE, SORT, SORTBY, FILTER, SEQUENCE, TAKE, DROP,
+// CHOOSECOLS, CHOOSEROWS, VSTACK, HSTACK. Importing the module registers them.
+// Exact matches on long vectors use a value -> position index cached per dereferenced range (one recalculation pass
+// shares the matrices), so thousands of lookups into the same table stay linear.
+
+import { CellError, ERR, MAX_COLS, MAX_ROWS, colName } from '../xlsx/cells.js';
+import { Ref, compare, equals, hasWildcard, isMatrix, round15, toBool, toNumber, toText, wildcardRe } from './values.js';
+import { VOLATILE, broadcast, defineFunction, deref, evaluate, first, toMatrix } from './evaluate.js';
+import { parseFormula, quoteSheet } from './parser.js';
+
+const raw = (name, fn, extra) => defineFunction(name, { fn, ...extra });
+const scalar = (a, ctx) => first(deref(a, ctx), ctx);
+const given = (args, i) => args.length > i && args[i] !== null;
+
+// --- searching ---------------------------------------------------------------------------
+
+// Hash keys that encode type and normalize like equals(): numbers by round15, text lower-cased, so the index agrees
+// with the linear scan. The index lives in a WeakMap keyed by the dereferenced matrix object: it is reused while the
+// per-pass deref cache returns the same matrix and garbage-collected with it, with no invalidation logic.
+const keyOf = (v) => (typeof v === 'number' ? 'n' + round15(v) : typeof v === 'string' ? 's' + v.toLowerCase() : typeof v === 'boolean' ? 'b' + v : null);
+const INDEX_CACHE = new WeakMap();
+
+// Vector view: a column (vertical) or a row of a matrix.
+const vlen = (m, vert) => (vert ? m.length : m[0] ? m[0].length : 0);
+const vat = (m, vert, k, i) => (vert ? m[i][k] : m[k][i]);
+
+function positions(m, vert, k) {
+  let per = INDEX_CACHE.get(m);
+  if (!per) { per = new Map(); INDEX_CACHE.set(m, per); }
+  const id = (vert ? 'c' : 'r') + k;
+  let map = per.get(id);
+  if (!map) {
+    map = new Map();
+    const n = vlen(m, vert);
+    for (let i = 0; i < n; i++) {
+      const key = keyOf(vat(m, vert, k, i));
+      if (key === null) continue;
+      const e = map.get(key);
+      if (e) e[1] = i; else map.set(key, [i, i]);
+    }
+    per.set(id, map);
+  }
+  return map;
+}
+
+// Exact match (wildcards for text when `wild`); reverse searches from the end.
+// Short vectors (<= 32) scan linearly (building an index costs more); longer ones use the index, which stores the
+// first and last position of each key for forward and reverse search. Wildcard patterns always scan.
+function findExact(m, vert, k, x, { wild = true, reverse = false } = {}) {
+  const n = vlen(m, vert);
+  if (typeof x === 'string' && wild && hasWildcard(x)) {
+    const re = wildcardRe(x);
+    for (let j = 0; j < n; j++) {
+      const i = reverse ? n - 1 - j : j;
+      const v = vat(m, vert, k, i);
+      if (typeof v === 'string' && re.test(v)) return i;
+    }
+    return -1;
+  }
+  if (n > 32) {
+    const key = keyOf(x);
+    if (key === null) return -1;
+    const e = positions(m, vert, k).get(key);
+    return e ? e[reverse ? 1 : 0] : -1;
+  }
+  for (let j = 0; j < n; j++) {
+    const i = reverse ? n - 1 - j : j;
+    const v = vat(m, vert, k, i);
+    if (v != null && equals(v, x)) return i;
+  }
+  return -1;
+}
+
+const sameKind = (a, b) => typeof a === typeof b && a != null;
+
+// Sorted data: the last position whose value <= x (ascending) or >= x (descending); -1 when none.
+// Binary search for approximate match (VLOOKUP TRUE, MATCH 1/-1): the last position not greater than x. Like Excel
+// it trusts the data to be sorted and gives arbitrary results otherwise; values of another type do not qualify
+// as a match (sameKind) but still steer the search.
+function findSorted(m, vert, k, x, desc = false) {
+  let lo = 0, hi = vlen(m, vert) - 1, best = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const v = vat(m, vert, k, mid);
+    const c = v == null ? (desc ? 1 : -1) : compare(v, x);
+    if (desc ? c >= 0 : c <= 0) { if (v != null && sameKind(v, x)) best = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return best;
+}
+
+// Unsorted next smaller (dir -1) / larger (dir 1) with exact preference.
+function findNearest(m, vert, k, x, dir, reverse) {
+  const exact = findExact(m, vert, k, x, { wild: false, reverse });
+  if (exact >= 0) return exact;
+  const n = vlen(m, vert);
+  let best = -1, bv = null;
+  for (let j = 0; j < n; j++) {
+    const i = reverse ? n - 1 - j : j;
+    const v = vat(m, vert, k, i);
+    if (!sameKind(v, x)) continue;
+    const c = compare(v, x);
+    if ((dir < 0 && c < 0 && (bv === null || compare(v, bv) > 0)) || (dir > 0 && c > 0 && (bv === null || compare(v, bv) < 0))) { best = i; bv = v; }
+  }
+  return best;
+}
+
+// XLOOKUP / XMATCH search: match_mode 0 exact, -1 or smaller, 1 or larger, 2 wildcard; search_mode 1, -1, 2, -2.
+function xfind(m, vert, x, mode, search) {
+  if (search === 2 || search === -2) {
+    const i = findSorted(m, vert, 0, x, search === -2);
+    if (i >= 0 && equals(vat(m, vert, 0, i), x)) return i;
+    if (mode === 0 || mode === 2) return -1;
+    if (search === 2) return mode < 0 ? i : (i + 1 < vlen(m, vert) ? i + 1 : -1);
+    return mode > 0 ? i : (i + 1 < vlen(m, vert) ? i + 1 : -1);
+  }
+  const reverse = search === -1;
+  if (mode === 0) return findExact(m, vert, 0, x, { wild: false, reverse });
+  if (mode === 2) return findExact(m, vert, 0, x, { wild: true, reverse });
+  return findNearest(m, vert, 0, x, mode, reverse);
+}
+
+// 1-D shape: vertical for a column (or a single cell), horizontal for a row; null for 2-D.
+function orient(m) {
+  if (m[0] && m[0].length === 1) return true;
+  if (m.length === 1) return false;
+  return null;
+}
+
+// Lifts a lookup over an array of lookup values.
+const overX = (args, ctx, one) => {
+  const x = deref(args[0], ctx);
+  if (isMatrix(x)) return broadcast([x], ([v]) => { const r = deref(one(v), ctx); return isMatrix(r) ? r[0][0] : r; });
+  return one(x);
+};
+
+// --- classic lookups ---------------------------------------------------------------------
+
+const xlookupTable = (vertical) => (args, ctx) => {
+  const m = toMatrix(args[1], ctx);
+  const k = toNumber(scalar(args[2], ctx));
+  if (k instanceof CellError) return k;
+  const idx = Math.trunc(k);
+  if (idx < 1) return ERR.VALUE;
+  if (idx > (vertical ? (m[0] ? m[0].length : 0) : m.length)) return ERR.REF;
+  const approx = args.length > 3 ? toBool(scalar(args[3], ctx)) : true;
+  if (approx instanceof CellError) return approx;
+  return overX(args, ctx, (x) => {
+    if (x instanceof CellError) return x;
+    const i = approx ? findSorted(m, vertical, 0, x) : findExact(m, vertical, 0, x);
+    if (i < 0) return ERR.NA;
+    return vertical ? m[i][idx - 1] : m[idx - 1][i];
+  });
+};
+raw('VLOOKUP', xlookupTable(true), { min: 3, max: 4 });
+raw('HLOOKUP', xlookupTable(false), { min: 3, max: 4 });
+
+raw('LOOKUP', (args, ctx) => {
+  const L = toMatrix(args[1], ctx);
+  let vert = orient(L);
+  if (vert === null) vert = L.length >= L[0].length;
+  const R = args.length > 2 ? toMatrix(args[2], ctx) : null;
+  return overX(args, ctx, (x) => {
+    if (x instanceof CellError) return x;
+    const i = findSorted(L, vert, 0, x);
+    if (i < 0) return ERR.NA;
+    if (!R) return vert ? L[i][L[0].length - 1] : L[L.length - 1][i];
+    const rv = orient(R) ?? true;
+    return i < vlen(R, rv) ? vat(R, rv, 0, i) : ERR.NA;
+  });
+}, { min: 2, max: 3 });
+
+raw('MATCH', (args, ctx) => {
+  const m = toMatrix(args[1], ctx);
+  const vert = orient(m);
+  if (vert === null) return ERR.NA;
+  const t = given(args, 2) ? toNumber(scalar(args[2], ctx)) : 1;
+  if (t instanceof CellError) return t;
+  return overX(args, ctx, (x) => {
+    if (x instanceof CellError) return x;
+    const i = t === 0 ? findExact(m, vert, 0, x) : findSorted(m, vert, 0, x, t < 0);
+    return i < 0 ? ERR.NA : i + 1;
+  });
+}, { min: 2, max: 3 });
+
+raw('XMATCH', (args, ctx) => {
+  const m = toMatrix(args[1], ctx);
+  const vert = orient(m);
+  if (vert === null) return ERR.VALUE;
+  const mode = given(args, 2) ? toNumber(scalar(args[2], ctx)) : 0;
+  const search = given(args, 3) ? toNumber(scalar(args[3], ctx)) : 1;
+  if (mode instanceof CellError) return mode;
+  if (search instanceof CellError) return search;
+  return overX(args, ctx, (x) => {
+    if (x instanceof CellError) return x;
+    const i = xfind(m, vert, x, mode, search);
+    return i < 0 ? ERR.NA : i + 1;
+  });
+}, { min: 2, max: 4 });
+
+raw('XLOOKUP', (args, ctx) => {
+  const L = toMatrix(args[1], ctx);
+  const vert = orient(L);
+  if (vert === null) return ERR.VALUE;
+  const mode = given(args, 4) ? toNumber(scalar(args[4], ctx)) : 0;
+  const search = given(args, 5) ? toNumber(scalar(args[5], ctx)) : 1;
+  if (mode instanceof CellError) return mode;
+  if (search instanceof CellError) return search;
+  const ra = args[2];
+  const R = ra instanceof Ref ? null : toMatrix(ra, ctx);
+  const rh = ra instanceof Ref ? ra.h : R.length, rw = ra instanceof Ref ? ra.w : R[0].length;
+  if ((vert ? rh : rw) < vlen(L, vert)) return ERR.VALUE;
+  const one = (x) => {
+    if (x instanceof CellError) return x;
+    const i = xfind(L, vert, x, mode, search);
+    if (i < 0) return given(args, 3) ? deref(args[3], ctx) : ERR.NA;
+    if (ra instanceof Ref) return vert ? new Ref(ra.s, ra.r1 + i, ra.c1, ra.r1 + i, ra.c2) : new Ref(ra.s, ra.r1, ra.c1 + i, ra.r2, ra.c1 + i);
+    return vert ? [R[i]] : R.map((row) => [row[i]]);
+  };
+  const x = deref(args[0], ctx);
+  if (isMatrix(x)) return broadcast([x], ([v]) => { const r = deref(one(v), ctx); return isMatrix(r) ? r[0][0] : r; });
+  return one(x);
+}, { min: 3, max: 6 });
+
+// --- references --------------------------------------------------------------------------
+
+raw('INDEX', (args, ctx) => {
+  const a = args[0];
+  const rn = given(args, 1) ? toNumber(scalar(args[1], ctx)) : 0;
+  const cn = given(args, 2) ? toNumber(scalar(args[2], ctx)) : undefined;
+  if (rn instanceof CellError) return rn;
+  if (cn instanceof CellError) return cn;
+  if (a instanceof CellError) return a;
+  const h = a instanceof Ref ? a.h : toMatrix(a, ctx).length;
+  const w = a instanceof Ref ? a.w : toMatrix(a, ctx)[0].length;
+  let r = Math.trunc(rn), c = cn === undefined ? undefined : Math.trunc(cn);
+  if (c === undefined) { if (h === 1 && w > 1) { c = r; r = 1; } else c = w === 1 ? 1 : 0; }
+  if (r < 0 || c < 0 || r > h || c > w) return ERR.REF;
+  if (a instanceof Ref) {
+    return new Ref(a.s, r ? a.r1 + r - 1 : a.r1, c ? a.c1 + c - 1 : a.c1, r ? a.r1 + r - 1 : a.r2, c ? a.c1 + c - 1 : a.c2);
+  }
+  const m = toMatrix(a, ctx);
+  if (r && c) return m[r - 1][c - 1];
+  if (r) return [m[r - 1]];
+  if (c) return m.map((row) => [row[c - 1]]);
+  return m;
+}, { min: 2, max: 4 });
+
+// OFFSET and INDIRECT build references at run time, so the dependency graph cannot know what they read: both are
+// volatile (recomputed on every recalc) and rely on the engine's on-demand evaluation for ordering. INDIRECT only
+// accepts text that parses to a single reference or range, never an arbitrary formula (no evaluation of user text
+// as code).
+raw('OFFSET', (args, ctx) => {
+  const ref = args[0];
+  if (!(ref instanceof Ref)) return ref instanceof CellError ? ref : ERR.VALUE;
+  const nums = [1, 2, 3, 4].map((i) => (given(args, i) ? toNumber(scalar(args[i], ctx)) : null));
+  for (const n of nums) if (n instanceof CellError) return n;
+  const [dr, dc] = nums;
+  const h = nums[2] === null ? ref.h : Math.trunc(nums[2]);
+  const w = nums[3] === null ? ref.w : Math.trunc(nums[3]);
+  const r1 = ref.r1 + Math.trunc(dr || 0), c1 = ref.c1 + Math.trunc(dc || 0);
+  if (h < 1 || w < 1 || r1 < 0 || c1 < 0 || r1 + h > MAX_ROWS || c1 + w > MAX_COLS) return ERR.REF;
+  return new Ref(ref.s, r1, c1, r1 + h - 1, c1 + w - 1);
+}, { min: 3, max: 5, volatile: true });
+
+raw('INDIRECT', (args, ctx) => {
+  const t = toText(scalar(args[0], ctx));
+  if (t instanceof CellError) return t;
+  const a1 = given(args, 1) ? toBool(scalar(args[1], ctx)) : true;
+  if (a1 === false) {
+    const m = /^(?:(.+)!)?R(\d+)C(\d+)$/i.exec(t.trim());
+    if (!m) return ERR.REF;
+    const s = m[1] ? ctx.sheetIndex(m[1].replace(/^'(.*)'$/, '$1').replace(/''/g, "'")) : ctx.s;
+    return s < 0 ? ERR.REF : new Ref(s, +m[2] - 1, +m[3] - 1, +m[2] - 1, +m[3] - 1);
+  }
+  try {
+    const ast = parseFormula(t.trim());
+    if (ast.type !== 'ref' && ast.type !== 'range') return ERR.REF;
+    return evaluate(ast, ctx);
+  } catch { return ERR.REF; }
+}, { min: 1, max: 2, volatile: true });
+VOLATILE.add('OFFSET').add('INDIRECT');
+
+raw('ADDRESS', (args, ctx) => {
+  const r = toNumber(scalar(args[0], ctx)), c = toNumber(scalar(args[1], ctx));
+  if (r instanceof CellError) return r;
+  if (c instanceof CellError) return c;
+  const abs = given(args, 2) ? toNumber(scalar(args[2], ctx)) : 1;
+  const a1 = given(args, 3) ? toBool(scalar(args[3], ctx)) : true;
+  const sheet = given(args, 4) ? toText(scalar(args[4], ctx)) : '';
+  if (r < 1 || c < 1 || r > MAX_ROWS || c > MAX_COLS || ![1, 2, 3, 4].includes(abs)) return ERR.VALUE;
+  const ar = abs === 1 || abs === 2, ac = abs === 1 || abs === 3;
+  const pre = sheet ? quoteSheet(sheet) + '!' : '';
+  if (a1 === false) return pre + 'R' + (ar ? Math.trunc(r) : `[${Math.trunc(r)}]`) + 'C' + (ac ? Math.trunc(c) : `[${Math.trunc(c)}]`);
+  return pre + (ac ? '$' : '') + colName(Math.trunc(c) - 1) + (ar ? '$' : '') + Math.trunc(r);
+}, { min: 2, max: 5 });
+
+raw('HYPERLINK', (args, ctx) => (given(args, 1) ? scalar(args[1], ctx) : scalar(args[0], ctx)), { min: 1, max: 2 });
+
+// --- dynamic arrays ----------------------------------------------------------------------
+
+const transpose = (m) => (m.length ? m[0].map((_, j) => m.map((row) => row[j])) : m);
+const rowKey = (row) => row.map((v) => (v == null ? 'z' : v instanceof CellError ? 'e' + v.code : keyOf(v))).join('\u0001');
+const bool = (a, ctx, dflt) => (a == null ? dflt : toBool(scalar(a, ctx)));
+
+raw('TRANSPOSE', (args, ctx) => transpose(toMatrix(args[0], ctx)), { min: 1, max: 1 });
+
+raw('UNIQUE', (args, ctx) => {
+  const byCol = bool(args[1], ctx, false), once = bool(args[2], ctx, false);
+  if (byCol instanceof CellError) return byCol;
+  if (once instanceof CellError) return once;
+  const m = toMatrix(args[0], ctx);
+  const rows = byCol ? transpose(m) : m;
+  const count = new Map();
+  for (const r of rows) { const k = rowKey(r); count.set(k, (count.get(k) || 0) + 1); }
+  const seen = new Set();
+  const out = [];
+  for (const r of rows) {
+    const k = rowKey(r);
+    if (seen.has(k) || (once && count.get(k) !== 1)) continue;
+    seen.add(k);
+    out.push(r);
+  }
+  if (!out.length) return ERR.CALC;
+  return byCol ? transpose(out) : out;
+}, { min: 1, max: 3 });
+
+function sortRows(rows, keys) {
+  const idx = rows.map((_, i) => i);
+  idx.sort((a, b) => {
+    for (const { col, desc } of keys) {
+      const c = compare(col(a), col(b));
+      if (c) return desc ? -c : c;
+    }
+    return a - b;
+  });
+  return idx;
+}
+
+raw('SORT', (args, ctx) => {
+  const m = toMatrix(args[0], ctx);
+  const k = given(args, 1) ? toNumber(scalar(args[1], ctx)) : 1;
+  const ord = given(args, 2) ? toNumber(scalar(args[2], ctx)) : 1;
+  const byCol = bool(args[3], ctx, false);
+  for (const v of [k, ord, byCol]) if (v instanceof CellError) return v;
+  const rows = byCol ? transpose(m) : m;
+  const ki = Math.trunc(k) - 1;
+  if (ki < 0 || ki >= (rows[0] ? rows[0].length : 0) || (ord !== 1 && ord !== -1)) return ERR.VALUE;
+  const idx = sortRows(rows, [{ col: (i) => rows[i][ki], desc: ord === -1 }]);
+  const out = idx.map((i) => rows[i]);
+  return byCol ? transpose(out) : out;
+}, { min: 1, max: 4 });
+
+raw('SORTBY', (args, ctx) => {
+  const m = toMatrix(args[0], ctx);
+  const keys = [];
+  for (let i = 1; i < args.length; i += 2) {
+    const by = toMatrix(args[i], ctx);
+    const vert = orient(by);
+    if (vert === null || vlen(by, vert) !== m.length) return ERR.VALUE;
+    const o = i + 1 < args.length ? toNumber(scalar(args[i + 1], ctx)) : 1;
+    if (o instanceof CellError) return o;
+    keys.push({ col: (r) => vat(by, vert, 0, r), desc: o === -1 });
+  }
+  return sortRows(m, keys).map((i) => m[i]);
+}, { min: 2 });
+
+raw('FILTER', (args, ctx) => {
+  const m = toMatrix(args[0], ctx);
+  const inc = toMatrix(args[1], ctx);
+  const h = m.length, w = m[0] ? m[0].length : 0;
+  let out;
+  const test = (v) => (v instanceof CellError ? v : toBool(v));
+  if (inc.length === h && inc[0].length === 1) {
+    out = [];
+    for (let i = 0; i < h; i++) { const b = test(inc[i][0]); if (b instanceof CellError) return b; if (b) out.push(m[i]); }
+  } else if (inc.length === 1 && inc[0].length === w) {
+    const keep = [];
+    for (let j = 0; j < w; j++) { const b = test(inc[0][j]); if (b instanceof CellError) return b; if (b) keep.push(j); }
+    out = keep.length ? m.map((row) => keep.map((j) => row[j])) : [];
+  } else return ERR.VALUE;
+  if (!out.length) return given(args, 2) ? deref(args[2], ctx) : ERR.CALC;
+  return out;
+}, { min: 2, max: 3 });
+
+raw('SEQUENCE', (args, ctx) => {
+  const [r, c, s, st] = [0, 1, 2, 3].map((i, k) => (given(args, i) ? toNumber(scalar(args[i], ctx)) : [1, 1, 1, 1][k]));
+  for (const v of [r, c, s, st]) if (v instanceof CellError) return v;
+  const h = Math.trunc(r), w = Math.trunc(c);
+  if (h < 1 || w < 1) return ERR.CALC;
+  if (h * w > 1e6) return ERR.NUM;
+  return Array.from({ length: h }, (_, i) => Array.from({ length: w }, (_, j) => s + (i * w + j) * st));
+}, { min: 1, max: 4 });
+
+const takeDrop = (drop) => (args, ctx) => {
+  const m = toMatrix(args[0], ctx);
+  const r = given(args, 1) ? toNumber(scalar(args[1], ctx)) : null;
+  const c = given(args, 2) ? toNumber(scalar(args[2], ctx)) : null;
+  if (r instanceof CellError) return r;
+  if (c instanceof CellError) return c;
+  const cut = (n, len) => {
+    if (n === null) return [0, len];
+    n = Math.trunc(n);
+    if (drop) return n >= 0 ? [Math.min(n, len), len] : [0, Math.max(0, len + n)];
+    return n >= 0 ? [0, Math.min(n, len)] : [Math.max(0, len + n), len];
+  };
+  const [r0, r1] = cut(r, m.length), [c0, c1] = cut(c, m[0].length);
+  const out = m.slice(r0, r1).map((row) => row.slice(c0, c1));
+  return out.length && out[0].length ? out : ERR.CALC;
+};
+raw('TAKE', takeDrop(false), { min: 2, max: 3 });
+raw('DROP', takeDrop(true), { min: 2, max: 3 });
+
+const choose = (cols) => (args, ctx) => {
+  const m = toMatrix(args[0], ctx);
+  const len = cols ? m[0].length : m.length;
+  const idx = [];
+  for (const a of args.slice(1)) {
+    const v = toMatrix(deref(a, ctx), ctx).flat();
+    for (const x of v) {
+      const n = toNumber(x);
+      if (n instanceof CellError) return n;
+      const k = Math.trunc(n);
+      if (!k || Math.abs(k) > len) return ERR.VALUE;
+      idx.push(k > 0 ? k - 1 : len + k);
+    }
+  }
+  return cols ? m.map((row) => idx.map((j) => row[j])) : idx.map((i) => m[i]);
+};
+raw('CHOOSECOLS', choose(true), { min: 2 });
+raw('CHOOSEROWS', choose(false), { min: 2 });
+
+raw('VSTACK', (args, ctx) => {
+  const ms = args.map((a) => toMatrix(a, ctx));
+  const w = Math.max(...ms.map((m) => m[0].length));
+  return ms.flatMap((m) => m.map((row) => Array.from({ length: w }, (_, j) => (j < row.length ? row[j] : ERR.NA))));
+}, { min: 1 });
+raw('HSTACK', (args, ctx) => {
+  const ms = args.map((a) => toMatrix(a, ctx));
+  const h = Math.max(...ms.map((m) => m.length));
+  return Array.from({ length: h }, (_, i) => ms.flatMap((m) => (i < m.length ? m[i] : m[0].map(() => ERR.NA))));
+}, { min: 1 });

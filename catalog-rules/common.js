@@ -1,0 +1,213 @@
+// catalog-rules/common.js - shared parts of the schema and rules pages: the shell (pages resolved from the hidden
+// anchors of the page HTML, so the build can rewrite them), app icons, the project in localStorage (one project shared
+// by both pages and kept in step across tabs), the project card (demos, JSON export / import, new project), the
+// condition editor used by showIf and title rules, trilingual label inputs and the texts of error codes.
+//
+// State model: one project object store.P (tree of categories with field definitions, rules, scales, tags,
+// samples) shared by both pages through localStorage 'cr-project', plus per-device UI state 'cr-ui' (selected node,
+// selected sample, live form values). Every load goes through normalizeProject() (engine.js), so imported files,
+// old saves and demos all enter the app in one validated shape.
+// Cross-page sync: the browser fires 'storage' in *other* documents when a key changes, so editing the schema in one
+// tab re-renders the rules page in another. Conflict policy is last writer wins (no merge): acceptable for a
+// single-user tool, and the debounced writes keep the window small.
+import './strings.js';
+import { button, card, download, select, startApp, t, toast } from '../ui/app.js';
+import { debounce, h, lsGet, lsSet } from '../ui/dom.js';
+import { addIcons, icon } from '../ui/icons.js';
+import { confirmDialog } from '../ui/overlays.js';
+import { pickFiles } from '../ui/files.js';
+import { COND_BARE, COND_OPS } from '../schema/rules.js';
+import { CONTENT_LANGS, emptyProject, normalizeProject } from './engine.js';
+import { DEMOS, DEMO_KEYS } from './demos.js';
+
+export const LOGO = 'M4 5h7v5H4zM13 7h7M13 10h5M4 14h7v5H4zM13 16h7M13 19h5M7.5 10v4';
+
+addIcons({
+  rules: LOGO,
+  tree: 'M5 4v16M5 8h6M5 16h6M11 6h8v4h-8zM11 14h8v4h-8z',
+  trace: 'M4 6h10M4 12h16M4 18h7M17 4l3 2-3 2M14 16l3 2-3 2',
+  flask: 'M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.8 3h10.4a2 2 0 0 0 1.8-3l-5-9V3M7.5 14h9',
+  ok: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM8 12l3 3 5-6',
+  xcircle: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM9 9l6 6M15 9l-6 6',
+});
+
+// Resolved hrefs of the pages (hidden anchors in the page HTML; the build rewrites their href).
+// getAttribute, not a.href: .href would be absolute (file:///...), breaking relative links after publishing.
+export function pageHref(id) {
+  const a = document.getElementById(id);
+  return a ? a.getAttribute('href') : '#';
+}
+
+export function startShell(current, onLang) {
+  startApp({
+    key: 'cr', name: 'cr.name', logo: LOGO, offline: true, onLang,
+    pages: [
+      { href: pageHref('pg-schema'), label: 'cr.page.schema', current: current === 'schema' },
+      { href: pageHref('pg-rules'), label: 'cr.page.rules', current: current === 'rules' },
+    ],
+  });
+}
+
+// --- the project (localStorage 'cr-project', shared by both pages) ----------------------------------------------------
+
+const PKEY = 'cr-project';
+const UKEY = 'cr-ui';
+export const store = {
+  P: null,
+  ui: { node: '', sample: '', form: {} },
+  listeners: new Set(),
+};
+
+// First run shows the real-estate demo instead of an empty tree: the app explains itself by example.
+function initialProject() {
+  const saved = lsGet(PKEY, null);
+  return saved ? normalizeProject(saved) : normalizeProject(DEMOS.realty);
+}
+store.P = initialProject();
+// UI state is validated field by field; a corrupt entry falls back to defaults, never blocks the page.
+{
+  const u = lsGet(UKEY, null);
+  if (u && typeof u === 'object') {
+    store.ui.node = typeof u.node === 'string' ? u.node : '';
+    store.ui.sample = typeof u.sample === 'string' ? u.sample : '';
+    store.ui.form = u.form && typeof u.form === 'object' ? u.form : {};
+  }
+}
+
+// Debounced (250 ms) writes: typing in an editor changes the project on every keystroke.
+const writeProject = debounce(() => { lsSet(PKEY, store.P); }, 250);
+const writeUI = debounce(() => lsSet(UKEY, store.ui), 250);
+export const saveProject = () => writeProject();
+export const saveUI = () => writeUI();
+
+/** Replaces the whole project (demo, import, new) and tells the page to re-render. */
+// Whole-project replacement writes immediately (not debounced): a reload right after loading a demo or importing a
+// file must not resurrect the previous project. Selection resets to the first node and sample of the new project.
+export function setProject(P) {
+  store.P = normalizeProject(P);
+  store.ui.node = store.P.tree[0]?.id || '';
+  store.ui.sample = store.P.samples[0]?.id || '';
+  store.ui.form = {};
+  lsSet(PKEY, store.P);
+  lsSet(UKEY, store.ui);
+  for (const fn of store.listeners) fn('project');
+}
+export const onProject = (fn) => store.listeners.add(fn);
+
+// Another tab (or the other page) saved the project: take it and re-render.
+// e.newValue is null when the key was removed (storage cleared elsewhere): ignored, the current project stays.
+// Parsing failures are ignored for the same reason: a broken foreign write must not wipe the open project.
+window.addEventListener('storage', (e) => {
+  if (e.key !== PKEY || !e.newValue) return;
+  try { store.P = normalizeProject(JSON.parse(e.newValue)); } catch { return; }
+  for (const fn of store.listeners) fn('storage');
+});
+
+// --- project card: demos, export / import, new ------------------------------------------------------------------
+
+// File name from the project name: any run of non-letters/digits (Unicode-aware) becomes '-', trimmed, capped at 50.
+const fileSlug = (s) => String(s || 'catalog').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 50) || 'catalog';
+
+export function projectCard() {
+  const demo = select(DEMO_KEYS.map((k) => ({ v: k, l: 'cr.demo.' + k })), DEMO_KEYS[0], () => {});
+  demo.id = 'cr-demo';
+  demo.setAttribute('aria-label', t('cr.demo'));
+  const load = button('cr.demo.load', 'template', async () => {
+    if (!(await confirmDialog(t('cr.demo.title'), t('cr.demo.confirm'), t('cr.demo.load')))) return;
+    setProject(DEMOS[demo.value]);
+    toast(t('cr.demo.loaded'), 'ok');
+  });
+  load.id = 'cr-demo-load';
+  const name = h('input', { class: 'ed-input', value: store.P.name, 'aria-label': t('cr.project.name'), id: 'cr-pname' });
+  name.addEventListener('input', () => { store.P.name = name.value.slice(0, 120); saveProject(); });
+  const exp = button('cr.project.export', 'download', () => {
+    download(JSON.stringify(store.P, null, 2), fileSlug(store.P.name) + '.catalog-rules.json', 'application/json');
+  });
+  const imp = button('cr.project.import', 'upload', async () => {
+    const [file] = await pickFiles({ accept: '.json,application/json' });
+    if (!file) return;
+    let data;
+    // Import validates only the minimum (an object with a tree array) before confirmation; normalizeProject does the
+    // deep cleaning, so a hand-edited file degrades gracefully instead of being rejected.
+    try { data = JSON.parse(await file.text()); } catch { toast(t('cr.project.bad'), 'error'); return; }
+    if (!data || typeof data !== 'object' || !Array.isArray(data.tree)) { toast(t('cr.project.bad'), 'error'); return; }
+    if (!(await confirmDialog(t('cr.project.import'), t('cr.project.replace', { name: String(data.name || file.name) }), t('cr.project.import')))) return;
+    setProject(data);
+    toast(t('cr.project.imported'), 'ok');
+  });
+  const fresh = button('cr.project.new', 'filePlus', async () => {
+    if (!(await confirmDialog(t('cr.project.new'), t('cr.project.newConfirm'), t('cr.project.new'), true))) return;
+    setProject(emptyProject());
+  });
+  for (const b of [exp, imp, fresh]) b.classList.add('ed-sm');
+  load.classList.add('ed-sm');
+  return card('cr.project',
+    h('div', { class: 'ed-field' }, h('label', { class: 'ed-label', for: 'cr-pname' }, t('cr.project.name')), name),
+    h('div', { class: 'ed-field' }, h('label', { class: 'ed-label', for: 'cr-demo' }, t('cr.demo')), h('div', { class: 'cr-row' }, demo, load)),
+    h('div', { class: 'ap-actions' }, exp, imp, fresh),
+    h('div', { class: 'ed-hint' }, t('cr.project.hint')));
+}
+
+// --- small widgets ------------------------------------------------------------------------------------------------
+
+// Module counter ids: unique per page life, enough for label/datalist wiring (ids are never persisted).
+let gid = 0;
+export const uid = (p = 'cr') => p + '-' + (++gid);
+
+/** Three inputs for a { ka, ru, en } text (content languages), with optional placeholders (inherited values). */
+export function langInputs(obj, onChange, { placeholder = {}, label = '', multiline = false } = {}) {
+  const box = h('div', { class: 'cr-langs', role: 'group', 'aria-label': label || null });
+  for (const l of CONTENT_LANGS) {
+    // Inherited values are shown as placeholders, so an empty input visibly means "inherit", not "empty string".
+    const inp = h(multiline ? 'textarea' : 'input', { class: 'ed-input' + (multiline ? ' ed-textarea' : ''), value: (obj && obj[l]) || '', placeholder: placeholder[l] || '', 'aria-label': `${label} (${l})`, spellcheck: 'false', dir: 'auto', lang: l, dataset: { lang: l } });
+    inp.addEventListener('input', () => onChange(l, inp.value));
+    box.append(h('label', { class: 'cr-lang' }, h('span', { class: 'cr-lang-code' }, l), inp));
+  }
+  return box;
+}
+
+export const opLabel = (op) => t('cr.op.' + op);
+export const ERR_CODES = ['required', 'not_number', 'min', 'max', 'not_option', 'not_date', 'range_order', 'not_bool', 'too_long', 'mac', 'ip', 'serial', 'inventory', 'not_text'];
+export const errText = (code, f) => t('cr.verr.' + (ERR_CODES.includes(code) ? code : 'other'), { min: f?.min ?? '', max: f?.max ?? '' });
+
+/**
+ * Condition rows ({ v, op, a }) for showIf and rules: key (with suggestions), operator, values (comma list; an empty
+ * item means "not set" for is / is none of). `onChange()` is called after every edit; `invalid(i)` marks rows that the
+ * library drops.
+ */
+// Conditions are edited in place on the caller's array (list) and the caller is notified; rows the rule library
+// would drop (invalid(i)) are marked red with a tooltip instead of being removed, so nothing typed is lost.
+export function condEditor(list, onChange, { keys = [], invalid = () => false, labelKey = 'cr.cond' } = {}) {
+  const wrap = h('div', { class: 'cr-conds' });
+  const dl = uid('dl');
+  const datalist = h('datalist', { id: dl }, keys.map((k) => h('option', { value: k })));
+  const rows = h('div', { class: 'cr-cond-rows' });
+  const paint = () => {
+    rows.textContent = '';
+    if (!list.length) rows.append(h('div', { class: 'ed-hint' }, t('cr.cond.none')));
+    list.forEach((c, i) => {
+      const key = h('input', { class: 'ed-input cr-mono', value: c.v || '', list: dl, 'aria-label': t('cr.cond.key'), placeholder: t('cr.cond.key'), spellcheck: 'false', autocomplete: 'off' });
+      key.addEventListener('input', () => { c.v = key.value.trim(); mark(); onChange(); });
+      const op = h('select', { class: 'ed-input ed-select', 'aria-label': t('cr.cond.op') }, COND_OPS.map((o) => h('option', { value: o, selected: o === (c.op || 'is') }, opLabel(o))));
+      // Bare operators (e.g. "is set") take no values: the values input is hidden, not removed, to keep row geometry.
+      const vals = h('input', { class: 'ed-input', value: (c.a || []).join(', '), 'aria-label': t('cr.cond.values'), placeholder: t('cr.cond.valuesPh'), spellcheck: 'false', hidden: COND_BARE.includes(c.op) });
+      op.addEventListener('change', () => { c.op = op.value; vals.hidden = COND_BARE.includes(c.op); mark(); onChange(); });
+      // "a, b, c" -> ['a', 'b', 'c']; an empty item is kept on purpose (it means "not set" for is / is none of), only a
+      // completely empty input becomes [].
+      vals.addEventListener('input', () => { c.a = vals.value.split(',').map((s) => s.trim()); if (c.a.length === 1 && c.a[0] === '') c.a = []; mark(); onChange(); });
+      const del = h('button', { type: 'button', class: 'ed-iconbtn', title: t('cr.cond.remove'), 'aria-label': t('cr.cond.remove'), html: icon('trash'), onclick: () => { list.splice(i, 1); paint(); onChange(); } });
+      const row = h('div', { class: 'cr-cond' }, key, op, vals, del);
+      const mark = () => { const bad = invalid(i); row.classList.toggle('cr-bad-row', bad); row.title = bad ? t('cr.cond.dropped') : ''; };
+      mark();
+      rows.append(row);
+    });
+  };
+  paint();
+  const add = button('cr.cond.add', 'plus', () => { list.push({ v: '', op: 'is', a: [] }); paint(); onChange(); rows.querySelector('.cr-cond:last-child input')?.focus(); });
+  add.classList.add('ed-sm');
+  wrap.append(datalist, h('div', { class: 'ed-label' }, t(labelKey)), rows, h('div', { class: 'cr-row' }, add, h('span', { class: 'ed-hint' }, t('cr.cond.hint'))));
+  wrap.repaint = paint;
+  return wrap;
+}
+
+export const chip = (text, cls = '') => h('span', { class: 'cr-chip' + (cls ? ' ' + cls : '') }, text);

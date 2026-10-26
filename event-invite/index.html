@@ -1,0 +1,29 @@
+<!doctype html>
+<!-- event-invite/index.html - designer page. An empty shell: main.js builds every control and the preview into <main>.
+     One render path (JS) owns content, i18n and state; static markup would duplicate it and drift. Build
+     (singlefile.js) strips these comments from the published artifacts. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Event Invite</title>
+<!-- Favicon as an SVG data: URI (an envelope with a wax seal in the invitation palette): zero requests, works from
+     file:// and offline builds. %23 encodes '#', which would otherwise start a URL fragment and truncate the icon. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23a07f35'/%3E%3Cpath fill='%23fffdf8' d='M6 10h20v14H6z'/%3E%3Cpath fill='none' stroke='%23a07f35' stroke-width='1.6' d='M6 10l10 8 10-8'/%3E%3Ccircle cx='16' cy='18' r='3' fill='%239b2c2c'/%3E%3C/svg%3E">
+<!-- Cascade order is a contract: tokens + primitives (ed-), shell (ap-), this app (ei-). Equal-specificity rules are
+     decided by source order, so app.css can override the shared sheets without !important. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- Page registry read by common.js pageHref(): the build renames pages and rewrites <a href> in markup reliably,
+     string literals in JS it would not. `hidden` keeps them out of layout and the accessibility tree. -->
+<a id="pg-design" href="index.html" hidden></a>
+<a id="pg-guests" href="guests.html" hidden></a>
+<!-- Mount point; <main> landmark lets assistive tech jump straight to the content. -->
+<main class="ap-main" id="main"></main>
+<!-- type="module": deferred by spec (runs after parsing, so #main exists), strict mode, ES imports. -->
+<script type="module" src="./main.js"></script>
+</body>
+</html>

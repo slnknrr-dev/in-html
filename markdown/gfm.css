@@ -1,0 +1,135 @@
+/* markdown/gfm.css - README files as GitHub shows them (and Codeberg with .md-codeberg), light and dark, for the
+   output of markdown/gfm.js inside .md-body. Dark follows the system or [data-theme="dark"] on <html>. Code colours
+   (.hl-*) and math come from highlight/ and math/.
+
+   CONTRACT
+   - Scope: every rule is under .md-body (0,1,0 + element). The rendered HTML uses bare elements (p, table, code) as
+     Markdown produces them, so the scope class is the only thing keeping this sheet from restyling the host page.
+     Class names follow GitHub's own markup (markdown-alert, task-list-item, footnotes) so pasted GitHub HTML matches.
+   - Tokens: colours are --md-* / --hl-* custom properties defined on .md-body and redefined for dark. Values are
+     GitHub's Primer palette, copied so a README looks the same as on github.com.
+   - Dark mode, three states: system dark (media query) unless the page forces light ([data-theme="light"]), or forced
+     dark ([data-theme="dark"]). The block is duplicated (media + attribute) because a media query cannot be combined
+     with a selector by OR; :root:not([data-theme="light"]) makes an explicit light choice beat the system setting.
+   - !important only where GitHub's own sheet relies on it (first / last child margins, collapsed details): those must
+     beat any element margin rule regardless of specificity.
+   - Font sizes in em (headings, code at 85%) so the whole body scales from one font-size (Codeberg variant). */
+
+.md-body {
+  --md-fg: #1f2328; --md-muted: #59636e; --md-border: #d1d9e0; --md-border-muted: #d1d9e0b3; --md-canvas: #ffffff;
+  --md-subtle: #f6f8fa; --md-code: #818b981f; --md-link: #0969da; --md-mark: #fff8c5;
+  --md-note: #0969da; --md-tip: #1a7f37; --md-important: #8250df; --md-warning: #9a6700; --md-caution: #d1242f;
+  --md-kbd: #f6f8fa; --md-kbd-border: #d1d9e0;
+  color: var(--md-fg); background: var(--md-canvas); font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  word-wrap: break-word; overflow-wrap: break-word;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .md-body {
+    --md-fg: #f0f6fc; --md-muted: #9198a1; --md-border: #3d444d; --md-border-muted: #3d444db3; --md-canvas: #0d1117;
+    --md-subtle: #151b23; --md-code: #656c7633; --md-link: #4493f8; --md-mark: #bb800926;
+    --md-note: #4493f8; --md-tip: #3fb950; --md-important: #ab7df8; --md-warning: #d29922; --md-caution: #f85149;
+    --md-kbd: #151b23; --md-kbd-border: #3d444d;
+  }
+}
+:root[data-theme="dark"] .md-body {
+  --md-fg: #f0f6fc; --md-muted: #9198a1; --md-border: #3d444d; --md-border-muted: #3d444db3; --md-canvas: #0d1117;
+  --md-subtle: #151b23; --md-code: #656c7633; --md-link: #4493f8; --md-mark: #bb800926;
+  --md-note: #4493f8; --md-tip: #3fb950; --md-important: #ab7df8; --md-warning: #d29922; --md-caution: #f85149;
+  --md-kbd: #151b23; --md-kbd-border: #3d444d;
+}
+/* Outer margins collapse into the container's padding otherwise: the first heading's 24px top margin would push the
+   README down. (0,2,0) already beats the heading rules (0,1,1); !important also beats later rules of equal
+   specificity such as the :is(..., .md-math-block) margin rule (0,2,0). */
+.md-body > :first-child { margin-top: 0 !important; }
+.md-body > :last-child { margin-bottom: 0 !important; }
+/* One vertical rhythm: bottom margins only (no top), so adjacent blocks never double up via margin collapse rules.
+   :is() keeps specificity at its most specific argument (a class, 0,2,0 for .md-math-block) - acceptable here. */
+.md-body :is(p, blockquote, ul, ol, dl, table, pre, details, .md-math-block, .md-diagram, .markdown-alert) { margin: 0 0 16px; }
+.md-body a { color: var(--md-link); text-decoration: none; }
+.md-body a:hover { text-decoration: underline; }
+.md-body :is(h1, h2, h3, h4, h5, h6) { margin: 24px 0 16px; font-weight: 600; line-height: 1.25; }
+.md-body h1 { font-size: 2em; padding-bottom: .3em; border-bottom: 1px solid var(--md-border-muted); }
+.md-body h2 { font-size: 1.5em; padding-bottom: .3em; border-bottom: 1px solid var(--md-border-muted); }
+.md-body h3 { font-size: 1.25em; }
+.md-body h4 { font-size: 1em; }
+.md-body h5 { font-size: .875em; }
+.md-body h6 { font-size: .85em; color: var(--md-muted); }
+/* hr as a filled bar (height + background, border 0): consistent thickness across browsers, which draw hr borders
+   with inset 3D styles by default. */
+.md-body hr { height: .25em; margin: 24px 0; padding: 0; border: 0; background: var(--md-border); }
+.md-body blockquote { padding: 0 1em; color: var(--md-muted); border-left: .25em solid var(--md-border); }
+.md-body :is(ul, ol) { padding-left: 2em; }
+/* Nested ordered lists switch numbering style so levels are distinguishable (GitHub behaviour). */
+.md-body ol ol, .md-body ul ol { list-style-type: lower-roman; }
+.md-body li + li { margin-top: .25em; }
+.md-body li > :is(ul, ol) { margin: 0; }
+/* Task lists: bullets removed; the checkbox is pulled into the freed gutter with a negative left margin equal to the
+   list padding, so checkbox and text align with ordinary list text. */
+.md-body .contains-task-list { padding-left: 1.4em; list-style: none; }
+.md-body .task-list-item { position: relative; }
+.md-body .md-task { margin: 0 .2em .25em -1.4em; vertical-align: middle; }
+/* Images never overflow the column; content-box so padding (align=left/right gutters) is added outside max-width. */
+.md-body img { max-width: 100%; box-sizing: content-box; background: transparent; }
+.md-body img[align=right] { padding-left: 20px; }
+.md-body img[align=left] { padding-right: 20px; }
+.md-body code, .md-body tt { padding: .2em .4em; margin: 0; font: 85%/1.45 ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; white-space: break-spaces; background: var(--md-code); border-radius: 6px; }
+/* Block code scrolls horizontally instead of wrapping (white-space: pre below): wrapped code changes meaning in
+   whitespace-sensitive languages. Inline code uses break-spaces so long identifiers can wrap in prose. */
+.md-body pre { padding: 16px; overflow: auto; font-size: 85%; line-height: 1.45; background: var(--md-subtle); border-radius: 6px; }
+.md-body pre code { padding: 0; font-size: 100%; white-space: pre; background: transparent; border: 0; word-break: normal; }
+.md-body kbd { display: inline-block; padding: 3px 5px; font: 11px/10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--md-fg); vertical-align: middle; background: var(--md-kbd); border: 1px solid var(--md-kbd-border); border-bottom-color: var(--md-kbd-border); border-radius: 6px; box-shadow: inset 0 -1px 0 var(--md-kbd-border); }
+.md-body mark { background: var(--md-mark); color: inherit; }
+/* display:block + overflow:auto on the table itself: a wide table scrolls inside the column instead of widening the
+   page; width:max-content keeps narrow tables narrow. Cost: table semantics for layout are lost (the browser builds an
+   anonymous table box inside), which is why GitHub uses the same trick. */
+.md-body table { display: block; width: max-content; max-width: 100%; overflow: auto; border-spacing: 0; border-collapse: collapse; font-variant: tabular-nums; }
+.md-body :is(td, th) { padding: 6px 13px; border: 1px solid var(--md-border); }
+.md-body th { font-weight: 600; }
+.md-body tr { background: var(--md-canvas); border-top: 1px solid var(--md-border-muted); }
+.md-body tr:nth-child(2n) { background: var(--md-subtle); }
+.md-body details summary { cursor: pointer; }
+/* Collapsed details: browsers hide non-summary children natively, but a display rule on a child (e.g. a block math
+   container set to display:block) would override that; !important restores the native behaviour. */
+.md-body details:not([open]) > :not(summary) { display: none !important; }
+.md-body sup > a.md-fnref::before { content: "["; } .md-body sup > a.md-fnref::after { content: "]"; }
+.md-body .footnotes { font-size: 12px; color: var(--md-muted); border-top: 1px solid var(--md-border); padding-top: 8px; margin-top: 32px; }
+.md-body .footnotes ol { padding-left: 16px; }
+/* Visually hidden but read by screen readers (footnote labels). clip, not display:none, which removes it from the
+   accessibility tree. */
+.md-body .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.md-body .markdown-alert { padding: .5rem 1rem; color: inherit; border-left: .25em solid var(--md-border); }
+.md-body .markdown-alert > :last-child { margin-bottom: 0; }
+.md-body .markdown-alert-title { display: flex; align-items: center; gap: 8px; font-weight: 500; line-height: 1; }
+.md-body .markdown-alert-note { border-left-color: var(--md-note); } .md-body .markdown-alert-note .markdown-alert-title { color: var(--md-note); }
+.md-body .markdown-alert-tip { border-left-color: var(--md-tip); } .md-body .markdown-alert-tip .markdown-alert-title { color: var(--md-tip); }
+.md-body .markdown-alert-important { border-left-color: var(--md-important); } .md-body .markdown-alert-important .markdown-alert-title { color: var(--md-important); }
+.md-body .markdown-alert-warning { border-left-color: var(--md-warning); } .md-body .markdown-alert-warning .markdown-alert-title { color: var(--md-warning); }
+.md-body .markdown-alert-caution { border-left-color: var(--md-caution); } .md-body .markdown-alert-caution .markdown-alert-title { color: var(--md-caution); }
+.md-body .md-math-block { overflow-x: auto; overflow-y: hidden; }
+/* "display: block math" is the MathML Core two-value display (block outer, math inner); engines without it ignore
+   the declaration and keep their default. */
+.md-body .md-math-block math { display: block math; margin: 0; }
+.md-body .md-math-display math { display: block math; }
+.md-body .md-diagram { text-align: center; overflow-x: auto; }
+.md-body .md-diagram svg { max-width: 100%; height: auto; }
+.md-body .md-emoji { font-style: normal; }
+
+/* Codeberg (Forgejo): a little denser, softer links, framed code. */
+.md-body.md-codeberg { font-size: 14px; line-height: 1.6; --md-link: #2185d0; }
+:root[data-theme="dark"] .md-body.md-codeberg { --md-link: #6aa5e8; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .md-body.md-codeberg { --md-link: #6aa5e8; } }
+.md-body.md-codeberg :is(h1, h2) { border-bottom-width: 1px; }
+.md-body.md-codeberg :is(pre, code) { border-radius: 4px; }
+.md-body.md-codeberg pre { border: 1px solid var(--md-border); }
+.md-body.md-codeberg th { background: var(--md-subtle); }
+.md-body.md-codeberg table { width: auto; }
+
+/* Code colours like GitHub's (highlight/ spans). Token letters are highlight/'s classes (k keyword, s string,
+   c comment, n number, f function ...); scoped to pre so inline code stays monochrome as on GitHub. */
+.md-body { --hl-k: #cf222e; --hl-s: #0a3069; --hl-c: #59636e; --hl-n: #0550ae; --hl-f: #8250df; --hl-t: #116329; --hl-a: #0550ae; --hl-p: #0550ae; --hl-b: #953800; --hl-v: #953800; --hl-h: #0550ae; --hl-i: #116329; --hl-ib: #dafbe1; --hl-d: #82071e; --hl-db: #ffebe9; }
+:root[data-theme="dark"] .md-body { --hl-k: #ff7b72; --hl-s: #a5d6ff; --hl-c: #9198a1; --hl-n: #79c0ff; --hl-f: #d2a8ff; --hl-t: #7ee787; --hl-a: #79c0ff; --hl-p: #79c0ff; --hl-b: #ffa657; --hl-v: #ffa657; --hl-h: #79c0ff; --hl-i: #aff5b4; --hl-ib: #033a16; --hl-d: #ffdcd7; --hl-db: #67060c; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .md-body { --hl-k: #ff7b72; --hl-s: #a5d6ff; --hl-c: #9198a1; --hl-n: #79c0ff; --hl-f: #d2a8ff; --hl-t: #7ee787; --hl-a: #79c0ff; --hl-p: #79c0ff; --hl-b: #ffa657; --hl-v: #ffa657; --hl-h: #79c0ff; --hl-i: #aff5b4; --hl-ib: #033a16; --hl-d: #ffdcd7; --hl-db: #67060c; } }
+.md-body pre .hl-k, .md-body pre .hl-r { color: var(--hl-k); } .md-body pre .hl-s { color: var(--hl-s); } .md-body pre .hl-c { color: var(--hl-c); font-style: normal; }
+.md-body pre .hl-n { color: var(--hl-n); } .md-body pre .hl-f, .md-body pre .hl-m { color: var(--hl-f); } .md-body pre .hl-t { color: var(--hl-t); } .md-body pre .hl-a, .md-body pre .hl-p, .md-body pre .hl-h { color: var(--hl-a); }
+.md-body pre .hl-b, .md-body pre .hl-v { color: var(--hl-b); } .md-body pre .hl-o { color: inherit; }
+.md-body pre .hl-i { color: var(--hl-i); background: var(--hl-ib); } .md-body pre .hl-d { color: var(--hl-d); background: var(--hl-db); }

@@ -1,0 +1,393 @@
+// site-studio/templates-landing2.js - Site Studio templates of the group "Landing & serverless" built on the blocks
+// of the repository's libraries: a specialist's card (QR vCard, timeline), an event site (countdown, programme, map,
+// RSVP, .ics), holiday apartments (price calendar, map, contract), a small shop (cart, checkout to a messenger,
+// barcodes), a fund (donations, open report table) and a project site from its README (Markdown, diagrams).
+// Every name, address, price and figure is FICTIONAL.
+//
+// Contract of a template module: each exported template object carries an id, localized names and build(V, ...) ->
+// a fresh document; templates.js adds catalogue metadata (group, mode, modules) where the module does not declare it,
+// and studio/gallery.js shows the catalogue.
+// The viewer API arrives as the argument V instead of an import, so templates are pure document builders that tests
+// (test.js renders every template) and the gallery can run without the editor. Generated artwork and sample data are
+// derived from seeds (tplHash / tplRand where used), so a template builds the same document on every run.
+// Data file: names, texts, figures and art specs dominate; comments mark sections, not individual values.
+import { siteKit } from './templates-site-kit.js';
+
+const vcard = (o) => ['BEGIN:VCARD', 'VERSION:3.0', 'N:' + o.last + ';' + o.first, 'FN:' + o.first + ' ' + o.last, 'TITLE:' + o.title, 'TEL;TYPE=CELL:' + o.tel, 'EMAIL:' + o.email, 'URL:' + o.url, 'END:VCARD'].join('\n');
+
+/* ---------- specialist ---------- */
+
+function tplBuildSpecialist(V) {
+  const K = siteKit(V);
+  const { B, L, T, P, art, item, page, sec } = K;
+  const photo = art.person('nino-portrait', { seed: 'nino', pal: 'clay' });
+  const hero = art.scene('workspace', { seed: 'spec', pal: 'clay', motif: 'grid' });
+  const d = K.doc({ name: 'Nino Beridze — UX researcher', preset: 'clean', theme: { accent: '#b5532d', accent2: '#3f5866', scheme: 'auto' },
+    title: T('Nino Beridze — UX research and service design', 'Нино Беридзе — UX-исследования и сервис-дизайн'),
+    description: T('Interviews, usability tests and service maps for teams that build digital products.', 'Интервью, юзабилити-тесты и карты сервиса для команд цифровых продуктов.'),
+    output: { switcher: 'buttons', langLabels: 'code', themeToggle: true, backToTop: true } });
+  const contactReq = K.req('Messages (browser storage)', 'local:inbox');
+  d.requests = K.requests;
+  d.regions.header = [B('nav', { brand: L('Nino Beridze'), variant: 'bar', sticky: true, pages: true, items: [], ctaLabel: L(T('Write to me', 'Написать')), ctaHref: '#/contact' })];
+  d.regions.main = [
+    page('', T('About', 'Обо мне'), [
+      B('hero', { layout: 'split', media: photo, eyebrow: L(T('UX researcher · Tbilisi', 'UX-исследователь · Тбилиси')),
+        title: L(T('I find out what your users really need', 'Узнаю, что на самом деле нужно вашим пользователям')),
+        text: L(P('Twelve years of interviews, usability tests and service design for banks, clinics and city services.', 'Двенадцать лет интервью, юзабилити-тестов и сервис-дизайна для банков, клиник и городских служб.')),
+        items: [K.btn(T('Services', 'Услуги'), '#/services', 'primary'), K.btn(T('Download vCard', 'Скачать визитку'), '#card', 'secondary')] }),
+      sec({}, [B('stats', { variant: 'cards', count: true, items: [
+        item({ value: '120', suffix: '+', label: T('studies', 'исследований') }), item({ value: '12', suffix: '', label: T('years', 'лет практики') }), item({ value: '4', suffix: '', label: T('languages', 'языка') })] })]),
+      sec({ title: T('Experience', 'Опыт'), tone: 'muted' }, [B('timeline', { variant: 'line', items: [
+        item({ date: '2021—', title: T('Independent researcher', 'Независимый исследователь'), html: P('Research sprints for product teams in Georgia and abroad.', 'Исследовательские спринты для продуктовых команд в Грузии и за её пределами.') }),
+        item({ date: '2016–2021', title: T('Lead researcher, city services', 'Ведущий исследователь, городские сервисы'), html: P('Service maps of 30 public services; 40% fewer repeat visits.', 'Карты 30 городских услуг; на 40% меньше повторных визитов.') }),
+        item({ date: '2013–2016', title: T('UX designer, a bank', 'UX-дизайнер, банк'), html: P('Mobile banking onboarding and accessibility audits.', 'Онбординг мобильного банка и аудиты доступности.') })] })]),
+      sec({ anchor: 'card', title: T('My card', 'Моя визитка'), width: 'narrow' }, [
+        B('columns', { cols: [
+          { w: 50, blocks: [B('qr', { url: 'https://example.org/nino', size: 180, label: L(T('Scan: my site', 'Сканируйте: мой сайт')), align: 'center' })] },
+          { w: 50, blocks: [B('barcode', { kind: 'qr', value: vcard({ first: 'Nino', last: 'Beridze', title: 'UX researcher', tel: '+995555000111', email: 'nino@example.org', url: 'https://example.org/nino' }), caption: L(T('Scan: add to contacts', 'Сканируйте: добавить в контакты')) })] },
+        ] })]),
+    ], { metaDesc: T('UX research, usability testing and service design.', 'UX-исследования, юзабилити-тесты и сервис-дизайн.') }),
+    page('services', T('Services', 'Услуги'), [
+      sec({ title: T('What I do', 'Что я делаю'), lead: T('Fixed-price packages; travel within Georgia included.', 'Пакеты с фиксированной ценой; поездки по Грузии включены.') }, [
+        B('pricing', { columns: 3, items: [
+          item({ name: T('Usability test', 'Юзабилити-тест'), price: '1 800', period: T('per round', 'за раунд'), html: P('6 participants, video highlights, a report with priorities.', '6 участников, видеонарезка, отчёт с приоритетами.') }),
+          item({ name: T('Discovery sprint', 'Исследовательский спринт'), price: '4 500', period: T('2 weeks', '2 недели'), featured: true, label: L(T('Most chosen', 'Чаще выбирают')), html: P('12 interviews, a journey map, opportunities and a workshop.', '12 интервью, карта пути, возможности и воркшоп.') }),
+          item({ name: T('Service map', 'Карта сервиса'), price: '6 000', period: T('4 weeks', '4 недели'), html: P('Front and back stage of a whole service with the team.', 'Фронт и бэк-офис всей услуги вместе с командой.') })] })]),
+      sec({ title: T('How we work', 'Как мы работаем'), tone: 'muted' }, [B('steps', { variant: 'numbers', items: [
+        item({ title: T('Call', 'Созвон'), html: P('30 minutes about your goals.', '30 минут о ваших целях.') }),
+        item({ title: T('Plan', 'План'), html: P('Questions, participants, schedule.', 'Вопросы, участники, график.') }),
+        item({ title: T('Research', 'Исследование'), html: P('Sessions you can watch live.', 'Сессии, которые можно смотреть вживую.') }),
+        item({ title: T('Results', 'Результаты'), html: P('A report and a workshop with the team.', 'Отчёт и воркшоп с командой.') })] })]),
+    ]),
+    page('contact', T('Contact', 'Контакты'), [
+      sec({ title: T('Write to me', 'Напишите мне'), width: 'narrow' }, [
+        B('contact', { variant: 'list', items: [item({ kind: 'email', value: 'nino@example.org' }), item({ kind: 'telegram', value: 'nino_ux' }), item({ kind: 'location', value: 'Tbilisi, Georgia' })] }),
+        B('form', { title: L(T('Short message', 'Короткое сообщение')), req: contactReq, fallback: 'mailto', to: 'nino@example.org' })]),
+    ]),
+    V.notFoundPage(d, K.langs),
+  ];
+  d.regions.footer = [B('footer', { variant: 'simple', brand: L('Nino Beridze'), copy: L(T('© 2026 Nino Beridze · fictional demo', '© 2026 Нино Беридзе · вымышленный пример')) })];
+  d.meta.ogImage = hero;
+  return V.normalizeDoc(d);
+}
+
+/* ---------- event ---------- */
+
+function tplBuildEvent(V) {
+  const K = siteKit(V);
+  const { B, L, T, P, art, item, page, sec } = K;
+  const stage = art.scene('festival-stage', { seed: 'fest', pal: 'dusk', motif: 'stage' });
+  const ppl = ['ana', 'levan', 'mari', 'oto'].map((s, i) => art.person('speaker-' + s, { seed: s, pal: ['dusk', 'rose', 'sea', 'forest'][i] }));
+  const rsvp = K.req('RSVP answers (browser storage)', 'local:rsvp');
+  const d = K.doc({ name: 'Black Sea Code Fest 2026', preset: 'nocturne', theme: { scheme: 'dark' },
+    title: T('Black Sea Code Fest — 14–15 November 2026, Batumi', 'Black Sea Code Fest — 14–15 ноября 2026, Батуми'),
+    description: T('Two days of talks, workshops and a night concert by the sea.', 'Два дня докладов, мастер-классов и ночной концерт у моря.'),
+    output: { switcher: 'buttons', langLabels: 'code', backToTop: true } });
+  d.requests = K.requests;
+  d.regions.header = [
+    B('announce', { html: L(T('Early-bird registration until 1 October', 'Ранняя регистрация — до 1 октября')), label: L(T('Register', 'Зарегистрироваться')), tone: 'accent', href: '#/rsvp', dismiss: true }),
+    B('nav', { brand: L('Code Fest'), variant: 'bar', sticky: true, pages: true, items: [], ctaLabel: L(T('I will come', 'Я приду')), ctaHref: '#/rsvp' })];
+  const prog = (day, rows) => B('timeline', { variant: 'line', items: rows.map(([tm, en, ru]) => item({ date: day + ' · ' + tm, title: T(en, ru), html: L('') })) });
+  d.regions.main = [
+    page('', T('Festival', 'Фестиваль'), [
+      B('hero', { layout: 'center', media: stage, height: 'tall', overlay: 45, eyebrow: L(T('14–15 November · Batumi', '14–15 ноября · Батуми')),
+        title: L(T('Black Sea Code Fest', 'Black Sea Code Fest')), text: L(P('Talks, workshops and a concert on the beach. 600 developers, designers and students.', 'Доклады, мастер-классы и концерт на пляже. 600 разработчиков, дизайнеров и студентов.')),
+        items: [K.btn(T('Programme', 'Программа'), '#/programme', 'primary'), K.btn(T('I will come', 'Я приду'), '#/rsvp', 'secondary')] }),
+      sec({ width: 'narrow' }, [B('countdown', { title: L(T('Doors open in', 'До открытия')), date: '2026-11-14', time: '10:00', tz: 4, units: 'dhms', done: L(T('We are live — see you inside!', 'Мы начали — ждём вас!')) })]),
+      sec({ title: T('Speakers', 'Спикеры'), tone: 'muted' }, [B('team', { variant: 'round', columns: 4, items: [
+        item({ photo: ppl[0], name: L('Ana Kiknadze'), role: T('Offline-first web', 'Офлайн-веб') }), item({ photo: ppl[1], name: L('Levan Tsiklauri'), role: T('Compilers for fun', 'Компиляторы ради удовольствия') }),
+        item({ photo: ppl[2], name: L('Mari Lomidze'), role: T('Accessible design', 'Доступный дизайн') }), item({ photo: ppl[3], name: L('Oto Gelashvili'), role: T('Maps without servers', 'Карты без серверов') })] })]),
+      sec({ title: T('Questions', 'Вопросы') }, [B('faq', { single: true, items: [
+        item({ q: T('Is the festival free?', 'Фестиваль бесплатный?'), html: P('Talks are free with registration; workshops cost 40 GEL.', 'Доклады бесплатны по регистрации; мастер-классы — 40 лари.') }),
+        item({ q: T('Which language?', 'На каком языке?'), html: P('English and Georgian, with live subtitles.', 'Английский и грузинский, с живыми субтитрами.') })] })]),
+    ]),
+    page('programme', T('Programme', 'Программа'), [
+      sec({ title: T('Day one · 14 November', 'День первый · 14 ноября') }, [prog('14.11', [['10:00', 'Opening', 'Открытие'], ['10:30', 'Offline-first web apps', 'Офлайн-веб-приложения'], ['12:00', 'Workshop: maps without servers', 'Мастер-класс: карты без серверов'], ['21:00', 'Night concert on the beach', 'Ночной концерт на пляже']])]),
+      sec({ title: T('Day two · 15 November', 'День второй · 15 ноября'), tone: 'muted' }, [prog('15.11', [['10:00', 'Accessible design in practice', 'Доступный дизайн на практике'], ['11:30', 'Compilers for fun', 'Компиляторы ради удовольствия'], ['16:00', 'Lightning talks and closing', 'Блиц-доклады и закрытие']])]),
+      sec({ title: T('Schedule at a glance', 'Расписание одним взглядом') }, [B('diagram', { mode: 'text', src: 'gantt\n  dateFormat HH:mm\n  axisFormat %H:%M\n  section Day 1\n  Opening :a1, 10:00, 30m\n  Talks :a2, after a1, 90m\n  Workshops :a3, 12:00, 3h\n  section Day 2\n  Talks :b1, 10:00, 2h\n  Lightning :b2, 16:00, 1h', caption: L(T('Both days, main hall', 'Оба дня, главный зал')) })]),
+    ]),
+    page('venue', T('Venue', 'Место'), [
+      sec({ title: T('How to get there', 'Как добраться') }, [B('map', { title: L(T('Festival places', 'Места фестиваля')), route: true, height: 420, items: [
+        item({ title: T('Main hall', 'Главный зал'), text: T('Rustaveli 25', 'Руставели, 25'), lat: 41.6505, lng: 41.6366 }),
+        item({ title: T('Workshop rooms', 'Залы мастер-классов'), text: T('Gogebashvili 9', 'Гогебашвили, 9'), lat: 41.6471, lng: 41.6409 }),
+        item({ title: T('Beach stage', 'Сцена на пляже'), text: T('Boulevard, gate 3', 'Бульвар, вход 3'), lat: 41.6523, lng: 41.6302 })] })]),
+    ]),
+    page('rsvp', T('RSVP', 'Регистрация'), [
+      sec({ width: 'wide' }, [B('event', { title: L('Black Sea Code Fest 2026'), date: '2026-11-14', time: '10:00', endTime: '22:00', tz: 'Asia/Tbilisi', place: L(T('Main hall', 'Главный зал')), address: 'Rustaveli 25, Batumi',
+        lat: 41.6505, lng: 41.6366, text: L(P('Tell us whether you come — we print badges and plan the food.', 'Сообщите, придёте ли вы, — мы печатаем бейджи и планируем еду.')), rsvp: true, rsvpTitle: L(T('Will you come?', 'Вы придёте?')),
+        req: rsvp, fallback: 'mailto', to: 'hello@codefest.example' })]),
+    ]),
+    V.notFoundPage(d, K.langs),
+  ];
+  d.regions.footer = [B('footer', { variant: 'center', brand: L('Black Sea Code Fest'), copy: L(T('© 2026 · fictional demo event', '© 2026 · вымышленное событие')) })];
+  return V.normalizeDoc(d);
+}
+
+/* ---------- apartments ---------- */
+
+function tplBuildApartments(V) {
+  const K = siteKit(V);
+  const { B, L, T, P, art, item, page, sec } = K;
+  const hero = art.scene('sea-view', { seed: 'apt', pal: 'sea', motif: 'waves' });
+  const rooms = ['living', 'bedroom', 'kitchen', 'balcony'].map((s, i) => art.card('apt-' + s, { seed: s, pal: 'sea', glyph: ['🛋', '🛏', '🍳', '🌅'][i] }));
+  const bookReq = K.req('Booking requests (browser storage)', 'local:bookings');
+  const contractReq = K.req('Signed agreements (browser storage)', 'local:agreements');
+  const d = K.doc({ name: 'Seabreeze Apartments', preset: 'shore', theme: { scheme: 'auto' },
+    title: T('Seabreeze Apartments — sea view in Batumi', 'Апартаменты «Морской бриз» — вид на море в Батуми'),
+    description: T('Two-room apartment 300 m from the beach: prices by season, free dates and online booking.', 'Двухкомнатные апартаменты в 300 м от пляжа: цены по сезонам, свободные даты и онлайн-бронь.'),
+    shop: { currency: 'GEL' } });
+  d.requests = K.requests;
+  d.regions.header = [B('nav', { brand: L('Seabreeze'), variant: 'bar', sticky: true, pages: true, items: [], ctaLabel: L(T('Book', 'Забронировать')), ctaHref: '#/book' })];
+  d.regions.main = [
+    page('', T('Apartment', 'Апартаменты'), [
+      B('hero', { layout: 'left', media: hero, height: 'tall', overlay: 30, eyebrow: L(T('Batumi · 300 m to the sea', 'Батуми · 300 м до моря')),
+        title: L(T('Wake up to the sea', 'Просыпайтесь у моря')), text: L(P('Two rooms, a balcony with a sea view, fast Wi-Fi and a quiet courtyard.', 'Две комнаты, балкон с видом на море, быстрый Wi-Fi и тихий двор.')),
+        items: [K.btn(T('See free dates', 'Свободные даты'), '#/book', 'primary')] }),
+      sec({}, [B('features', { variant: 'icons', columns: 4, items: [
+        item({ icon: 'home', title: T('54 m²', '54 м²'), html: P('Living room, bedroom, kitchen', 'Гостиная, спальня, кухня') }), item({ icon: 'users', title: T('Up to 4 guests', 'До 4 гостей'), html: P('Double bed and a sofa bed', 'Двуспальная кровать и диван') }),
+        item({ icon: 'web', title: T('Wi-Fi 300 Mbit', 'Wi-Fi 300 Мбит'), html: P('Desk for remote work', 'Стол для удалённой работы') }), item({ icon: 'car', title: T('Parking', 'Парковка'), html: P('In the courtyard, free', 'Во дворе, бесплатно') })] })]),
+      sec({ title: T('Inside', 'Внутри'), tone: 'muted' }, [B('gallery', { variant: 'grid', columns: 4, zoom: true, items: rooms.map((att, i) => item({ att, caption: [T('Living room', 'Гостиная'), T('Bedroom', 'Спальня'), T('Kitchen', 'Кухня'), T('Balcony', 'Балкон')][i] })) })]),
+      sec({ title: T('Guests say', 'Отзывы гостей') }, [B('testimonials', { variant: 'cards', summary: true, columns: 3, items: [
+        item({ html: P('Clean, quiet and the sunsets from the balcony are unreal.', 'Чисто, тихо, а закаты с балкона — нереальные.'), name: L('Katya'), rating: 5, source: L('Booking') }),
+        item({ html: P('Host met us at midnight. Great for families.', 'Хозяин встретил нас в полночь. Отлично для семей.'), name: L('Giorgi'), rating: 5, source: L('Google') }),
+        item({ html: P('Good desk and fast internet, worked all week.', 'Хороший стол и быстрый интернет, работал всю неделю.'), name: L('Tom'), rating: 4, source: L('Airbnb') })] })]),
+    ]),
+    page('book', T('Prices & booking', 'Цены и бронь'), [
+      sec({ title: T('Free dates and prices', 'Свободные даты и цены'), lead: T('Choose arrival and departure; the total is shown before you send the request.', 'Выберите заезд и выезд — сумма видна до отправки заявки.') }, [
+        B('booking', { title: L(T('Your stay', 'Ваше проживание')), price: 140, weekend: 170, minNights: 2, months: 2,
+          seasons: '2026-06-01..2026-08-31 | 220 | 250 | Summer\n2026-12-24..2027-01-08 | 190 | 190 | Winter holidays',
+          booked: '2026-11-20..2026-11-24\n2026-12-01..2026-12-05', req: bookReq, fallback: 'whatsapp', to: '+995 555 12 34 56' })]),
+      sec({ title: T('Rules of the house', 'Правила дома'), tone: 'muted', width: 'narrow' }, [
+        B('contract', { title: L(T('Short-term rental agreement', 'Договор краткосрочной аренды')),
+          body: L(T('I, {{name}}, rent the Seabreeze apartment from {{checkin}} for {{nights}} nights.\n\nI agree to keep quiet after 23:00, not to smoke inside and to leave the keys in the box on departure.\n\nContact: {{email}}',
+            'Я, {{name}}, арендую апартаменты «Морской бриз» с {{checkin}} на {{nights}} ночей.\n\nОбязуюсь соблюдать тишину после 23:00, не курить в помещении и оставить ключи в ящике при выезде.\n\nКонтакт: {{email}}')),
+          req: contractReq, fallback: 'mailto', to: 'host@seabreeze.example' })]),
+    ]),
+    page('location', T('Location', 'Расположение'), [
+      sec({ title: T('Around the apartment', 'Рядом с апартаментами') }, [B('map', { route: false, height: 380, items: [
+        item({ title: T('Seabreeze Apartments', 'Апартаменты «Морской бриз»'), text: T('Melikishvili 14', 'Меликишвили, 14'), lat: 41.6461, lng: 41.6362 }),
+        item({ title: T('Beach', 'Пляж'), text: T('4 minutes on foot', '4 минуты пешком'), lat: 41.6489, lng: 41.6335 }),
+        item({ title: T('Market', 'Рынок'), text: T('Fruit, fish, cheese', 'Фрукты, рыба, сыр'), lat: 41.6437, lng: 41.6411 })] })]),
+    ]),
+    V.notFoundPage(d, K.langs),
+  ];
+  d.regions.footer = [B('footer', { variant: 'simple', brand: L('Seabreeze Apartments'), copy: L(T('© 2026 · fictional demo', '© 2026 · вымышленный пример')) })];
+  return V.normalizeDoc(d);
+}
+
+/* ---------- small shop ---------- */
+
+function tplBuildShopLite(V) {
+  const K = siteKit(V);
+  const { B, L, T, P, art, item, page, sec } = K;
+  const hero = art.scene('honey-shop', { seed: 'honey', pal: 'sand', motif: 'shop' });
+  const jars = ['acacia', 'chestnut', 'linden', 'mountain', 'comb', 'gift'].map((s, i) => art.card('honey-' + s, { seed: s, pal: 'sand', glyph: ['A', 'C', 'L', 'M', '⬡', '🎁'][i] }));
+  const orders = K.req('Orders (browser storage)', 'local:orders');
+  const d = K.doc({ name: 'Racha Honey', preset: 'harvest', theme: { scheme: 'auto' },
+    title: T('Racha Honey — mountain honey from the family apiary', 'Мёд Рачи — горный мёд с семейной пасеки'),
+    description: T('Six kinds of honey; order in a minute, pay on delivery.', 'Шесть сортов мёда; заказ за минуту, оплата при получении.'),
+    shop: { currency: 'GEL', mode: 'cart', cartButton: 'auto', checkout: { method: 'request', req: orders, fallback: 'whatsapp', phone: '+995 555 98 76 54', minTotal: 20 } } });
+  d.requests = K.requests;
+  const P2 = (en, ru) => L(P(en, ru));
+  const prod = (sku, att, en, ru, price, old, den, dru) => item({ sku, image: att, name: T(en, ru), price, old, unit: L(T('jar 500 g', 'банка 500 г')), html: P2(den, dru), min: 1, step: 1, stock: 20 });
+  d.regions.header = [B('nav', { brand: L('Racha Honey'), variant: 'bar', sticky: true, pages: true, items: [] })];
+  d.regions.main = [
+    page('', T('Shop', 'Магазин'), [
+      B('hero', { layout: 'split', media: hero, eyebrow: L(T('Family apiary since 1987', 'Семейная пасека с 1987 года')), title: L(T('Honey from 1 400 m above the sea', 'Мёд с высоты 1 400 м над морем')),
+        text: L(P('Raw, unheated, packed by hand. Delivery across Georgia in two days.', 'Сырой, без нагрева, фасуем вручную. Доставка по Грузии за два дня.')), items: [K.btn(T('Choose honey', 'Выбрать мёд'), '#honey', 'primary')] }),
+      sec({ anchor: 'honey', title: T('Our honey', 'Наш мёд') }, [B('products', { variant: 'cards', columns: 3, qty: true, items: [
+        prod('h-acacia', jars[0], 'Acacia', 'Акациевый', 28, null, 'Light, mild, stays liquid for months.', 'Светлый, мягкий, долго не кристаллизуется.'),
+        prod('h-chestnut', jars[1], 'Chestnut', 'Каштановый', 32, null, 'Dark and slightly bitter; great with cheese.', 'Тёмный, с горчинкой; отлично к сыру.'),
+        prod('h-linden', jars[2], 'Linden', 'Липовый', 30, 34, 'Fragrant, for tea and colds.', 'Ароматный, к чаю и при простуде.'),
+        prod('h-mountain', jars[3], 'Mountain meadow', 'Горное разнотравье', 35, null, 'Thirty flowers of the Racha meadows.', 'Тридцать трав рачинских лугов.'),
+        prod('h-comb', jars[4], 'Honeycomb', 'Мёд в сотах', 45, null, 'A frame piece in a wooden box.', 'Кусок рамки в деревянной коробке.'),
+        prod('h-gift', jars[5], 'Gift set', 'Подарочный набор', 85, 95, 'Three jars and a dipper in a box.', 'Три банки и ложка-веретено в коробке.')] })]),
+      sec({ title: T('Your order', 'Ваш заказ'), tone: 'muted', width: 'narrow' }, [B('cart', { title: L(T('Cart', 'Корзина')) })]),
+      sec({ title: T('Labels with barcodes', 'Этикетки со штрихкодом'), lead: T('Every jar carries an EAN-13 code for shops that sell our honey.', 'На каждой банке код EAN-13 для магазинов, где продаётся наш мёд.') }, [
+        B('columns', { cols: [{ w: 50, blocks: [B('barcode', { kind: 'ean13', value: '4860001234561', caption: L(T('Acacia 500 g', 'Акациевый 500 г')) })] }, { w: 50, blocks: [B('barcode', { kind: 'ean13', value: '4860001234578', caption: L(T('Chestnut 500 g', 'Каштановый 500 г')) })] }] })]),
+    ]),
+    page('delivery', T('Delivery', 'Доставка'), [
+      sec({ title: T('Delivery and payment', 'Доставка и оплата'), width: 'narrow' }, [B('faq', { variant: 'cards', items: [
+        item({ q: T('How fast?', 'Как быстро?'), html: P('Tbilisi and Batumi — next day; elsewhere — two days.', 'Тбилиси и Батуми — на следующий день; остальное — за два дня.') }),
+        item({ q: T('How do I pay?', 'Как оплатить?'), html: P('Cash or card to the courier. Orders from 20 GEL.', 'Наличными или картой курьеру. Заказ от 20 лари.') }),
+        item({ q: T('Where does my order go?', 'Куда уходит мой заказ?'), html: P('This demo keeps orders in your browser and offers WhatsApp; set your own endpoint in Site → Requests.', 'Этот пример хранит заказы в браузере и предлагает WhatsApp; укажите свой адрес в «Сайт → Запросы».') })] })]),
+    ]),
+    V.notFoundPage(d, K.langs),
+  ];
+  d.regions.footer = [B('footer', { variant: 'simple', brand: L('Racha Honey'), copy: L(T('© 2026 · fictional demo shop', '© 2026 · вымышленный магазин')) })];
+  return V.normalizeDoc(d);
+}
+
+/* ---------- fund ---------- */
+
+function tplBuildFund(V) {
+  const K = siteKit(V);
+  const { B, L, T, P, art, item, page, sec } = K;
+  const hero = art.scene('library-fund', { seed: 'fund', pal: 'forest', motif: 'book' });
+  const d = K.doc({ name: 'Village Libraries Fund', preset: 'folio', theme: { scheme: 'auto' },
+    title: T('Village Libraries Fund — books for 40 mountain schools', 'Фонд сельских библиотек — книги для 40 горных школ'),
+    description: T('We stock school libraries in mountain villages and publish every lari we spend.', 'Мы наполняем школьные библиотеки в горных сёлах и публикуем каждый потраченный лари.'),
+    shop: { currency: 'GEL' } });
+  d.regions.header = [B('nav', { brand: L(T('Village Libraries', 'Сельские библиотеки')), variant: 'bar', sticky: true, pages: true, items: [], ctaLabel: L(T('Donate', 'Помочь')), ctaHref: '#/donate' })];
+  d.regions.main = [
+    page('', T('Fund', 'Фонд'), [
+      B('hero', { layout: 'split', media: hero, eyebrow: L(T('Since 2019 · 31 schools so far', 'С 2019 года · уже 31 школа')), title: L(T('A shelf of books changes a village school', 'Полка книг меняет сельскую школу')),
+        text: L(P('Each library gets 300 books, a reading corner and a teacher trained to run a book club.', 'Каждая библиотека получает 300 книг, уголок чтения и учителя, обученного вести книжный клуб.')), items: [K.btn(T('Support', 'Поддержать'), '#/donate', 'primary'), K.btn(T('Where the money goes', 'Куда идут деньги'), '#/report', 'secondary')] }),
+      sec({}, [B('stats', { variant: 'band', count: true, items: [item({ value: '31', label: T('libraries opened', 'библиотека открыта') }), item({ value: '9 300', label: T('books delivered', 'книг доставлено') }), item({ value: '2 400', label: T('children reading', 'детей читают') })] })]),
+      sec({ title: T('Our road', 'Наш путь'), tone: 'muted' }, [B('timeline', { variant: 'alternate', items: [
+        item({ date: '2019', title: T('First shelf in Ushguli', 'Первая полка в Ушгули'), html: P('Started by two teachers and a borrowed van.', 'Начали двое учителей и одолженный фургон.') }),
+        item({ date: '2022', title: T('20 schools', '20 школ'), html: P('Book clubs and a summer reading camp.', 'Книжные клубы и летний лагерь чтения.') }),
+        item({ date: '2026', title: T('Goal: 40 schools', 'Цель: 40 школ'), html: P('Nine more villages in Racha and Tusheti.', 'Ещё девять сёл в Раче и Тушетии.') })] })]),
+    ]),
+    page('donate', T('Donate', 'Помочь'), [
+      sec({ width: 'wide' }, [B('donate', { title: L(T('Nine libraries for 2026', 'Девять библиотек в 2026 году')), text: L(P('One library costs 3 500 GEL: books, a shelf, cushions and teacher training.', 'Одна библиотека стоит 3 500 лари: книги, стеллаж, подушки и обучение учителя.')),
+        goal: 31500, raised: 19840, backers: 412, link: 'https://example.org/donate', qr: true, bank: 'IBAN GE00 XX00 0000 0000 0000 00\nRecipient: Village Libraries Fund\nPurpose: donation',
+        items: [item({ amount: 20, title: T('Two books', 'Две книги'), text: T('A picture book and a novel', 'Книжка с картинками и роман'), link: '' }), item({ amount: 100, title: T('A reading corner', 'Уголок чтения'), text: T('Cushions, a lamp and a rug', 'Подушки, лампа и коврик'), link: '' }), item({ amount: 500, title: T('A shelf', 'Стеллаж'), text: T('Built by a village carpenter', 'Сделан сельским плотником'), link: '' })] })]),
+    ]),
+    page('report', T('Open report', 'Открытый отчёт'), [
+      sec({ title: T('Spending 2025', 'Расходы 2025'), lead: T('Every purchase, sorted and searchable; download the table as CSV.', 'Каждая покупка: сортировка, поиск и скачивание таблицы в CSV.') }, [
+        B('datatable', { title: L(T('Expenses by month', 'Расходы по месяцам')), file: 'fund-expenses-2025', sort: true, filter: true, download: true,
+          csv: 'Month,Item,Village,Amount GEL\n2025-02,Books (120),Mestia,1440\n2025-03,Shelf,Mestia,480\n2025-04,Teacher training,Oni,900\n2025-05,Books (90),Oni,1080\n2025-06,Summer camp food,Ambrolauri,1650\n2025-08,Transport,Omalo,620\n2025-09,Books (150),Omalo,1800\n2025-10,Cushions and lamps,Shatili,410' }),
+        B('diagram', { mode: 'text', src: 'pie showData\n  title Where 10 380 GEL went\n  "Books" : 4320\n  "Camp" : 1650\n  "Training" : 900\n  "Furniture" : 890\n  "Transport" : 620', caption: L(T('Share of each kind of expense', 'Доля каждого вида расходов')) })]),
+    ]),
+    V.notFoundPage(d, K.langs),
+  ];
+  d.regions.footer = [B('footer', { variant: 'simple', brand: L(T('Village Libraries Fund', 'Фонд сельских библиотек')), copy: L(T('© 2026 · fictional demo fund', '© 2026 · вымышленный фонд')) })];
+  return V.normalizeDoc(d);
+}
+
+/* ---------- project site from README ---------- */
+
+const README_EN = `# tiny-sync
+
+> Sync two folders over a USB stick — no cloud, no account.
+
+![status](https://img.shields.io/badge/status-beta-orange)
+
+## Install
+
+\`\`\`sh
+npm i -g tiny-sync
+tiny-sync init ~/Photos /media/stick
+\`\`\`
+
+## How it works
+
+\`\`\`mermaid
+flowchart LR
+  A[Laptop] -- changes --> S[(USB stick)]
+  S -- changes --> B[Desktop]
+  B -- conflicts --> R{Resolve}
+\`\`\`
+
+| command | what it does |
+| --- | --- |
+| \`init\` | creates the index on both sides |
+| \`push\` | copies new and changed files to the stick |
+| \`pull\` | copies them from the stick |
+
+> [!TIP]
+> Run \`tiny-sync status\` first: it shows what would change.
+
+The index costs about $O(n \\log n)$ for $n$ files.`;
+
+const README_RU = `# tiny-sync
+
+> Синхронизация двух папок через флешку — без облака и аккаунтов.
+
+## Установка
+
+\`\`\`sh
+npm i -g tiny-sync
+tiny-sync init ~/Photos /media/stick
+\`\`\`
+
+## Как это работает
+
+\`\`\`mermaid
+flowchart LR
+  A[Ноутбук] -- изменения --> S[(Флешка)]
+  S -- изменения --> B[Компьютер]
+  B -- конфликты --> R{Решить}
+\`\`\`
+
+| команда | что делает |
+| --- | --- |
+| \`init\` | создаёт индекс с обеих сторон |
+| \`push\` | копирует новые и изменённые файлы на флешку |
+| \`pull\` | забирает их с флешки |
+
+> [!TIP]
+> Сначала запустите \`tiny-sync status\`: он покажет, что изменится.
+
+Индекс строится примерно за $O(n \\log n)$ для $n$ файлов.`;
+
+function tplBuildReadme(V) {
+  const K = siteKit(V);
+  const { B, L, T, P, art, item, page, sec } = K;
+  const d = K.doc({ name: 'tiny-sync — project site', preset: 'clean', theme: { accent: '#2563eb', scheme: 'auto' },
+    title: T('tiny-sync — sync folders over a USB stick', 'tiny-sync — синхронизация папок через флешку'),
+    description: T('Project site made from the README: install, how it works, changelog.', 'Сайт проекта из README: установка, как это работает, история изменений.') });
+  d.regions.header = [B('nav', { brand: L('tiny-sync'), variant: 'bar', sticky: true, pages: true, items: [], ctaLabel: L('Codeberg'), ctaHref: 'https://codeberg.org/' })];
+  d.regions.main = [
+    page('', T('README', 'README'), [sec({ width: 'narrow' }, [B('markdown', { text: { en: README_EN, ru: README_RU } })])]),
+    page('formats', T('Index format', 'Формат индекса'), [sec({ width: 'narrow' }, [
+      B('markdown', { text: T('## The index\n\nOne line per file: size, modification time and a hash.\n\n```json\n{ "path": "a.jpg", "size": 51234, "mtime": 1767225600, "h": "b3:9f2c…" }\n```',
+        '## Индекс\n\nПо строке на файл: размер, время изменения и хеш.\n\n```json\n{ "path": "a.jpg", "size": 51234, "mtime": 1767225600, "h": "b3:9f2c…" }\n```') }),
+      B('diagram', { mode: 'text', src: 'erDiagram\n  INDEX ||--o{ ENTRY : has\n  ENTRY {\n    string path PK\n    int size\n    int mtime\n    string hash\n  }', caption: L(T('The index as data', 'Индекс как данные')) }),
+      B('formula', { tex: 'T(n) = O(n \\log n)', caption: L(T('Building the index', 'Построение индекса')) })])]),
+    page('changelog', T('Changelog', 'Изменения'), [sec({ width: 'narrow' }, [B('timeline', { variant: 'line', items: [
+      item({ date: '0.4.0', title: T('Conflict view', 'Просмотр конфликтов'), html: P('Side by side diff of both versions.', 'Сравнение обеих версий рядом.') }),
+      item({ date: '0.3.0', title: T('Faster hashing', 'Быстрее хеширование'), html: P('BLAKE3 instead of SHA-256.', 'BLAKE3 вместо SHA-256.') }),
+      item({ date: '0.1.0', title: T('First release', 'Первый выпуск'), html: P('push, pull, status.', 'push, pull, status.') })] })])]),
+    page('map', T('Site map', 'Карта сайта'), [sec({ width: 'narrow' }, [B('diagram', { mode: 'sitemap', caption: L(T('Pages of this site', 'Страницы этого сайта')), download: true })])], { nav: false }),
+    V.notFoundPage(d, K.langs),
+  ];
+  d.regions.footer = [B('footer', { variant: 'simple', brand: L('tiny-sync'), copy: L(T('MIT · fictional demo project', 'MIT · вымышленный проект')) })];
+  return V.normalizeDoc(d);
+}
+
+const both = (en, ru, uk, de, fr, es, ka) => ({ en, ru, uk: uk || ru, de: de || en, fr: fr || en, es: es || en, ka: ka || en });
+
+const TPL_SPECIALIST = {
+  id: 'specialist', group: 'landing', mode: 'offline', langs: ['en', 'ru'], build: tplBuildSpecialist,
+  modules: { req: ['pages', 'qr', 'forms'], opt: ['langs'] },
+  name: both('Specialist card', 'Визитка специалиста', 'Візитка фахівця', 'Visitenkarte', 'Carte de spécialiste', 'Tarjeta de especialista', 'სპეციალისტის ვიზიტკა'),
+  desc: both('A researcher’s site: services with prices, experience on a timeline, a QR vCard and a contact form.', 'Сайт исследователя: услуги с ценами, опыт на таймлайне, QR-визитка и форма связи.', 'Сайт дослідниці: послуги з цінами, досвід на таймлайні, QR-візитка й форма зв’язку.'),
+  note: both('Messages stay in the visitor’s browser offline; the form also opens e-mail.', 'Офлайн сообщения остаются в браузере посетителя; форма также открывает почту.'),
+};
+const TPL_EVENT = {
+  id: 'event', group: 'landing', mode: 'serverless', langs: ['en', 'ru'], build: tplBuildEvent,
+  modules: { req: ['events', 'countdown', 'map', 'diagram'], opt: ['forms', 'accounts'] },
+  name: both('Event site', 'Сайт мероприятия', 'Сайт події', 'Veranstaltungsseite', 'Site d’événement', 'Sitio de evento', 'ღონისძიების საიტი'),
+  desc: both('A festival: countdown, speakers, a programme with a Gantt chart, venues on a map, RSVP and “Add to calendar”.', 'Фестиваль: обратный отсчёт, спикеры, программа с диаграммой Ганта, площадки на карте, RSVP и «Добавить в календарь».', 'Фестиваль: зворотний відлік, спікери, програма з діаграмою Ганта, майданчики на мапі, RSVP і «Додати до календаря».'),
+  note: both('RSVP answers need your endpoint (or a backend) to reach you.', 'Ответам RSVP нужен ваш адрес (или backend), чтобы дойти до вас.'),
+};
+const TPL_APARTMENTS = {
+  id: 'apartments', group: 'landing', mode: 'serverless', langs: ['en', 'ru'], build: tplBuildApartments,
+  modules: { req: ['booking', 'map', 'contract'], opt: ['payments'] },
+  name: both('Holiday apartment', 'Апартаменты посуточно', 'Апартаменти подобово', 'Ferienwohnung', 'Location de vacances', 'Apartamento vacacional', 'სადღეღამისო ბინა'),
+  desc: both('Prices by season in a calendar, booked dates, a booking request, the house agreement to sign and a map.', 'Цены по сезонам в календаре, занятые даты, заявка на бронь, договор с правилами дома и карта.', 'Ціни за сезонами в календарі, зайняті дати, заявка на бронь, договір із правилами дому й мапа.'),
+  note: both('Offline, requests go to WhatsApp; with your endpoint they arrive as data.', 'Офлайн заявки уходят в WhatsApp; с вашим адресом приходят как данные.'),
+};
+const TPL_SHOP_LITE = {
+  id: 'shop-lite', group: 'landing', mode: 'serverless', langs: ['en', 'ru'], build: tplBuildShopLite,
+  modules: { req: ['cart', 'checkout'], opt: ['barcode', 'payments'] },
+  name: both('Small shop', 'Небольшой магазин', 'Невелика крамниця', 'Kleiner Laden', 'Petite boutique', 'Tienda pequeña', 'პატარა მაღაზია'),
+  desc: both('A honey shop: products with old prices, a cart kept in the browser, checkout to your endpoint or WhatsApp, EAN-13 labels.', 'Магазин мёда: товары со старыми ценами, корзина в браузере, оформление на ваш адрес или в WhatsApp, этикетки EAN-13.', 'Крамниця меду: товари зі старими цінами, кошик у браузері, оформлення на вашу адресу чи у WhatsApp, етикетки EAN-13.'),
+};
+const TPL_FUND = {
+  id: 'fund', group: 'landing', mode: 'serverless', langs: ['en', 'ru'], build: tplBuildFund,
+  modules: { req: ['donate', 'table', 'diagram'], opt: ['payments'] },
+  name: both('Fund or NGO', 'Фонд или НКО', 'Фонд або ГО', 'Stiftung oder NGO', 'Fondation ou ONG', 'Fundación u ONG', 'ფონდი ან არასამთავრობო'),
+  desc: both('A goal with progress, support tiers, a payment QR and bank details, and an open report: a sortable table and a pie chart.', 'Цель с прогрессом, уровни поддержки, QR для оплаты и реквизиты, открытый отчёт: таблица с сортировкой и круговая диаграмма.', 'Мета з прогресом, рівні підтримки, QR для оплати й реквізити, відкритий звіт: таблиця із сортуванням і кругова діаграма.'),
+  note: both('Payments happen at your provider: the page only links to it.', 'Платежи проходят у вашего провайдера: страница только ссылается на него.'),
+};
+const TPL_README = {
+  id: 'readme', group: 'landing', mode: 'offline', langs: ['en', 'ru'], build: tplBuildReadme,
+  modules: { req: ['markdown', 'diagram'], opt: ['formula', 'seo'] },
+  name: both('Project site from a README', 'Сайт проекта из README', 'Сайт проєкту з README', 'Projektseite aus der README', 'Site de projet depuis le README', 'Sitio del proyecto desde el README', 'პროექტის საიტი README-დან'),
+  desc: both('The README as the home page (GFM, Mermaid, math, alerts), the data format with an ER diagram, a changelog and a site map.', 'README как главная (GFM, Mermaid, формулы, врезки), формат данных с ER-диаграммой, история изменений и карта сайта.', 'README як головна (GFM, Mermaid, формули, врізки), формат даних з ER-діаграмою, історія змін і мапа сайту.'),
+};
+
+export { TPL_APARTMENTS, TPL_EVENT, TPL_FUND, TPL_README, TPL_SHOP_LITE, TPL_SPECIALIST, both };

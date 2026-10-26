@@ -1,0 +1,6 @@
+const short=(s,head=8,tail=6)=>{const t=String(s??'');return t.length>head+tail+1?`${t.slice(0,head)}…${t.slice(-tail)}`:t;};const rtf=new Map();function relFormat(lang){if(!rtf.has(lang)){try{rtf.set(lang,new Intl.RelativeTimeFormat(lang,{numeric:'auto',style:'short'}));}catch{rtf.set(lang,null);}}
+return rtf.get(lang);}
+function ago(sec,lang='en',now=Date.now()/1000){if(!sec)return'';const d=sec-now;const f=relFormat(lang);const abs=Math.abs(d);const[v,u]=abs<60?[Math.round(d),'second']:abs<3600?[Math.round(d/60),'minute']:abs<86400?[Math.round(d/3600),'hour']:abs<86400*60?[Math.round(d/86400),'day']:[Math.round(d/86400/30),'month'];return f?f.format(v,u):`${v} ${u}`;}
+function dateTime(sec,lang='en'){if(!sec)return'';try{return new Date(sec*1000).toLocaleString(lang,{dateStyle:'medium',timeStyle:'short'});}catch{return new Date(sec*1000).toISOString();}}
+function num(n,lang='en',maxFraction=2){try{return new Intl.NumberFormat(lang,{maximumFractionDigits:maxFraction}).format(n);}catch{return String(n);}}
+export{short,dateTime,ago,num};

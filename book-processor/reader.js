@@ -1,0 +1,993 @@
+// book-processor/reader.js - the reader: the book is cut into chunks (top-level sections, long ones split
+// at subsections or blocks), a chunk is rendered with the shared book renderer (book/html.js) and laid out either in
+// CSS columns (one or two pages per screen, turned by translating the flow) or as one scrolling column. Positions
+// are reading units (book/model.js readingUnits) plus a character offset, so they survive font, size, layout and
+// window changes. Highlights and search hits use the same offsets. Keyboard, tap zones, swipes and wheel turn
+// pages; footnotes open as popovers; the position is saved as you read.
+import { h, lsGet, lsSet, debounce, clamp } from '../ui/dom.js';
+import { t, toast, copyText } from '../ui/app.js';
+import { contextMenu } from '../ui/contextmenu.js';
+import { iconEl } from '../ui/icons.js';
+import { layers, openPopover } from '../ui/overlays.js';
+import { readingUnits, sectionTitle, toc as bookToc } from '../book/model.js';
+import { renderBlocks, renderContext, renderNote, renderTitle } from '../book/html.js';
+import { bookCSS, stylesCSS } from '../book/css.js';
+import { uid } from '../util/id.js';
+import { S, authorsText, pct } from './state.js';
+import { db } from './db.js';
+import { imageURLs } from './io.js';
+import { openPanel, closePanel, selectionBar, hideSelectionBar, highlightPopover, refreshPanel, searchFor, noteDialog } from './reader-panels.js';
+
+const PREFS_KEY = 'bk-reader';
+export const DEFAULTS = { theme: 'light', layout: 'auto', font: 'serif', size: 19, lh: 1.55, margin: 44, width: 38, justify: true, hyphens: true, spaced: false, anim: true };
+export const FONTS = {
+  serif: 'Georgia, "Times New Roman", "Noto Serif", "Noto Serif Georgian", Sylfaen, serif',
+  book: '"Palatino Linotype", "Book Antiqua", Palatino, "Iowan Old Style", Charter, "Bitstream Charter", Georgia, "Noto Serif Georgian", Sylfaen, serif',
+  humanist: '"Segoe UI", Candara, "Gill Sans", Optima, "Noto Sans", "Noto Sans Georgian", sans-serif',
+  sans: 'system-ui, -apple-system, "Helvetica Neue", Arial, "Noto Sans", "Noto Sans Georgian", sans-serif',
+  mono: 'ui-monospace, "Cascadia Mono", Consolas, "Liberation Mono", monospace',
+};
+export const THEMES = ['light', 'sepia', 'sage', 'dark', 'night'];
+export const PRESETS = {
+  classic: { font: 'serif', size: 19, lh: 1.55, margin: 44, justify: true, hyphens: true, spaced: false },
+  modern: { font: 'humanist', size: 18, lh: 1.6, margin: 40, justify: false, hyphens: false, spaced: true },
+  compact: { font: 'book', size: 16, lh: 1.4, margin: 24, justify: true, hyphens: true, spaced: false },
+  large: { font: 'serif', size: 26, lh: 1.6, margin: 32, justify: false, hyphens: true, spaced: false },
+  easy: { font: 'sans', size: 21, lh: 1.9, margin: 40, justify: false, hyphens: false, spaced: true },
+};
+export const prefs = () => ({ ...DEFAULTS, ...lsGet(PREFS_KEY, {}) });
+export const HL_COLORS = ['yellow', 'green', 'blue', 'pink'];
+// Chunking bounds the DOM: a 2 MB novel rendered at once makes every relayout (font size, resize) re-flow all
+// columns, which takes seconds on phones. ~60k characters (a long chapter) keeps relayout interactive; positions
+// are chunk-independent (reading units), so the cut points are invisible to saved progress.
+const CHUNK_CHARS = 60000;
+
+let R = null; // the open reader session
+export const reader = () => R;
+
+// --- chunks -------------------------------------------------------------------------------------------
+
+// Segments in reading-unit order: { kind: 'front' | 'sec', sec, depth, kTitle, b0, b1, kB }, grouped into chunks.
+// Chunk planning works on unit indexes only (no DOM): a chunk is a run of section segments. Top-level sections
+// always start a new chunk (chapter boundaries are natural page breaks); nested sections are packed while under
+// CHUNK_CHARS. Images count as 800 characters because they fill a page regardless of text length. An oversize
+// section is cut at block boundaries at 80% of the budget, leaving headroom so the cut never lands on a tiny tail.
+export function planChunks(book, units) {
+  const chunks = [];
+  let cur = null;
+  const size = (k0, k1) => { let n = 0; for (let k = k0; k < k1; k++) n += units[k].text.length + (units[k].block && units[k].block.type === 'image' ? 800 : 40); return n; };
+  const start = (seg) => { cur = { segs: [seg], size: 0, k0: seg.k0 }; chunks.push(cur); };
+  let k = 0;
+  const nFront = (book.title ? 1 : 0) + book.front.length;
+  if (nFront || book.meta.cover) { start({ kind: 'front', k0: 0, k1: nFront, depth: -1 }); cur.size = size(0, nFront); k = nFront; }
+  const walk = (list, depth) => {
+    for (const s of list) {
+      const kTitle = s.title ? k++ : -1;
+      const kB = k;
+      k += s.blocks.length;
+      const total = size(kTitle >= 0 ? kTitle : kB, k);
+      const seg = { kind: 'sec', sec: s, depth, kTitle, b0: 0, b1: s.blocks.length, kB, k0: kTitle >= 0 ? kTitle : kB, k1: k };
+      if (depth === 0 || !cur || cur.size + total > CHUNK_CHARS) {
+        if (total > CHUNK_CHARS && s.blocks.length > 1) {
+          // A long section is split into pieces at block boundaries (the title stays with the first piece).
+          let b0 = 0, acc = kTitle >= 0 ? units[kTitle].text.length : 0, first = true;
+          for (let b = 0; b < s.blocks.length; b++) {
+            acc += units[kB + b].text.length + 40;
+            if (acc > CHUNK_CHARS * 0.8 || b === s.blocks.length - 1) {
+              const piece = { ...seg, kTitle: first ? kTitle : -1, b0, b1: b + 1, k0: first ? seg.k0 : kB + b0, k1: kB + b + 1 };
+              start(piece);
+              cur.size = acc;
+              first = false;
+              b0 = b + 1;
+              acc = 0;
+            }
+          }
+        } else { start(seg); cur.size = total; }
+      } else { cur.segs.push(seg); cur.size += total; }
+      walk(s.sections, depth + 1);
+    }
+  };
+  walk(book.sections, 0);
+  for (const c of chunks) c.k1 = c.segs[c.segs.length - 1].k1;
+  if (book.notes.length) chunks.push({ notes: true, segs: [], size: 0, k0: units.length, k1: units.length });
+  if (!chunks.length) chunks.push({ segs: [], size: 0, k0: 0, k1: 0, empty: true });
+  return chunks;
+}
+
+// Binary search over chunk start indexes (O(log n) per lookup; called on every navigation). The notes chunk has no
+// unit range and is skipped.
+function chunkOfK(k) {
+  const cs = R.chunks;
+  let lo = 0, hi = cs.length - 1, best = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (cs[mid].notes) { hi = mid - 1; continue; }
+    if (cs[mid].k0 <= k) { best = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return best;
+}
+
+function chunkHTML(ci) {
+  const c = R.chunks[ci];
+  const book = R.book;
+  const imgSrc = (id) => R.imgs.url(id);
+  const base = { marks: true, imgSrc, noteHref: (ref) => '#' + ref, href: (x) => x, lang: book.meta.lang };
+  if (c.notes) {
+    const ctx = renderContext({ ...base, marks: false });
+    return `<section class="section rd-notes"><h1 class="title">${escapeText(t('rd.notes'))}</h1>${book.notes.map((n) => renderNote(n, ctx)).join('\n')}</section>`;
+  }
+  if (c.empty) return `<p class="rd-emptybook">${escapeText(t('rd.emptyBook'))}</p>`;
+  const out = [];
+  for (const seg of c.segs) {
+    if (seg.kind === 'front') {
+      const m = book.meta;
+      if (m.cover && book.images[m.cover]) out.push(`<figure class="rd-cover"><img src="${R.imgs.url(m.cover)}" alt="${escapeAttr(t('rd.cover'))}"/></figure>`);
+      out.push(`<div class="rd-titlepage">${authorsText(book) ? `<p class="rd-tp-author">${escapeText(authorsText(book))}</p>` : ''}<p class="rd-tp-title">${escapeText(m.title)}</p>${m.subtitle ? `<p class="rd-tp-sub">${escapeText(m.subtitle)}</p>` : ''}</div>`);
+      const ctx = renderContext({ ...base, k: 0 });
+      if (book.title) out.push(renderTitle(book.title, 'p', ctx, ' class="body-title"'));
+      if (book.front.length) out.push(renderBlocks(book.front, ctx));
+      continue;
+    }
+    const s = seg.sec;
+    const ctx = renderContext({ ...base, k: seg.kB + seg.b0, headingOffset: 0 });
+    const parts = [];
+    if (seg.kTitle >= 0) parts.push(renderTitle(s.title, 'h' + Math.min(6, seg.depth + 1), renderContext({ ...base, k: seg.kTitle }), ' class="title"'));
+    if (seg.b1 > seg.b0) parts.push(renderBlocks(s.blocks.slice(seg.b0, seg.b1), ctx));
+    out.push(`<section class="section level-${seg.depth + 1}"${seg.b0 === 0 ? ` id="${escapeAttr(s.id)}"` : ''}>${parts.join('\n')}</section>`);
+  }
+  return out.join('\n');
+}
+const escapeText = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const escapeAttr = (s) => escapeText(s).replace(/"/g, '&quot;');
+
+// --- open / close ---------------------------------------------------------------------------------------
+
+export async function openReader(main, id) {
+  let book, rec = null, marks = { id, bookmarks: [], highlights: [] };
+  const preview = id.startsWith('draft:');
+  if (preview) {
+    book = S.previewBook;
+    if (!book) throw new Error(t('rd.noPreview'));
+  } else {
+    rec = await db.getShelf(id);
+    const content = rec && await db.getContent(id);
+    if (!content) throw new Error(t('lib.missing'));
+    book = content.book;
+    marks = await db.getMarks(id);
+  }
+  const units = readingUnits(book);
+  const cum = new Float64Array(units.length + 1);
+  for (let i = 0; i < units.length; i++) cum[i + 1] = cum[i] + Math.max(1, units[i].text.length);
+  R = {
+    id, rec, book, units, cum, total: cum[units.length] || 1, preview, marks,
+    chunks: planChunks(book, units), chunk: -1, page: 0, pages: 1, pos: { k: 0, o: 0 },
+    imgs: imageURLs(book), prefs: prefs(), history: [], ids: null, el: {}, off: [],
+  };
+  R.ids = idIndex();
+  S.reader = R;
+  document.body.classList.add('bk-reading');
+  main.className = 'bk-main bk-reader-main';
+  main.textContent = '';
+  build(main);
+  applyPrefs();
+  const saved = rec && rec.pos;
+  const start = saved && saved.k < units.length ? saved : { k: 0, o: 0 };
+  await showChunk(chunkOfK(start.k), { pos: start, instant: true });
+  bind();
+  if (rec) { rec.opened = new Date().toISOString(); db.putShelf(rec); }
+  R.el.view.focus({ preventScroll: true });
+}
+
+export async function closeReader() {
+  if (!R) return;
+  savePosition.cancel();
+  clearTimeout(R.settle);
+  if (R.geo && R.chunk >= 0) R.pos = currentPos();
+  await savePositionNow();
+  for (const off of R.off) off();
+  closePanel();
+  hideSelectionBar();
+  R.imgs.revoke();
+  if (document.fullscreenElement) { try { await document.exitFullscreen(); } catch { /* ignore */ } }
+  document.body.classList.remove('bk-reading');
+  R = null;
+  S.reader = null;
+}
+
+// Section / block / note ids -> reading unit.
+function idIndex() {
+  const m = new Map();
+  for (const u of R.units) {
+    if (u.kind === 'title' && u.section && !m.has(u.section.id)) m.set(u.section.id, u.k);
+    if (u.kind === 'block') {
+      if (u.section && !m.has(u.section.id)) m.set(u.section.id, u.k);
+      const reg = (b) => { if (b.id && !m.has(b.id)) m.set(b.id, u.k); for (const x of b.blocks || []) reg(x); for (const x of b.epigraphs || []) reg(x); for (const it of b.items || []) it.forEach(reg); };
+      reg(u.block);
+    }
+  }
+  // Sections without units of their own (only subsections) point at their first descendant.
+  const walk = (list) => { for (const s of list) { walk(s.sections); if (!m.has(s.id) && s.sections.length && m.has(s.sections[0].id)) m.set(s.id, m.get(s.sections[0].id)); } };
+  walk(R.book.sections);
+  return m;
+}
+
+// --- DOM ------------------------------------------------------------------------------------------------
+
+function tbtn(icon, label, onclick, extra = {}) {
+  return h('button', { type: 'button', class: 'rd-btn', title: label, 'aria-label': label, onclick, ...extra }, iconEl(icon));
+}
+
+function build(main) {
+  const el = R.el;
+  const book = R.book;
+  el.style = h('style', {}, bookCSS({ scope: '.bk-text' }) + stylesCSS(book.styles, { scope: '.bk-text' }));
+  el.title = h('div', { class: 'rd-titles' }, h('strong', { class: 'rd-book' }, book.meta.title || t('bk.untitled')), h('span', { class: 'rd-chapter' }, ''));
+  el.bm = tbtn('bookmark', t('rd.bookmark'), () => toggleBookmark(), { 'aria-pressed': 'false' });
+  el.full = tbtn('fullscreen', t('rd.fullscreen'), toggleFullscreen, { class: 'rd-btn rd-full-btn' });
+  el.top = h('header', { class: 'rd-top' },
+    tbtn('arrowLeft', R.preview ? t('rd.backWriter') : t('rd.backLibrary'), () => S.hooks.go(R.preview ? 'write' : 'library', R.preview ? R.id.slice(6) : '')),
+    el.title,
+    h('span', { class: 'ed-spacer' }),
+    tbtn('toc', t('rd.toc'), () => openPanel('toc')),
+    tbtn('search', t('rd.search'), () => openPanel('search')),
+    R.preview ? null : tbtn('highlight', t('rd.marks'), () => openPanel('marks')),
+    R.preview ? null : el.bm,
+    tbtn('aa', t('rd.settings'), () => openPanel('settings')),
+    document.fullscreenEnabled ? el.full : null);
+  el.flow = h('div', { class: 'rd-flow bk-text', lang: book.meta.lang || null });
+  el.clip = h('div', { class: 'rd-clip' }, el.flow);
+  el.prev = h('button', { type: 'button', class: 'rd-edge rd-edge-prev', 'aria-label': t('rd.prev'), tabindex: '-1', onclick: (e) => { e.stopPropagation(); prev(); } }, iconEl('chevLeft'));
+  el.next = h('button', { type: 'button', class: 'rd-edge rd-edge-next', 'aria-label': t('rd.next'), tabindex: '-1', onclick: (e) => { e.stopPropagation(); next(); } }, iconEl('chevRight'));
+  el.view = h('div', { class: 'rd-view', tabindex: '0', role: 'document', 'aria-label': t('rd.text') }, el.clip, el.prev, el.next);
+  el.pages = h('span', { class: 'rd-pages' }, '');
+  el.pct = h('span', { class: 'rd-pct' }, '');
+  el.left = h('span', { class: 'rd-left' }, '');
+  el.scrub = h('input', { type: 'range', class: 'rd-scrub', min: 0, max: 1000, step: 1, value: 0, 'aria-label': t('rd.position') });
+  el.scrubTip = h('span', { class: 'rd-scrub-tip', hidden: true }, '');
+  el.bottom = h('footer', { class: 'rd-bottom' }, el.pages, h('span', { class: 'rd-scrub-wrap' }, el.scrub, el.scrubTip), el.pct, el.left);
+  el.back = h('button', { type: 'button', class: 'rd-backchip', hidden: true, onclick: () => goBack() }, iconEl('arrowLeft'), h('span', {}, t('rd.back')));
+  el.panel = h('aside', { class: 'rd-panel', hidden: true, 'aria-label': '' });
+  el.root = h('div', { class: 'rd', 'data-theme': R.prefs.theme }, el.style, el.top, el.view, el.bottom, el.back, el.panel);
+  main.append(el.root);
+  el.scrub.addEventListener('input', () => {
+    const f = +el.scrub.value / 1000;
+    const k = kAtFraction(f).k;
+    const u = R.units[k];
+    el.scrubTip.hidden = false;
+    el.scrubTip.textContent = (u && u.section ? sectionTitle(u.section) : R.book.meta.title) + ' · ' + Math.round(f * 100) + '%';
+    el.scrubTip.style.left = (f * 100) + '%';
+  });
+  el.scrub.addEventListener('change', () => { el.scrubTip.hidden = true; goToFraction(+el.scrub.value / 1000); });
+  el.scrub.addEventListener('blur', () => { el.scrubTip.hidden = true; });
+}
+
+export function applyPrefs(p = R.prefs) {
+  R.prefs = p;
+  const st = R.el.root.style;
+  R.el.root.dataset.theme = p.theme;
+  st.setProperty('--rd-font', FONTS[p.font] || FONTS.serif);
+  st.setProperty('--rd-size', p.size + 'px');
+  st.setProperty('--rd-lh', String(p.lh));
+  st.setProperty('--rd-align', p.justify ? 'justify' : 'start');
+  st.setProperty('--rd-hyph', p.hyphens ? 'auto' : 'manual');
+  R.el.root.classList.toggle('rd-spaced', !!p.spaced);
+  R.el.root.classList.toggle('rd-noanim', !p.anim);
+  R.el.root.dataset.layout = layoutMode();
+}
+
+export function setPrefs(patch) {
+  const pos = currentPos();
+  const p = { ...R.prefs, ...patch };
+  lsSet(PREFS_KEY, p);
+  const modeBefore = layoutMode();
+  applyPrefs(p);
+  const modeAfter = layoutMode();
+  relayout(pos, modeBefore !== modeAfter);
+}
+
+function layoutMode() {
+  const p = R.prefs;
+  if (p.layout === 'scroll') return 'scroll';
+  if (p.layout === 'spread') return window.innerWidth >= 700 ? 'spread' : 'paged';
+  if (p.layout === 'paged') return 'paged';
+  return window.innerWidth >= 1000 && window.innerHeight >= 500 ? 'spread' : 'paged';
+}
+
+// --- layout ---------------------------------------------------------------------------------------------
+
+// Page geometry from the view size and prefs. Line length is capped in ems (width x font size, at least 18em),
+// the typographic measure, not in pixels: larger type gets proportionally wider columns. Margins shrink to 8% of
+// the width on phones so the text column is not starved. Values are floored: fractional column widths make
+// browsers round each column differently, and the translate step would drift by a pixel per page.
+function geometry() {
+  const view = R.el.view;
+  const mode = layoutMode();
+  const vw = view.clientWidth, vh = view.clientHeight;
+  const p = R.prefs;
+  const margin = Math.round(Math.min(p.margin, vw * 0.08));
+  const vmargin = Math.round(Math.max(16, Math.min(p.margin * 0.75, vh * 0.06)));
+  const cols = mode === 'spread' ? 2 : 1;
+  const gap = cols === 2 ? Math.max(48, margin * 1.5) : margin * 2 + 8;
+  const maxCol = Math.max(18, p.width) * p.size;
+  const colW = Math.min(maxCol, (vw - 2 * margin - (cols - 1) * gap) / cols);
+  const pageW = Math.floor(colW * cols + (cols - 1) * gap);
+  const pageH = Math.max(120, vh - 2 * vmargin);
+  return { mode, cols, gap, colW: Math.floor(colW), pageW, pageH, left: Math.round((vw - pageW) / 2), top: vmargin, vw, vh };
+}
+
+function layout() {
+  const g = geometry();
+  const { clip, flow, root } = R.el;
+  R.geo = g;
+  root.dataset.layout = g.mode;
+  if (g.mode === 'scroll') {
+    clip.style.cssText = '';
+    flow.style.cssText = `max-width: ${Math.round(Math.max(18, R.prefs.width) * R.prefs.size)}px;`;
+    R.pages = 1;
+    return;
+  }
+  clip.style.cssText = `left: ${g.left}px; top: ${g.top}px; width: ${g.pageW}px; height: ${g.pageH}px;`;
+  // KNOWN DEFECT (harmless): the column-count ternary yields 'auto' in both branches, a dead conditional; the number of
+  // columns per screen actually follows from pageW = cols * colW + gaps with a fixed column-width. Fix: drop the
+  // ternary (column-count: auto) or set it to g.cols explicitly.
+  flow.style.cssText = `width: ${g.pageW}px; height: ${g.pageH}px; column-width: ${g.colW}px; column-count: ${g.cols === 2 ? 'auto' : 'auto'}; column-gap: ${g.gap}px; --rd-h: ${g.pageH}px;`;
+  const step = g.pageW + g.gap;
+  R.step = step;
+  // The flow's overflow extent: columns beyond the clip.
+  // scrollWidth alone is unreliable for multi-column overflow (some engines report only the box width when the
+  // overflow is clipped by an ancestor), so the right edge of the last element's last line box is measured as well.
+  const w = Math.max(flow.scrollWidth, lastRight());
+  R.pages = Math.max(1, Math.ceil((w + g.gap - 2) / step));
+}
+function lastRight() {
+  const fr = R.el.flow.getBoundingClientRect();
+  const last = R.el.flow.lastElementChild;
+  if (!last) return 0;
+  const rects = last.getClientRects();
+  const r = rects[rects.length - 1];
+  return r ? r.right - fr.left : 0;
+}
+
+function showPage(page, instant = false) {
+  R.page = clamp(page, 0, R.pages - 1);
+  if (R.geo.mode === 'scroll') return;
+  const flow = R.el.flow;
+  const animate = !(instant || !R.prefs.anim);
+  flow.classList.toggle('rd-instant', !animate);
+  const was = flow.style.transform;
+  // translate3d (not left / scrollLeft): compositor-only animation, and the flow keeps its layout, so offsets
+  // measured by locate() stay valid during the turn.
+  flow.style.transform = `translate3d(${-R.page * R.step}px, 0, 0)`;
+  // The position is measured again when the page comes to rest (the first visible character).
+  clearTimeout(R.settle);
+  if (animate && was !== flow.style.transform) R.settle = setTimeout(() => { if (R && R.geo.mode !== 'scroll') { R.pos = currentPos(); savePosition(); } }, 360);
+}
+
+async function showChunk(ci, { pos = null, page = 0, instant = false } = {}) {
+  ci = clamp(ci, 0, R.chunks.length - 1);
+  hideSelectionBar();
+  if (ci !== R.chunk) {
+    R.chunk = ci;
+    R.el.flow.innerHTML = chunkHTML(ci);
+    if (R.geo && R.geo.mode === 'scroll' || layoutMode() === 'scroll') R.el.flow.append(scrollNav(ci));
+    paintHighlights();
+    waitImages();
+  }
+  layout();
+  R.anchor = pos || null;
+  if (pos) goToPos(pos, true);
+  else if (R.geo.mode === 'scroll') R.el.view.scrollTop = page === 'last' ? R.el.view.scrollHeight : 0;
+  else showPage(page === 'last' ? R.pages - 1 : page, instant);
+  afterMove();
+}
+
+function scrollNav(ci) {
+  const nav = h('div', { class: 'rd-chunknav' });
+  if (ci > 0) nav.append(h('button', { type: 'button', class: 'ed-btn', onclick: () => showChunk(ci - 1, { page: 'last' }) }, iconEl('arrowLeft'), t('rd.prevChapter')));
+  if (ci < R.chunks.length - 1) nav.append(h('button', { type: 'button', class: 'ed-btn ed-primary', onclick: () => showChunk(ci + 1) }, t('rd.nextChapter'), iconEl('arrowRight')));
+  return nav;
+}
+
+// Images change the layout when they arrive: keep the position measured before (R.pos; measuring now would see
+// the text already pushed along).
+function waitImages() {
+  const imgs = [...R.el.flow.querySelectorAll('img')].filter((i) => !i.complete);
+  if (!imgs.length) return;
+  const again = debounce(() => { if (R) relayout(R.pos); }, 60);
+  for (const i of imgs) i.addEventListener('load', again, { once: true });
+}
+
+export function relayout(pos = currentPos(), rerender = false) {
+  if (!R) return;
+  if (rerender) { const c = R.chunk; R.chunk = -1; showChunk(c, { pos, instant: true }); return; }
+  layout();
+  R.anchor = pos;
+  goToPos(pos, true);
+  afterMove();
+}
+
+// --- positions ------------------------------------------------------------------------------------------
+
+function unitEl(k) { return R.el.flow.querySelector(`[data-k="${k}"]`); }
+
+// DOM point (text node, offset) at a character offset of a unit element.
+function pointAt(el, o) {
+  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let n, left = o, last = null;
+  while ((n = w.nextNode())) {
+    if (left <= n.length) return [n, Math.max(0, left)];
+    left -= n.length;
+    last = n;
+  }
+  return last ? [last, last.length] : [el, 0];
+}
+// Range.toString() counts characters the same way pointAt walks text nodes, so offsetIn(pointAt(o)) === o:
+// positions round-trip exactly regardless of inline markup (emphasis, notes) inside the unit.
+function offsetIn(el, node, off) {
+  const r = document.createRange();
+  r.setStart(el, 0);
+  try { r.setEnd(node, off); } catch { return 0; }
+  return r.toString().length;
+}
+
+// Page (paged) or scroll offset (scroll) of a unit position.
+function locate(k, o) {
+  const el = unitEl(k);
+  if (!el) return null;
+  let rect = null;
+  if (o > 0) {
+    const [n, off] = pointAt(el, o);
+    if (n.nodeType === 3) {
+      const r = document.createRange();
+      r.setStart(n, Math.min(off, n.length));
+      r.setEnd(n, Math.min(off + 1, n.length));
+      rect = r.getClientRects()[0] || null;
+      if (!rect) { r.setStart(n, Math.max(0, off - 1)); r.setEnd(n, off); const rs = r.getClientRects(); rect = rs[rs.length - 1] || null; }
+    }
+  }
+  // The element's first real fragment: the same rule as the visibility test of currentPos (an empty sliver left at
+  // the foot of a column, e.g. a heading's margin, belongs to the next column).
+  if (!rect) {
+    const fr = R.el.flow.getBoundingClientRect();
+    const bottom = fr.top + (R.geo && R.geo.mode !== 'scroll' ? R.geo.pageH : Infinity);
+    const rs = [...el.getClientRects()];
+    rect = rs.find((r) => r.width > 1 && r.height > 1 && r.bottom > fr.top + 1 && r.top < bottom - 1) || rs[0] || el.getBoundingClientRect();
+  }
+  return rect;
+}
+
+function goToPos(pos, instant = false) {
+  if (!pos) return;
+  if (R.geo.mode === 'scroll') {
+    const rect = locate(pos.k, pos.o || 0);
+    if (rect) R.el.view.scrollTop += rect.top - R.el.view.getBoundingClientRect().top - 12;
+    return;
+  }
+  const rect = locate(pos.k, pos.o || 0);
+  if (!rect) { showPage(0, instant); return; }
+  const fr = R.el.flow.getBoundingClientRect();
+  const x = rect.left - fr.left + 1;
+  showPage(Math.floor(x / R.step), instant);
+}
+
+// The first character on screen: { k, o }.
+// Position = first unit with a visible line box + the character offset of the first visible character. Measured
+// by geometry (getClientRects against the visible box) instead of scroll offsets so it is independent of layout;
+// the character offset needs caret hit-testing, done only when the page is at rest (`settled`), because during a
+// transform transition the hit point is on the wrong page.
+export function currentPos() {
+  if (!R || !R.geo) return R ? R.pos : { k: 0, o: 0 };
+  const flow = R.el.flow;
+  const els = flow.querySelectorAll('[data-k]');
+  if (!els.length) return { k: R.chunks[R.chunk] ? R.chunks[R.chunk].k0 : 0, o: 0 };
+  const { box, settled } = visibleBox();
+  // First unit element with a box inside the visible area.
+  let first = null;
+  for (const el of els) {
+    for (const r of el.getClientRects()) {
+      if (r.right > box.left + 1 && r.left < box.right - 1 && r.bottom > box.top + 1 && r.top < box.bottom - 1) { first = el; break; }
+    }
+    if (first) break;
+  }
+  if (!first) return R.pos;
+  const k = +first.dataset.k;
+  let o = 0;
+  const rects = first.getClientRects();
+  const r0 = rects[0];
+  // The element starts before the visible area: find the first visible character (hit testing needs the page at
+  // rest; during a page-turn animation the offset is refined when it ends).
+  if (settled && r0 && (r0.left < box.left - 1 || r0.top < box.top - 1)) {
+    const cr = caretAt(box.left + 2, box.top + 2) || caretAt(box.left + R.prefs.size * 2, box.top + R.prefs.size * 0.8);
+    if (cr && first.contains(cr[0])) o = offsetIn(first, cr[0], cr[1]);
+  }
+  return { k, o };
+}
+
+// The visible area in client coordinates. Paged: the current page measured from the flow itself, so a page-turn
+// animation in progress (a transform transition) does not shift it; settled: the page is at rest in the clip.
+function visibleBox() {
+  if (R.geo.mode === 'scroll') {
+    const vr = R.el.view.getBoundingClientRect();
+    return { box: { left: vr.left, right: vr.right, top: vr.top + 4, bottom: vr.bottom }, settled: true };
+  }
+  const fr = R.el.flow.getBoundingClientRect();
+  const cr = R.el.clip.getBoundingClientRect();
+  const left = fr.left + R.page * R.step;
+  return { box: { left, right: left + R.geo.pageW, top: fr.top, bottom: fr.top + R.geo.pageH }, settled: Math.abs(left - cr.left) < 1.5 };
+}
+// caretPositionFromPoint is the standard (Firefox, Chrome 128+); caretRangeFromPoint the older WebKit / Blink API.
+function caretAt(x, y) {
+  if (document.caretPositionFromPoint) { const p = document.caretPositionFromPoint(x, y); return p ? [p.offsetNode, p.offset] : null; }
+  if (document.caretRangeFromPoint) { const r = document.caretRangeFromPoint(x, y); return r ? [r.startContainer, r.startOffset] : null; }
+  return null;
+}
+
+// Scrubber -> position: R.cum holds prefix sums of unit lengths, so the unit at a fraction of the book is a binary
+// search, and the remainder becomes the character offset. Progress therefore means "share of text", not of pages,
+// and stays stable across font sizes.
+function kAtFraction(f) {
+  const target = f * R.total;
+  let lo = 0, hi = R.units.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (R.cum[mid] <= target) lo = mid; else hi = mid - 1; }
+  const u = R.units[lo];
+  return { k: lo, o: u ? Math.max(0, Math.min(u.text.length, Math.round(target - R.cum[lo]))) : 0 };
+}
+export function goToFraction(f) { const p = kAtFraction(clamp(f, 0, 1)); goTo(p.k, p.o); }
+
+// Navigation to a unit (and character offset); flash: [start, end] marks a search hit briefly.
+export async function goTo(k, o = 0, { flash = null, remember = false } = {}) {
+  if (!R) return;
+  if (remember) { R.history.push(currentPos()); R.el.back.hidden = false; }
+  k = clamp(k, 0, Math.max(0, R.units.length - 1));
+  const ci = chunkOfK(k);
+  await showChunk(ci, { pos: { k, o } });
+  if (flash) flashRange(k, flash[0], flash[1]);
+}
+function goBack() {
+  const p = R.history.pop();
+  if (!R.history.length) R.el.back.hidden = true;
+  if (p) goTo(p.k, p.o);
+}
+export function goToId(id, remember = true) {
+  if (id === '__notes') { const ci = R.chunks.findIndex((c) => c.notes); if (ci >= 0) { if (remember) { R.history.push(currentPos()); R.el.back.hidden = false; } showChunk(ci); } return; }
+  const k = R.ids.get(id);
+  if (k != null) goTo(k, 0, { remember });
+  else if (R.book.notes.some((n) => n.id === id)) goToId('__notes', remember);
+}
+
+// Scroll mode pages by a viewport minus two lines (the overlap keeps the reader's place); at the end of a chunk the
+// next one is loaded. Paged mode turns a page or loads the next chunk.
+export function next() {
+  if (!R) return;
+  if (R.geo.mode === 'scroll') {
+    const v = R.el.view;
+    if (v.scrollTop + v.clientHeight >= v.scrollHeight - 4) { if (R.chunk < R.chunks.length - 1) showChunk(R.chunk + 1); }
+    else v.scrollBy({ top: v.clientHeight - R.prefs.size * R.prefs.lh * 2, behavior: R.prefs.anim ? 'smooth' : 'auto' });
+    return;
+  }
+  R.anchor = null;
+  if (R.page < R.pages - 1) { showPage(R.page + 1); afterMove(); } else if (R.chunk < R.chunks.length - 1) showChunk(R.chunk + 1, { instant: true });
+}
+export function prev() {
+  if (!R) return;
+  if (R.geo.mode === 'scroll') {
+    const v = R.el.view;
+    if (v.scrollTop <= 2) { if (R.chunk > 0) showChunk(R.chunk - 1, { page: 'last' }); }
+    else v.scrollBy({ top: -(v.clientHeight - R.prefs.size * R.prefs.lh * 2), behavior: R.prefs.anim ? 'smooth' : 'auto' });
+    return;
+  }
+  R.anchor = null;
+  if (R.page > 0) { showPage(R.page - 1); afterMove(); } else if (R.chunk > 0) showChunk(R.chunk - 1, { page: 'last', instant: true });
+}
+
+// After every move: position, progress, chapter title, bookmark state; save soon.
+// R.anchor: the position the reader was sent to (a contents entry, a search hit, the saved place); it stays the
+// position while it is on screen, so layout changes (images arriving, a resize) keep it in view.
+function afterMove() {
+  if (!R) return;
+  const a = R.anchor;
+  if (a) { const [x, y] = visibleUnits(); R.pos = a.k >= x && a.k <= y ? a : currentPos(); if (R.pos !== a) R.anchor = null; }
+  else R.pos = currentPos();
+  const c = R.chunks[R.chunk];
+  const frac = c.notes ? 1 : (R.cum[R.pos.k] + (R.pos.o || 0)) / R.total;
+  R.frac = Math.min(1, frac);
+  const u = R.units[R.pos.k];
+  R.el.title.querySelector('.rd-chapter').textContent = c.notes ? t('rd.notes') : u && u.section ? sectionTitle(u.section) || '' : '';
+  if (R.geo.mode === 'scroll') {
+    const v = R.el.view;
+    R.el.pages.textContent = pct(v.scrollHeight > v.clientHeight ? v.scrollTop / (v.scrollHeight - v.clientHeight) : 1);
+  } else R.el.pages.textContent = t('rd.pageOf', { n: R.page + 1, of: R.pages });
+  R.el.pct.textContent = pct(R.frac);
+  R.el.scrub.value = String(Math.round(R.frac * 1000));
+  // Minutes left in this chunk (230 words per minute, about 6 characters per word).
+  const end = c.k1;
+  const leftChars = Math.max(0, R.cum[end] - R.cum[R.pos.k] - (R.pos.o || 0));
+  const min = Math.round(leftChars / 6 / 230);
+  R.el.left.textContent = c.notes ? '' : min < 1 ? t('rd.lessMin') : t('rd.minLeft', { n: min });
+  const bm = bookmarkHere();
+  R.el.bm.classList.toggle('rd-on', !!bm);
+  R.el.bm.setAttribute('aria-pressed', String(!!bm));
+  R.el.prev.disabled = R.chunk === 0 && R.page === 0;
+  R.el.next.disabled = R.chunk === R.chunks.length - 1 && R.page >= R.pages - 1;
+  savePosition();
+  refreshPanel();
+}
+
+const savePosition = debounce(() => savePositionNow(), 700);
+async function savePositionNow() {
+  if (!R || R.preview || !R.rec) return;
+  const rec = await db.getShelf(R.id);
+  if (!rec) return;
+  rec.pos = { k: R.pos.k, o: R.pos.o || 0 };
+  rec.progress = R.frac || 0;
+  rec.opened = new Date().toISOString();
+  await db.putShelf(rec);
+}
+
+// Range of units on the current page / screen: [kFirst, kLast].
+function visibleUnits() {
+  const flow = R.el.flow;
+  const { box } = visibleBox();
+  let a = -1, b = -1;
+  for (const el of flow.querySelectorAll('[data-k]')) {
+    for (const r of el.getClientRects()) {
+      if (r.right > box.left + 1 && r.left < box.right - 1 && r.bottom > box.top + 1 && r.top < box.bottom - 1) { const k = +el.dataset.k; if (a < 0) a = k; b = k; break; }
+    }
+  }
+  return [a, b];
+}
+
+// --- bookmarks and highlights ---------------------------------------------------------------------------
+
+function bookmarkHere() {
+  if (!R.marks.bookmarks.length) return null;
+  const [a, b] = visibleUnits();
+  if (a < 0) return null;
+  const end = currentEndPos();
+  return R.marks.bookmarks.find((m) => (m.k > R.pos.k || (m.k === R.pos.k && m.o >= (R.pos.o || 0))) && (m.k < end.k || (m.k === end.k && m.o <= end.o)) && m.k >= a && m.k <= b) || null;
+}
+function currentEndPos() {
+  const [, b] = visibleUnits();
+  return { k: b, o: Infinity };
+}
+
+export async function toggleBookmark() {
+  if (R.preview) return;
+  const here = bookmarkHere();
+  if (here) { R.marks.bookmarks = R.marks.bookmarks.filter((m) => m !== here); await db.putMarks(R.marks); afterMove(); }
+  else await addBookmark(R.pos);
+}
+// A bookmark at a position { k, o } (the page start, a point in the text, a chapter start).
+export async function addBookmark(pos) {
+  if (!R || R.preview) return;
+  const u = R.units[pos.k];
+  const o = pos.o || 0;
+  R.marks.bookmarks.push({ id: 'm' + uid(), k: pos.k, o, text: (u ? u.text.slice(o, o + 120) : '').replace(/\s+/g, ' ').trim(), chapter: u && u.section ? sectionTitle(u.section) : '', frac: (R.cum[pos.k] + o) / R.total, created: new Date().toISOString() });
+  R.marks.bookmarks.sort((x, y) => x.k - y.k || x.o - y.o);
+  await db.putMarks(R.marks);
+  toast(t('rd.bookmarked'), 'ok');
+  afterMove();
+}
+
+// Wraps the characters [start, end) of a unit element in <mark> elements.
+// Highlights are painted by wrapping text-node slices in <mark>, one per text node, because a single <mark> cannot
+// span element boundaries (emphasis, links) without breaking the tree. Whitespace-only nodes directly inside
+// structural elements (table rows, lists) are skipped: a <mark> there would be invalid and render as a stray box.
+function wrapRange(el, start, end, attrs) {
+  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  let n, pos = 0;
+  while ((n = w.nextNode())) { nodes.push([n, pos]); pos += n.length; }
+  const out = [];
+  for (const [node, at] of nodes) {
+    const a = Math.max(start, at), b = Math.min(end, at + node.length);
+    if (a >= b) continue;
+    if (!/\S/.test(node.data.slice(a - at, b - at)) && node.parentElement && /^(div|blockquote|section|tr|tbody|table|ul|ol)$/i.test(node.parentElement.tagName)) continue;
+    let target = node;
+    if (b - at < target.length) target.splitText(b - at);
+    if (a - at > 0) target = target.splitText(a - at);
+    const m = document.createElement('mark');
+    for (const [k, v] of Object.entries(attrs)) m.setAttribute(k, v);
+    target.before(m);
+    m.append(target);
+    out.push(m);
+  }
+  return out;
+}
+
+// Repaint from scratch: unwrap old marks and normalize() to merge the split text nodes back, otherwise offsets would
+// be computed against fragments and drift with every repaint.
+export function paintHighlights() {
+  if (!R) return;
+  for (const m of R.el.flow.querySelectorAll('mark.rd-hl')) m.replaceWith(...m.childNodes);
+  R.el.flow.normalize();
+  const c = R.chunks[R.chunk];
+  for (const hl of R.marks.highlights) {
+    if (hl.k2 < c.k0 || hl.k1 >= c.k1) continue;
+    for (let k = Math.max(hl.k1, c.k0); k <= Math.min(hl.k2, c.k1 - 1); k++) {
+      const el = unitEl(k);
+      if (!el) continue;
+      const len = el.textContent.length;
+      wrapRange(el, k === hl.k1 ? hl.o1 : 0, k === hl.k2 ? hl.o2 : len, { class: `rd-hl rd-hl-${hl.color}${hl.note ? ' rd-hl-note' : ''}`, 'data-h': hl.id });
+    }
+  }
+}
+
+function flashRange(k, start, end) {
+  for (const m of R.el.flow.querySelectorAll('mark.rd-flash')) { m.replaceWith(...m.childNodes); }
+  const el = unitEl(k);
+  if (!el) return;
+  const marks = wrapRange(el, start, end, { class: 'rd-flash' });
+  setTimeout(() => { for (const m of marks) if (m.isConnected) m.replaceWith(...m.childNodes); }, 2600);
+}
+
+// Selection -> { k1, o1, k2, o2, text } (null when it is not inside the text).
+export function selectionSpan() {
+  const sel = getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
+  const r = sel.getRangeAt(0);
+  if (!R.el.flow.contains(r.commonAncestorContainer)) return null;
+  const unitOf = (node) => { const e = node.nodeType === 1 ? node : node.parentElement; return e && e.closest('[data-k]'); };
+  let a = unitOf(r.startContainer), b = unitOf(r.endContainer);
+  if (!a || !b) return null;
+  const o1 = offsetIn(a, r.startContainer, r.startOffset), o2 = offsetIn(b, r.endContainer, r.endOffset);
+  const text = r.toString().replace(/\s+/g, ' ').trim();
+  if (!text) return null;
+  return { k1: +a.dataset.k, o1, k2: +b.dataset.k, o2, text };
+}
+
+export async function addHighlight(span, color = 'yellow', note = '') {
+  const u = R.units[span.k1];
+  const hl = { id: 'h' + uid(), ...span, color, note, chapter: u && u.section ? sectionTitle(u.section) : '', frac: R.cum[span.k1] / R.total, created: new Date().toISOString() };
+  R.marks.highlights.push(hl);
+  R.marks.highlights.sort((x, y) => x.k1 - y.k1 || x.o1 - y.o1);
+  await db.putMarks(R.marks);
+  getSelection().removeAllRanges();
+  paintHighlights();
+  refreshPanel();
+  return hl;
+}
+export async function updateHighlight(id, patch) {
+  const hl = R.marks.highlights.find((x) => x.id === id);
+  if (!hl) return;
+  if (patch === null) R.marks.highlights = R.marks.highlights.filter((x) => x !== hl);
+  else Object.assign(hl, patch);
+  await db.putMarks(R.marks);
+  paintHighlights();
+  refreshPanel();
+}
+export async function removeBookmark(id) {
+  R.marks.bookmarks = R.marks.bookmarks.filter((x) => x.id !== id);
+  await db.putMarks(R.marks);
+  afterMove();
+}
+
+// --- footnotes and links --------------------------------------------------------------------------------
+
+function showNote(a) {
+  const id = a.dataset.note || (a.getAttribute('href') || '').slice(1);
+  const note = R.book.notes.find((n) => n.id === id);
+  if (!note) return;
+  const ctx = renderContext({ imgSrc: (x) => R.imgs.url(x), lang: R.book.meta.lang });
+  const body = h('div', { class: 'rd-note bk-text', lang: R.book.meta.lang || null, html: renderBlocks(note.blocks, ctx) || '<p>…</p>' });
+  const box = h('div', { class: 'rd-note-box' },
+    h('div', { class: 'rd-note-head' }, h('strong', {}, t('rd.note') + ' ' + (a.textContent || '')),
+      h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => { pop.close(); goToId('__notes'); } }, t('rd.allNotes'))),
+    body);
+  const pop = openPopover(a, box, { className: 'rd-pop', restoreFocus: true });
+  pop.el.dataset.theme = R.prefs.theme;
+  pop.el.style.setProperty('--rd-font', FONTS[R.prefs.font] || FONTS.serif);
+}
+
+// --- context menu ---------------------------------------------------------------------------------------
+// Right click, a long press with a finger or a pen, the Menu key or Shift+F10 open one menu: bookmark, highlight,
+// note, copy, search — for the selection when there is one, else for the paragraph and the word under the pointer.
+// A long press replaces the system's selection gesture; "Select text" hands selection back to the system (the
+// word under the finger is selected, the handles extend it, the selection bar offers highlights) until the
+// selection is dismissed.
+
+const WORD = /[\p{L}\p{N}\p{M}'’_-]/u;
+function wordAt(node, off) {
+  if (!node || node.nodeType !== 3) return null;
+  const s = node.data;
+  let a = Math.min(off, s.length), b = a;
+  while (a > 0 && WORD.test(s[a - 1])) a--;
+  while (b < s.length && WORD.test(s[b])) b++;
+  while (a < b && /['’_-]/.test(s[a])) a++;
+  while (b > a && /['’_-]/.test(s[b - 1])) b--;
+  return b > a ? { node, start: a, end: b, text: s.slice(a, b) } : null;
+}
+
+function ctxItems(_root, info) {
+  if (!R) return null;
+  const tgt = info.event && info.event.target instanceof Element ? info.event.target : null;
+  if (tgt && tgt.closest('.rd-chunknav, .rd-edge')) return null;
+  const span = selectionSpan();
+  let pos = null, unit = null, word = null;
+  if (info.via !== 'keyboard') {
+    const cr = caretAt(info.x, info.y);
+    const el = cr && (cr[0].nodeType === 1 ? cr[0] : cr[0].parentElement);
+    const u = el && el.closest('[data-k]');
+    if (u && R.el.flow.contains(u)) { unit = u; pos = { k: +u.dataset.k, o: offsetIn(u, cr[0], cr[1]) }; word = wordAt(cr[0], cr[1]); }
+  }
+  if (!unit && tgt) { const u = tgt.closest('[data-k]'); if (u && R.el.flow.contains(u)) { unit = u; pos = { k: +u.dataset.k, o: 0 }; } }
+  if (!unit) { pos = { ...R.pos }; unit = unitEl(pos.k); }
+  const u = R.units[pos.k];
+  const items = [{ header: true, label: (u && u.section ? sectionTitle(u.section) : '') || R.book.meta.title || t('bk.untitled') }];
+  const a = tgt && tgt.closest('a');
+  if (a && R.el.flow.contains(a)) {
+    if (a.classList.contains('noteref')) items.push({ label: t('rd.ctx.openNote'), icon: 'footnote', action: () => showNote(a) });
+    else items.push({ label: t('rd.ctx.follow'), icon: 'arrowRight', action: () => a.click() });
+  }
+  const mark = tgt && tgt.closest('mark.rd-hl');
+  if (mark && !R.preview) items.push({ label: t('rd.ctx.editHl'), icon: 'highlight', action: () => highlightPopover(mark) });
+  if (items.length > 1) items.push({ sep: true });
+  const dot = (c) => `<span class="rd-dot rd-c-${c}" aria-hidden="true"></span>`;
+  if (span) {
+    if (!R.preview) {
+      items.push({ label: t('rd.ctx.highlight'), iconHTML: dot('yellow'), action: () => addHighlight(span, 'yellow') });
+      items.push({ label: t('rd.addNote'), icon: 'note', action: async () => { const n = await noteDialog(''); if (n != null) addHighlight(span, 'yellow', n); } });
+    }
+    items.push({ label: t('ap.copy'), icon: 'copy', action: () => copyText(span.text) });
+    items.push({ label: t('rd.searchSel'), icon: 'search', action: () => searchFor(span.text.slice(0, 80)) });
+  } else if (unit) {
+    const k = pos.k;
+    const len = unit.textContent.length;
+    const whole = { k1: k, o1: 0, k2: k, o2: len, text: unit.textContent.replace(/\s+/g, ' ').trim() };
+    if (!R.preview) {
+      items.push({ label: t('rd.ctx.bookmarkHere'), icon: 'bookmark', action: () => addBookmark(pos) });
+      if (whole.text) {
+        items.push({ label: t('rd.ctx.highlightPara'), iconHTML: dot('yellow'), action: () => addHighlight(whole, 'yellow') });
+        items.push({ label: t('rd.ctx.notePara'), icon: 'note', action: async () => { const n = await noteDialog(''); if (n != null) addHighlight(whole, 'yellow', n); } });
+      }
+    }
+    if (whole.text) items.push({ label: t('rd.ctx.copyPara'), icon: 'copy', action: () => copyText(whole.text) });
+    if (word && word.text.length > 1) items.push({ label: t('rd.ctx.searchWord', { word: word.text.length > 24 ? word.text.slice(0, 23) + '…' : word.text }), icon: 'search', action: () => searchFor(word.text) });
+    if (word) items.push({ label: t('rd.ctx.select'), icon: 'type', action: () => startSelecting(word) });
+  }
+  items.push({ sep: true },
+    { label: t('rd.toc'), icon: 'toc', kbd: 'T', action: () => openPanel('toc') },
+    { label: t('rd.settings'), icon: 'aa', kbd: 'A', action: () => openPanel('settings') });
+  return items;
+}
+
+function attachCtx() { if (R && !R.ctxOff) R.ctxOff = contextMenu(R.el.view, ctxItems); }
+function startSelecting(w) {
+  R.ctxOff?.();
+  R.ctxOff = null;
+  R.el.root.classList.add('rd-selecting');
+  const r = document.createRange();
+  r.setStart(w.node, w.start);
+  r.setEnd(w.node, w.end);
+  const sel = getSelection();
+  sel.removeAllRanges();
+  sel.addRange(r);
+  if (isTouchDevice()) toast(t('rd.selectHint'), 'info');
+}
+function stopSelecting() {
+  if (!R || !R.el.root.classList.contains('rd-selecting')) return;
+  R.el.root.classList.remove('rd-selecting');
+  attachCtx();
+}
+const isTouchDevice = () => typeof matchMedia !== 'undefined' && matchMedia('(pointer: coarse)').matches;
+
+// --- input ----------------------------------------------------------------------------------------------
+
+function bind() {
+  attachCtx();
+  R.off.push(() => { R.ctxOff?.(); R.ctxOff = null; });
+  // Every listener is registered through `on`, which records its removal in R.off; closeReader runs them all, so
+  // leaving the reader leaves no global listeners behind.
+  const on = (target, ev, fn, opts) => { target.addEventListener(ev, fn, opts); R.off.push(() => target.removeEventListener(ev, fn, opts)); };
+  const view = R.el.view;
+  let down = null;
+  on(view, 'pointerdown', (e) => { if (e.button === 0) down = { x: e.clientX, y: e.clientY, t: Date.now(), id: e.pointerId }; });
+  // Unified pointer gestures (mouse, touch, pen): a long press is left to the context menu, an active selection is
+  // left alone, a horizontal swipe turns pages, a tap on the outer 28% zones turns pages, the centre toggles the
+  // chrome. Order matters: links and highlights are checked before the tap zones.
+  on(view, 'pointerup', (e) => {
+    if (!down || e.pointerId !== down.id) return;
+    const dx = e.clientX - down.x, dy = e.clientY - down.y, dt = Date.now() - down.t;
+    down = null;
+    if (dt > 450 && Math.abs(dx) < 12 && Math.abs(dy) < 12) return; // a long press (the context menu), not a tap
+    if (R.el.root.classList.contains('rd-selecting')) { if (getSelection().isCollapsed) stopSelecting(); return; }
+    const sel = getSelection();
+    if (sel && !sel.isCollapsed && R.el.flow.contains(sel.anchorNode)) return; // selecting text
+    if (R.geo.mode !== 'scroll' && Math.abs(dx) > 45 && Math.abs(dy) < 80 && dt < 900) { if (dx < 0) next(); else prev(); return; }
+    if (Math.abs(dx) > 8 || Math.abs(dy) > 8) return;
+    const link = e.target.closest && e.target.closest('a');
+    if (link && R.el.flow.contains(link)) return; // handled by click
+    const mark = e.target.closest && e.target.closest('mark.rd-hl');
+    if (mark) { highlightPopover(mark); return; }
+    if (e.target.closest && e.target.closest('button, input, .rd-chunknav')) return;
+    const r = view.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width;
+    if (R.geo.mode !== 'scroll' && x < 0.28) prev();
+    else if (R.geo.mode !== 'scroll' && x > 0.72) next();
+    else R.el.root.classList.toggle('rd-hide-chrome');
+  });
+  on(view, 'click', (e) => {
+    const a = e.target.closest && e.target.closest('a');
+    if (!a || !R.el.flow.contains(a)) return;
+    e.preventDefault();
+    if (a.classList.contains('noteref')) { showNote(a); return; }
+    const href = a.getAttribute('href') || '';
+    if (href.startsWith('#')) goToId(href.slice(1));
+    else if (/^(https?:|mailto:)/i.test(href)) toast(t('rd.external', { url: href }), 'info');
+  });
+  let wheelAt = 0;
+  // Paged mode turns one page per wheel gesture: a 350 ms lockout absorbs the stream of events a trackpad emits for
+  // one swipe. passive: false is required to call preventDefault (wheel listeners default to passive on the root).
+  // Ctrl+wheel is left alone so browser zoom keeps working.
+  on(view, 'wheel', (e) => {
+    if (R.geo.mode === 'scroll' || e.ctrlKey) return;
+    e.preventDefault();
+    const now = Date.now();
+    if (now - wheelAt < 350 || Math.abs(e.deltaY) + Math.abs(e.deltaX) < 8) return;
+    wheelAt = now;
+    if (e.deltaY > 0 || e.deltaX > 0) next(); else prev();
+  }, { passive: false });
+  on(view, 'scroll', debounce(() => { if (R && R.geo.mode === 'scroll') afterMove(); }, 120));
+  on(document, 'selectionchange', debounce(() => {
+    if (!R) return;
+    const span = selectionSpan();
+    if (span && !R.preview) selectionBar(span);
+    else if (!span) { hideSelectionBar(); stopSelecting(); }
+  }, 200));
+  on(window, 'keydown', (e) => {
+    if (!R || layers.length || e.defaultPrevented) return;
+    const tg = e.target;
+    if (tg && (tg.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName)) && !tg.classList.contains('rd-scrub')) return;
+    const k = e.key;
+    if (e.ctrlKey || e.metaKey) {
+      if (k === 'f' || k === 'F') { e.preventDefault(); openPanel('search'); }
+      return;
+    }
+    if (e.altKey) return;
+    if (['ArrowRight', 'PageDown', 'ArrowDown'].includes(k) || (k === ' ' && !e.shiftKey)) {
+      if (R.geo.mode === 'scroll' && (k === 'ArrowDown' || k === ' ')) return;
+      e.preventDefault(); next();
+    } else if (['ArrowLeft', 'PageUp', 'ArrowUp'].includes(k) || (k === ' ' && e.shiftKey)) {
+      if (R.geo.mode === 'scroll' && (k === 'ArrowUp' || k === ' ')) return;
+      e.preventDefault(); prev();
+    } else if (k === 'Home') { e.preventDefault(); showChunk(R.chunk, { page: 0 }); }
+    else if (k === 'End') { e.preventDefault(); showChunk(R.chunk, { page: 'last' }); }
+    else if (k === 't') openPanel('toc');
+    else if (k === '/' || k === 's') { e.preventDefault(); openPanel('search'); }
+    else if (k === 'b' && !R.preview) toggleBookmark();
+    else if (k === 'a') openPanel('settings');
+    else if (k === 'f') toggleFullscreen();
+    else if (k === 'Escape') { if (!R.el.panel.hidden) closePanel(); else R.el.root.classList.toggle('rd-hide-chrome'); }
+  });
+  const ro = new ResizeObserver(debounce(() => { if (R) relayout(R.pos, layoutMode() !== R.geo.mode); }, 120));
+  ro.observe(view);
+  R.off.push(() => ro.disconnect());
+  on(document, 'visibilitychange', () => { if (document.visibilityState === 'hidden') savePositionNow(); });
+  on(window, 'pagehide', () => savePositionNow());
+  on(document, 'fullscreenchange', () => {
+    if (!R) return;
+    const fs = !!document.fullscreenElement;
+    R.el.full.replaceChildren(iconEl(fs ? 'fullscreenExit' : 'fullscreen'));
+  });
+}
+
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await document.documentElement.requestFullscreen();
+  } catch { toast(t('rd.noFullscreen'), 'info'); }
+}
+
+// Table of contents with the unit each entry starts at.
+export function tocEntries() {
+  const out = [];
+  const rec = (list) => {
+    for (const e of list) {
+      out.push({ ...e, k: R.ids.get(e.id) ?? 0 });
+      rec(e.children);
+    }
+  };
+  rec(bookToc(R.book, t('rd.untitled')));
+  return out;
+}
+

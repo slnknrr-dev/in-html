@@ -1,0 +1,219 @@
+/* mail-composer/app.css - Mail Composer: compose page (address fields with checked chips, subject with its encoded
+   header, body editors and toolbar, files with inline images, merge, options, a sticky stage with preview / source /
+   structure tabs, findings and exports), inspect page (input, inspector cards: summary, bodies in a sandboxed frame,
+   attachments, MIME tree, headers, source) and tools page (cards of the six tools). Loaded third, after ui/base.css +
+   ui/app.css.
+
+   CONTRACT
+   - Namespace mc-. Specificity budget: one class, two for state / context (.mc-tab.mc-on, .mc-a-dup .mc-mono).
+     No !important in this file.
+   - Colours only via --ed-* tokens; severity uses the shared danger / warn / ok / accent tokens mixed with
+     transparency (color-mix) for borders and fills, so findings, chips and SMTP replies share one visual language.
+     Raw #fff only behind thumbnails and the HTML preview frame: e-mail HTML is authored for a white background.
+   - Mail content is hostile text (long tokens, base64, header folding): every container that can show it uses
+     overflow-wrap:anywhere (and word-break:break-all for encoded data) so nothing overflows its card.
+   - State and severity are modifier classes generated from data (mc-f-<level>, mc-a-<status>, mc-sm-<class>), so a
+     new level is one rule, not a JS change. */
+
+.mc-compose, .mc-inspect, .mc-tools { max-width: 1400px; }
+/* Narrower inspect page (later rule, same specificity, wins over the shared 1400px above): it is one column of
+   cards, and long lines read better at this width. */
+.mc-inspect { max-width: 1080px; }
+.mc-mono { font-family: var(--ed-mono); }
+/* For encoded data (base64, boundaries): break anywhere, there are no words to protect. */
+.mc-wrap { overflow-wrap: anywhere; word-break: break-all; }
+.mc-bad { color: var(--ed-danger); }
+
+/* ---------------------------------------------------------------- layout */
+.mc-work { display: grid; gap: 18px; align-items: start; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.mc-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* Sticky preview column only when the viewport is tall and wide enough; it scrolls internally (max-height) so a
+   tall preview never hides its own bottom. top:72px = shell header + gap. */
+@media (min-height: 700px) and (min-width: 961px) { .mc-s { position: sticky; top: 72px; max-height: calc(100vh - 88px); overflow: auto; padding-bottom: 4px; } }
+@media (max-width: 960px) { .mc-work { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------------------------------------------------------------- chips, findings */
+.mc-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); color: var(--ed-muted); max-width: 100%; overflow-wrap: anywhere; }
+.mc-chip .ed-ic svg { width: 13px; height: 13px; }
+.mc-chip-hi { color: var(--ed-danger); border-color: color-mix(in srgb, var(--ed-danger) 40%, transparent); }
+.mc-findings, .mc-warn { display: flex; flex-direction: column; gap: 6px; }
+/* Empty containers take no space: findings and warnings appear only when there is something to say. */
+.mc-warn:empty { display: none; }
+.mc-f { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--ed-border); background: var(--ed-panel); overflow-wrap: anywhere; }
+.mc-f .ed-ic { flex: none; margin-top: 1px; }
+/* Findings by severity: the border carries the level, the icon colour repeats it; text stays readable. */
+.mc-f-error { border-color: color-mix(in srgb, var(--ed-danger) 45%, transparent); color: var(--ed-danger); }
+.mc-f-warn { border-color: color-mix(in srgb, var(--ed-warn) 50%, transparent); }
+.mc-f-warn .ed-ic { color: var(--ed-warn); }
+.mc-f-info .ed-ic { color: var(--ed-accent); }
+.mc-f-ok { color: var(--ed-ok); border-color: color-mix(in srgb, var(--ed-ok) 40%, transparent); }
+
+/* ---------------------------------------------------------------- addresses */
+.mc-addr-input.ed-textarea { min-height: 36px; resize: vertical; }
+.mc-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.mc-chips:empty { display: none; }
+.mc-addr { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; font-size: 12px; padding: 2px 8px 2px 6px; border-radius: 999px; border: 1px solid var(--ed-border); background: var(--ed-panel-2); overflow-wrap: anywhere; }
+.mc-addr b { font-weight: 600; }
+.mc-addr .ed-ic svg { width: 13px; height: 13px; }
+.mc-a-ok .ed-ic { color: var(--ed-ok); }
+/* Address chips by check result: invalid (red), duplicate / non-canonical (struck through in warn colour). */
+.mc-a-invalid { border-color: color-mix(in srgb, var(--ed-danger) 55%, transparent); color: var(--ed-danger); background: var(--ed-danger-weak); }
+.mc-a-dup, .mc-a-canon { border-color: color-mix(in srgb, var(--ed-warn) 60%, transparent); }
+.mc-a-dup .ed-ic, .mc-a-canon .ed-ic { color: var(--ed-warn); }
+.mc-a-dup .mc-mono, .mc-a-canon .mc-mono { text-decoration: line-through; text-decoration-color: var(--ed-warn); }
+.mc-a-note { font-size: 11px; opacity: .85; }
+.mc-a-info { color: var(--ed-muted); }
+.mc-addrs { display: flex; flex-wrap: wrap; gap: 4px; }
+
+/* ---------------------------------------------------------------- subject and body */
+/* The RFC 2047 encoded form of the subject, shown under the field for learning and debugging. */
+.mc-enc { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--ed-muted); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-all; }
+.mc-enc:empty { display: none; }
+.mc-editor { display: flex; flex-direction: column; gap: 6px; }
+.mc-toolbar { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; padding: 3px; border: 1px solid var(--ed-border); border-radius: 9px; background: var(--ed-panel-2); }
+.mc-tb { font-weight: 700; }
+.mc-phs { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-inline-start: 6px; }
+.mc-phs:empty { display: none; }
+/* Merge placeholders ({{name}}) shown as dashed accent tokens: insertable into the body by click. */
+.mc-ph { font: 600 11.5px var(--ed-mono); padding: 2px 7px; border-radius: 6px; border: 1px dashed var(--ed-accent); color: var(--ed-accent); background: var(--ed-accent-weak); }
+.mc-md { min-height: 220px; resize: vertical; line-height: 1.5; }
+/* Rich editor (contenteditable): height:auto + white-space:normal override the .ed-input single-line defaults. */
+.mc-rich { min-height: 220px; max-height: 60vh; overflow: auto; padding: 10px 12px; line-height: 1.55; height: auto; white-space: normal; }
+.mc-rich:focus { outline: none; box-shadow: var(--ed-focus); }
+.mc-rich img { max-width: 100%; height: auto; }
+/* Quotes and headings inside the editor approximate how mail clients render them. */
+.mc-rich blockquote { margin: 0 0 .8em; padding-inline-start: 10px; border-inline-start: 3px solid var(--ed-border-strong); color: var(--ed-muted); }
+.mc-rich p { margin: 0 0 .7em; }
+.mc-rich h2 { font-size: 1.25em; margin: .6em 0 .4em; }
+.mc-details { border: 1px solid var(--ed-border); border-radius: 10px; padding: 8px 10px; background: var(--ed-panel-2); }
+/* Custom disclosure marker: native marker hidden (list-style + WebKit pseudo), our chevron rotates on [open]. */
+.mc-details > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 600; font-size: 13px; list-style: none; }
+.mc-details > summary::-webkit-details-marker { display: none; }
+.mc-details > summary .ed-ic { transition: transform .15s; }
+.mc-details[open] > summary .ed-ic { transform: rotate(90deg); }
+.mc-details > .ed-fields { margin-top: 10px; }
+.mc-alt-text { min-height: 110px; font-size: 12.5px; }
+.mc-alt-text[readonly] { color: var(--ed-muted); }
+
+/* ---------------------------------------------------------------- files */
+.mc-drop { min-height: 76px; }
+.mc-drop-sm { min-height: 54px; }
+.mc-files-list { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.mc-files-list:empty { display: none; }
+/* File row: thumbnail | name and info | remove; options span the last two columns below. */
+.mc-file { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 4px 10px; align-items: center; padding: 8px; border: 1px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel-2); }
+.mc-thumb { width: 40px; height: 40px; border-radius: 7px; object-fit: cover; background: #fff; border: 1px solid var(--ed-border); display: inline-flex; align-items: center; justify-content: center; color: var(--ed-muted); }
+.mc-thumb-file svg { width: 20px; height: 20px; }
+.mc-file-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.mc-fname { height: 30px; }
+.mc-file-opts { grid-column: 2 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.mc-file-opts .ed-field { flex: none; }
+
+/* ---------------------------------------------------------------- merge, options */
+.mc-merge-info { overflow-wrap: anywhere; }
+.mc-headers { display: flex; flex-direction: column; gap: 6px; }
+.mc-headers:empty { display: none; }
+/* Custom header row: name | value | remove; on phones the value takes its own row. */
+.mc-hrow { display: grid; grid-template-columns: minmax(90px, 160px) minmax(0, 1fr) auto; gap: 6px; align-items: start; }
+.mc-hvalue { min-height: 32px; resize: vertical; }
+
+/* ---------------------------------------------------------------- stage */
+.mc-stage { padding: 12px; }
+.mc-stage-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.mc-stage-meta { display: flex; flex-wrap: wrap; gap: 5px; }
+/* Tabs scroll horizontally on narrow screens instead of wrapping into a second row. */
+.mc-tabs { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); max-width: 100%; overflow-x: auto; }
+.mc-tab { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border-radius: 7px; border: 0; background: none; color: var(--ed-muted); font-weight: 600; font-size: 13px; white-space: nowrap; }
+.mc-tab .ed-ic svg { width: 15px; height: 15px; }
+.mc-tab:hover { color: var(--ed-text); }
+.mc-tab.mc-on { background: var(--ed-panel); color: var(--ed-accent); box-shadow: var(--ed-shadow-sm); }
+.mc-tab:focus-visible { outline: none; box-shadow: var(--ed-focus); }
+.mc-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+/* Cards nested in panels lose their shadow (one elevation level is enough). */
+.mc-panel > .ap-card { box-shadow: none; border: 1px solid var(--ed-border); }
+.mc-raw { max-height: 62vh; white-space: pre-wrap; font-size: 12px; }
+.mc-rawbox { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.mc-rawbox .mc-raw { width: 100%; box-sizing: border-box; }
+.mc-textbody { max-height: 60vh; white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; font-size: 13px; }
+/* HTML preview iframe (sandboxed): white like a mail client, user-resizable vertically. */
+.mc-frame { display: block; width: 100%; height: 460px; border: 1px solid var(--ed-border); border-radius: 10px; background: #fff; resize: vertical; overflow: auto; }
+.mc-pv-head { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel-2); font-size: 13px; }
+.mc-pv-subject { font-size: 17px; font-weight: 650; margin-bottom: 4px; overflow-wrap: anywhere; }
+.mc-pv-row { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 8px; }
+.mc-pv-k { color: var(--ed-muted); }
+.mc-pv-v { overflow-wrap: anywhere; }
+.mc-pv-atts { display: flex; flex-wrap: wrap; gap: 6px; }
+.mc-export { display: flex; flex-direction: column; gap: 10px; }
+.mc-mailto-note:empty { display: none; }
+
+/* ---------------------------------------------------------------- inspector */
+.mc-i-input { display: grid; grid-template-columns: minmax(200px, 300px) minmax(0, 1fr); gap: 12px; align-items: stretch; }
+/* The drop zone stretches to the height of the paste area beside it. */
+.mc-i-input .ap-drop { min-height: 100%; }
+@media (max-width: 700px) { .mc-i-input { grid-template-columns: minmax(0, 1fr); } }
+.mc-paste { min-height: 96px; font-size: 12px; }
+.mc-i-out { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+.mc-i-subject { margin: 0 0 12px; font-size: 20px; font-weight: 650; line-height: 1.3; overflow-wrap: anywhere; }
+.mc-i-file { display: flex; }
+.mc-kv dd { overflow-wrap: anywhere; }
+.mc-body-panel { margin-top: 10px; }
+.mc-atts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.mc-att { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+.mc-att-name { font-weight: 600; overflow-wrap: anywhere; }
+/* MIME tree: nested lists with a dashed rail, logical properties so RTL mirrors it. */
+.mc-tree { list-style: none; margin: 0; padding-inline-start: 18px; border-inline-start: 1px dashed var(--ed-border-strong); }
+.mc-tree-root { padding: 0; border: 0; }
+.mc-tnode { margin: 6px 0; }
+.mc-tnode-h { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mc-ttype { font-size: 12px; font-weight: 600; color: var(--ed-accent); overflow-wrap: anywhere; }
+.mc-tname { font-size: 12.5px; overflow-wrap: anywhere; }
+.mc-tsize { font-size: 12px; color: var(--ed-muted); }
+.mc-tbound { font-size: 11px; color: var(--ed-faint); overflow-wrap: anywhere; word-break: break-all; }
+.mc-htable th[scope=row] { white-space: nowrap; font-weight: 600; font-size: 12px; color: var(--ed-muted); }
+.mc-hval { overflow-wrap: anywhere; }
+.mc-hraw { margin-top: 2px; font-size: 11.5px; color: var(--ed-faint); overflow-wrap: anywhere; word-break: break-all; }
+
+/* ---------------------------------------------------------------- tools */
+.mc-tools-tabs { margin-bottom: 14px; }
+/* min(100%, 420px): cards are at least 420px but never wider than the container on phones. */
+.mc-tools-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); align-items: start; }
+.mc-tools-grid.mc-one { grid-template-columns: minmax(0, 1fr); max-width: 900px; }
+.mc-out { min-height: 2.6em; max-height: 340px; margin: 0; font-size: 12.5px; }
+.mc-out-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* Header injection highlight (CR / LF in user input). */
+.mc-inj { background: color-mix(in srgb, var(--ed-danger) 18%, transparent); color: var(--ed-danger); font-weight: 600; }
+.mc-smtp { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 520px; overflow: auto; }
+/* SMTP transcript: side marker (C / S) | lines; reply classes colour the code (2xx ok, 3xx intermediate,
+   4xx transient, 5xx permanent). */
+.mc-sm { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 8px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--ed-border); font-size: 12.5px; }
+.mc-sm-c { background: var(--ed-panel-2); }
+.mc-sm-side { font: 700 11px var(--ed-mono); color: var(--ed-muted); padding-top: 2px; }
+.mc-sm-main { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.mc-sm-line { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.mc-sm-code { font-family: var(--ed-mono); }
+.mc-sm-positive .mc-sm-code, b.mc-sm-positive { color: var(--ed-ok); }
+.mc-sm-intermediate .mc-sm-code, b.mc-sm-intermediate { color: var(--ed-accent); }
+b.mc-sm-transient { color: var(--ed-warn); }
+b.mc-sm-permanent { color: var(--ed-danger); }
+li.mc-sm-permanent { border-color: color-mix(in srgb, var(--ed-danger) 45%, transparent); }
+li.mc-sm-transient { border-color: color-mix(in srgb, var(--ed-warn) 50%, transparent); }
+.mc-sm-expl { color: var(--ed-muted); overflow-wrap: anywhere; }
+.mc-sm-caps { display: flex; flex-wrap: wrap; gap: 4px; }
+.mc-sm-bad { border-style: dashed; }
+/* Dot-stuffing visualisation: stuffed leading dots and the terminating "." line. */
+.mc-dot-st { background: color-mix(in srgb, var(--ed-warn) 25%, transparent); font-weight: 700; }
+.mc-dot-end { background: var(--ed-accent-weak); color: var(--ed-accent); font-weight: 700; }
+.mc-crlf { color: var(--ed-faint); font-size: 10px; }
+.mc-addr-table td { font-size: 12.5px; }
+.mc-badge { display: inline-block; font-size: 11.5px; font-weight: 650; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.mc-badge-ok { color: var(--ed-ok); background: color-mix(in srgb, var(--ed-ok) 14%, transparent); }
+.mc-badge-invalid { color: var(--ed-danger); background: var(--ed-danger-weak); }
+.mc-badge-dup, .mc-badge-canon { color: var(--ed-warn); background: color-mix(in srgb, var(--ed-warn) 15%, transparent); }
+
+@media (max-width: 560px) {
+  .mc-hrow { grid-template-columns: minmax(0, 1fr) auto; }
+  .mc-hrow .mc-hvalue { grid-column: 1 / 2; grid-row: 2; }
+  .mc-pv-row { grid-template-columns: 64px minmax(0, 1fr); }
+  .mc-frame { height: 380px; }
+  .mc-stage { padding: 10px; }
+}

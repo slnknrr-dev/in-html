@@ -1,0 +1,624 @@
+// landing-studio/templates-art.js - generic artwork primitives of the landing templates: isometric solids and
+// a data-driven scene interpreter, dark / light stages, studio shots, flat street / region maps, wordmarks.
+//
+// Shared primitives of the template modules: pure builders (same input, same output; randomness only from seeded
+// tplRand / tplHash), returning plain document fragments, SVG strings or bytes. Templates compose them; nothing here
+// reads editor state or the DOM, so they run in tests and in Node.
+import { tplHash, tplRand } from '../sample/bytes.js';
+import { escapeHTML } from '../html/escape.js';
+
+/* ==========================================================================
+   Nothing here knows a subject: templates describe their pictures as data (lists of primitives — boxes, cylinders,
+   tubes, extruded profiles, discs, glows, sparks, figures, strokes) and the kit draws them. Units are free (the scene
+   is fitted to the canvas); x → lower right, y → lower left, z → up; the viewer looks from +x +y +z, so the faces
+   facing +x, +y and +z are visible. Paints are [top, left (+y face), right (+x face)] colour triples.
+   Deterministic: every random choice comes from a seed.
+   ========================================================================== */
+
+const TPL_ART_SVG = '<svg xmlns="http://www.w3.org/2000/svg" ';
+
+/** Ready paints [top, +y face, +x face]. */
+const TPL_ART_PAINT = {
+  steel: ['#dfe5ea', '#a9b4be', '#77838f'],
+  bright: ['#f1f4f7', '#c8d0d8', '#9aa6b2'],
+  dark: ['#6f7b87', '#47515b', '#2e353d'],
+  black: ['#454c55', '#2b3138', '#1b1f24'],
+  blue: ['#7aa6c8', '#3f6f96', '#29506f'],
+  orange: ['#ffab6b', '#ea5b0c', '#b3440b'],
+  amber: ['#ffd36b', '#f2b523', '#b98510'],
+  hot: ['#fff1b8', '#ffb347', '#ff7a1a'],
+  warm: ['#ffcf8a', '#f08a3c', '#c2541a'],
+  cast: ['#8f8984', '#68625d', '#4a4541'],
+  rust: ['#b57a55', '#8e5536', '#6c3f27'],
+  copper: ['#f0b08a', '#c9773f', '#9a552a'],
+  stone: ['#f4f1ea', '#dcd6ca', '#bdb5a6'],
+  marble: ['#fbfaf7', '#e9e5dc', '#cfc8ba'],
+  paper: ['#ffffff', '#eef0f3', '#d9dde3'],
+  navy: ['#4b6286', '#2c3e5c', '#1c2a42'],
+  brass: ['#f1d9a0', '#c9a45c', '#9a7a3c'],
+  wood: ['#c8956a', '#9c6a43', '#77502f'],
+  green: ['#8fc79a', '#3f8f52', '#2c6a3b'],
+};
+
+const tplArtN = (v) => Math.round(v * 10) / 10;
+
+/** '#rrggbb' mix of a and b (t = 0..1). */
+function tplArtMix(a, b, t) {
+  const h = (c, i) => parseInt(c.slice(1 + i * 2, 3 + i * 2), 16);
+  return '#' + [0, 1, 2].map((i) => Math.round(h(a, i) + (h(b, i) - h(a, i)) * t).toString(16).padStart(2, '0')).join('');
+}
+
+/** Polygon / polyline path data from screen points. */
+function tplIsoD(pts, close = true) {
+  let s = '';
+  for (let i = 0; i < pts.length; i++) s += (i ? 'L' : 'M') + tplArtN(pts[i][0]) + ' ' + tplArtN(pts[i][1]);
+  return s + (close ? 'Z' : '');
+}
+
+const tplIsoEl = (d, fill, extra = '') => '<path d="' + d + '" fill="' + fill + '"' + extra + '/>';
+
+/** Isometric projector: P(x, y, z) → [sx, sy]; `P.s` = screen px per unit. */
+function tplIsoProjector(ox, oy, s) {
+  const C = 0.8660254 * s, H = 0.5 * s;
+  const P = (x, y, z) => [ox + (x - y) * C, oy + (x + y) * H - z * s];
+  P.s = s;
+  return P;
+}
+
+/** Shifted projector (group offset). */
+function tplIsoShift(P, dx, dy, dz) {
+  const Q = (x, y, z) => P(x + dx, y + dy, z + dz);
+  Q.s = P.s;
+  return Q;
+}
+
+function tplIsoPoly(P, pts, fill, extra = '') {
+  return tplIsoEl(tplIsoD(pts.map((p) => P(p[0], p[1], p[2]))), fill, extra);
+}
+
+/** Axis-aligned box: the three visible faces. */
+function tplIsoBox(P, x, y, z, w, d, h, c) {
+  return tplIsoPoly(P, [[x, y + d, z], [x + w, y + d, z], [x + w, y + d, z + h], [x, y + d, z + h]], c[1]) +
+    tplIsoPoly(P, [[x + w, y, z], [x + w, y + d, z], [x + w, y + d, z + h], [x + w, y, z + h]], c[2]) +
+    tplIsoPoly(P, [[x, y, z + h], [x + w, y, z + h], [x + w, y + d, z + h], [x, y + d, z + h]], c[0]);
+}
+
+/** 3D point on a circle perpendicular to `axis` (radius r, angle t) around centre c. */
+function tplIsoAt(axis, c, r, t) {
+  const a = r * Math.cos(t), b = r * Math.sin(t);
+  return axis === 'z' ? [c[0] + a, c[1] + b, c[2]] : axis === 'x' ? [c[0], c[1] + a, c[2] + b] : [c[0] + a, c[1], c[2] + b];
+}
+
+/** Screen points of a circle (or a toothed outline: teeth = [height, count]) perpendicular to `axis`. */
+function tplIsoRing(P, axis, c, r, n = 44, teeth = null) {
+  const pts = [];
+  const put = (t, rr) => { const q = tplIsoAt(axis, c, rr, t); pts.push(P(q[0], q[1], q[2])); };
+  if (teeth) {
+    const k = teeth[1], w = (Math.PI * 2) / k;
+    for (let i = 0; i < k; i++) {
+      const a = i * w;
+      put(a, r); put(a + w * 0.2, r + teeth[0]); put(a + w * 0.5, r + teeth[0]); put(a + w * 0.7, r);
+    }
+  } else {
+    for (let i = 0; i < n; i++) put((i / n) * Math.PI * 2, r);
+  }
+  return pts;
+}
+
+/** Convex hull (monotone chain) of screen points. */
+function tplIsoHull(pts) {
+  const p = pts.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lo = [], up = [];
+  for (const q of p) {
+    while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop();
+    lo.push(q);
+  }
+  for (let i = p.length - 1; i >= 0; i--) {
+    const q = p[i];
+    while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop();
+    up.push(q);
+  }
+  return lo.slice(0, -1).concat(up.slice(0, -1));
+}
+
+/** Flat disc perpendicular to `axis`. */
+function tplIsoDisc(P, axis, c, r, fill, extra = '', teeth = null) {
+  return tplIsoEl(tplIsoD(tplIsoRing(P, axis, c, r, 40, teeth)), fill, extra);
+}
+
+/**
+ * Cylinder / frustum along an axis with a metallic gradient body and the visible end cap.
+ * o = {r1 (end radius), cap (colour), noCap, teeth: [height, count], n (segments)}; S = scene {defs:[], n}.
+ */
+function tplIsoCyl(P, S, axis, cx, cy, cz, r, len, c, o = {}) {
+  const r1 = o.r1 != null ? o.r1 : r;
+  const at = (k) => (axis === 'z' ? [cx, cy, cz + k] : axis === 'x' ? [cx + k, cy, cz] : [cx, cy + k, cz]);
+  const A = tplIsoRing(P, axis, at(0), r, o.n || 44, o.teeth || null);
+  const Bp = tplIsoRing(P, axis, at(len), r1, o.n || 44, o.teeth || null);
+  const body = tplIsoHull(A.concat(Bp));
+  const p0 = P(...at(0)), p1 = P(...at(len));
+  let nx = 1, ny = 0;
+  if (axis !== 'z') {
+    nx = -(p1[1] - p0[1]); ny = p1[0] - p0[0];
+    const L = Math.hypot(nx, ny) || 1;
+    nx /= L; ny /= L;
+    if (ny < 0) { nx = -nx; ny = -ny; }
+  }
+  let mn = Infinity, mx = -Infinity;
+  for (const q of body) {
+    const v = (q[0] - p0[0]) * nx + (q[1] - p0[1]) * ny;
+    if (v < mn) mn = v;
+    if (v > mx) mx = v;
+  }
+  const id = 'k' + S.n++;
+  const N = tplArtN;
+  S.defs.push('<linearGradient id="' + id + '" gradientUnits="userSpaceOnUse" x1="' + N(p0[0] + nx * mn) + '" y1="' + N(p0[1] + ny * mn) +
+    '" x2="' + N(p0[0] + nx * mx) + '" y2="' + N(p0[1] + ny * mx) + '"><stop offset="0" stop-color="' + c[1] + '"/><stop offset=".3" stop-color="' + c[0] +
+    '"/><stop offset=".7" stop-color="' + c[1] + '"/><stop offset="1" stop-color="' + c[2] + '"/></linearGradient>');
+  let s = tplIsoEl(tplIsoD(body), 'url(#' + id + ')');
+  if (!o.noCap) s += tplIsoEl(tplIsoD(Bp), o.cap || (axis === 'z' ? c[0] : axis === 'y' ? c[1] : c[2]));
+  return s;
+}
+
+/** Visible half of a ring (a strap or a seam around a cylinder) as a stroked polyline. */
+function tplIsoArc(P, axis, c, r, stroke, w) {
+  const n = 48, vis = [];
+  for (let i = 0; i < n; i++) {
+    const t = (i / n) * Math.PI * 2, a = Math.cos(t), b = Math.sin(t);
+    const dot = axis === 'z' ? a + b : a + b; // normal components in the cross plane, dotted with (1, 1, 1)
+    vis.push(dot > 0);
+  }
+  let start = vis.findIndex((v, i) => v && !vis[(i + n - 1) % n]);
+  if (start < 0) start = 0;
+  const pts = [];
+  for (let k = 0; k < n; k++) {
+    const i = (start + k) % n;
+    if (!vis[i]) break;
+    const q = tplIsoAt(axis, c, r, (i / n) * Math.PI * 2);
+    pts.push(P(q[0], q[1], q[2]));
+  }
+  return pts.length > 1 ? '<path d="' + tplIsoD(pts, false) + '" fill="none" stroke="' + stroke + '" stroke-width="' + tplArtN(w) + '" stroke-linecap="round"/>' : '';
+}
+
+/** Face colour for an outward normal: the paint faces blended by the normal's visible components. */
+function tplIsoShade(c, n) {
+  const wz = Math.max(0, n[2]), wy = Math.max(0, n[1]), wx = Math.max(0, n[0]);
+  const sum = wz + wy + wx || 1;
+  const a = tplArtMix(c[0], c[1], wy / ((wz + wy) || 1));
+  return wx ? tplArtMix(a, c[2], wx / sum) : a;
+}
+
+/**
+ * Extruded profile (prism): `profile` = [[u, v], …] in the cross-section plane of `axis` (x: u→y, v→z; y: u→x, v→z;
+ * z: u→x, v→y), extruded from `at` by `len`. Visible side faces are depth-sorted, then the end cap is drawn.
+ */
+function tplIsoPrism(P, at, axis, len, profile, c, o = {}) {
+  let pr = profile.slice();
+  let area = 0;
+  for (let i = 0; i < pr.length; i++) { const a = pr[i], b = pr[(i + 1) % pr.length]; area += a[0] * b[1] - b[0] * a[1]; }
+  if (area < 0) pr = pr.reverse();
+  const pt = (t, u, v) => (axis === 'x' ? [at[0] + t, at[1] + u, at[2] + v] : axis === 'y' ? [at[0] + u, at[1] + t, at[2] + v] : [at[0] + u, at[1] + v, at[2] + t]);
+  const nrm = (nu, nv) => (axis === 'x' ? [0, nu, nv] : axis === 'y' ? [nu, 0, nv] : [nu, nv, 0]);
+  const faces = [];
+  for (let i = 0; i < pr.length; i++) {
+    const a = pr[i], b = pr[(i + 1) % pr.length];
+    const du = b[0] - a[0], dv = b[1] - a[1], L = Math.hypot(du, dv) || 1;
+    const n = nrm(dv / L, -du / L);
+    if (n[0] + n[1] + n[2] <= 1e-6) continue;
+    const q = [pt(0, a[0], a[1]), pt(0, b[0], b[1]), pt(len, b[0], b[1]), pt(len, a[0], a[1])];
+    const key = q.reduce((s, p) => s + p[0] + p[1] + p[2], 0);
+    faces.push({ q, key, fill: tplIsoShade(c, n) });
+  }
+  faces.sort((f, g) => f.key - g.key);
+  let s = faces.map((f) => tplIsoPoly(P, f.q, f.fill)).join('');
+  const capT = len >= 0 ? len : 0;
+  s += tplIsoPoly(P, pr.map(([u, v]) => pt(capT, u, v)), o.cap || (axis === 'z' ? c[0] : axis === 'y' ? c[1] : c[2]));
+  return s;
+}
+
+/** Soft isometric floor shadow under a footprint. */
+function tplIsoShadow(P, x0, y0, x1, y1, ink = '#0f1215') {
+  const m = 2;
+  return tplIsoPoly(P, [[x0 - m, y0 - m, 0], [x1 + m * 3, y0 - m, 0], [x1 + m * 3, y1 + m * 3, 0], [x0 - m, y1 + m * 3, 0]], ink, ' opacity=".08"') +
+    tplIsoPoly(P, [[x0, y0, 0], [x1 + m, y0, 0], [x1 + m, y1 + m, 0], [x0, y1 + m, 0]], ink, ' opacity=".14"');
+}
+
+/** Segments [[a, b], …] (3D) as path data. */
+function tplIsoSegs(P, segs) {
+  return segs.map(([a, b]) => tplIsoD([P(a[0], a[1], a[2]), P(b[0], b[1], b[2])], false)).join('');
+}
+
+/** Run a builder once with a tracking projector to fit it into W×H (minus pad), then for real. */
+function tplIsoFit(build, W, H, pad, dy = 0) {
+  let mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity;
+  const base = tplIsoProjector(0, 0, 1);
+  const track = (x, y, z) => {
+    const p = base(x, y, z);
+    if (p[0] < mnx) mnx = p[0];
+    if (p[0] > mxx) mxx = p[0];
+    if (p[1] < mny) mny = p[1];
+    if (p[1] > mxy) mxy = p[1];
+    return p;
+  };
+  track.s = 1;
+  build(track, { defs: [], n: 0 });
+  const s = Math.min((W - 2 * pad) / (mxx - mnx), (H - 2 * pad) / (mxy - mny));
+  const P = tplIsoProjector(W / 2 - ((mnx + mxx) / 2) * s, H / 2 - ((mny + mxy) / 2) * s + dy, s);
+  const S = { defs: [], n: 0 };
+  const body = build(P, S);
+  return { body, defs: S.defs.join(''), P };
+}
+
+/** Spark streaks (screen space). o = {a0, a1 (deg), d0, d1, l0, l1, n, seed, w, g (gravity)}. */
+function tplIsoSparks(cx, cy, o) {
+  const rnd = tplRand(o.seed || 7);
+  const cols = o.colors || ['#fff3cf', '#ffd27a', '#ffa23d', '#ff7a1a'];
+  const groups = cols.map(() => '');
+  for (let i = 0; i < o.n; i++) {
+    const a = ((o.a0 + rnd() * (o.a1 - o.a0)) * Math.PI) / 180;
+    const d = o.d0 + Math.pow(rnd(), 0.8) * (o.d1 - o.d0);
+    const l = o.l0 + rnd() * (o.l1 - o.l0);
+    const x = cx + Math.cos(a) * d, y = cy + Math.sin(a) * d;
+    const g = (o.g || 0) * (d / o.d1);
+    const k = Math.min(cols.length - 1, Math.floor(rnd() * cols.length * (d / o.d1) + rnd()));
+    groups[k] += 'M' + tplArtN(x) + ' ' + tplArtN(y) + 'Q' + tplArtN(x + Math.cos(a) * l * 0.5) + ' ' + tplArtN(y + Math.sin(a) * l * 0.5) +
+      ' ' + tplArtN(x + Math.cos(a) * l) + ' ' + tplArtN(y + Math.sin(a) * l + g);
+  }
+  const w = o.w || 1.8;
+  return '<g fill="none" stroke-linecap="round">' + groups.map((d, i) => (d ? '<path d="' + d + '" stroke="' + cols[i] + '" stroke-width="' +
+    tplArtN(w * (1.25 - i * 0.18)) + '" opacity="' + (1 - i * 0.16).toFixed(2) + '"/>' : '')).join('') + '</g>';
+}
+
+/** Radial glow gradient definition. */
+function tplIsoGlowDef(id, c0 = '#ffd27a', c1 = '#ff7a1a', a = 0.9) {
+  return '<radialGradient id="' + id + '"><stop offset="0" stop-color="' + c0 + '" stop-opacity="' + a + '"/><stop offset=".38" stop-color="' + c1 +
+    '" stop-opacity="' + tplArtN(a * 0.45) + '"/><stop offset="1" stop-color="' + c1 + '" stop-opacity="0"/></radialGradient>';
+}
+
+/** Gradient fills a spec may name with '@<key>' (radial, centred on the shape). */
+const TPL_ART_FILLS = {
+  molten: [['0', '#fff6d6'], ['.3', '#ffc35a'], ['.7', '#ef6a12'], ['1', '#8f2c06']],
+  glass: [['0', '#ffffff'], ['.6', '#dfe8f0'], ['1', '#b9c7d4']],
+};
+
+/** Human silhouette standing at (x, y = feet), height h; optional hat colour. */
+function tplIsoFigure(x, y, h, fill, hat = '', lean = 0) {
+  const u = h / 100, N = tplArtN;
+  const X = (v) => N(x + v * u), Y = (v) => N(y - v * u);
+  let s = '<path fill="' + fill + '" d="M' + X(-13 + lean) + ' ' + Y(76) + 'L' + X(13 + lean) + ' ' + Y(76) + 'L' + X(16 + lean * 0.6) + ' ' + Y(46) +
+    'L' + X(11) + ' ' + Y(44) + 'L' + X(12) + ' ' + Y(0) + 'L' + X(3) + ' ' + Y(0) + 'L' + X(0) + ' ' + Y(36) + 'L' + X(-3) + ' ' + Y(0) +
+    'L' + X(-12) + ' ' + Y(0) + 'L' + X(-11) + ' ' + Y(44) + 'L' + X(-16 + lean * 0.6) + ' ' + Y(46) + 'Z"/>' +
+    '<circle cx="' + X(lean) + '" cy="' + Y(85) + '" r="' + N(8 * u) + '" fill="' + fill + '"/>';
+  if (hat) s += '<path fill="' + hat + '" d="M' + X(-10 + lean) + ' ' + Y(88) + 'A' + N(10 * u) + ' ' + N(9 * u) + ' 0 0 1 ' + X(10 + lean) + ' ' + Y(88) + 'L' + X(12 + lean) + ' ' + Y(86) + 'L' + X(-12 + lean) + ' ' + Y(86) + 'Z"/>';
+  return s;
+}
+
+const tplArtPaint = (p) => (Array.isArray(p) ? p : TPL_ART_PAINT[p] || TPL_ART_PAINT.steel);
+
+/**
+ * Draw a scene described as data. Primitives (all coordinates in scene units, `c` = paint name or triple):
+ *   {box:[x,y,z,w,d,h], c}
+ *   {cyl:[x,y,z], axis, r, len, c, r1, cap, noCap, teeth:[h,n], hole (inner radius), holeFill, rings (n), straps:[t…]}
+ *   {prism:[x,y,z], axis, len, profile:[[u,v]…], c, cap}
+ *   {disc:[x,y,z], axis, r, fill ('#hex' or '@molten'), opacity}
+ *   {glow:[x,y,z], rx, ry (units), c0, c1, a}
+ *   {sparks:[x,y,z], a0, a1, d (units), l (units), n, seed, g}
+ *   {figure:[x,y,z], h (units, default 17.5), fill, hat, lean}
+ *   {shadow:[x0,y0,x1,y1]}
+ *   {stroke:[[a,b]…], color, w (units), dash, opacity}
+ *   {arc:[x,y,z], axis, r, color, w}       visible half of a ring (straps, ties, seams)
+ *   {anchor:[x,y,z]}                       invisible point: widens the fitted box (composition)
+ *   {group:[dx,dy,dz], items:[…]}
+ */
+function tplIsoDraw(P, S, spec) {
+  let s = '';
+  for (const it of spec || []) {
+    if (!it) continue;
+    if (it.group) { s += tplIsoDraw(tplIsoShift(P, ...it.group), S, it.items); continue; }
+    if (it.anchor) { P(...it.anchor); continue; }
+    if (it.arc) { s += tplIsoArc(P, it.axis || 'x', it.arc, it.r, it.color || '#2b3138', P.s * (it.w || 0.45)); continue; }
+    if (it.box) { s += tplIsoBox(P, ...it.box, tplArtPaint(it.c)); continue; }
+    if (it.prism) { s += tplIsoPrism(P, it.prism, it.axis || 'x', it.len, it.profile, tplArtPaint(it.c), { cap: it.cap }); continue; }
+    if (it.cyl) {
+      const c = tplArtPaint(it.c), [x, y, z] = it.cyl, ax = it.axis || 'z', len = it.len;
+      s += tplIsoCyl(P, S, ax, x, y, z, it.r, len, c, { r1: it.r1, cap: it.cap, noCap: it.noCap, teeth: it.teeth });
+      const end = ax === 'z' ? [x, y, z + len] : ax === 'x' ? [x + len, y, z] : [x, y + len, z];
+      const r1 = it.r1 != null ? it.r1 : it.r;
+      if (it.rings) {
+        let d = '';
+        for (let k = 1; k <= it.rings; k++) {
+          const rr = (it.hole || 0) + ((r1 - (it.hole || 0)) * k) / (it.rings + 1);
+          d += tplIsoD(tplIsoRing(P, ax, end, rr, 40));
+        }
+        s += '<path d="' + d + '" fill="none" stroke="' + c[2] + '" stroke-opacity=".55" stroke-width="' + tplArtN(P.s * 0.18) + '"/>';
+      }
+      if (it.hole) s += tplIsoDisc(P, ax, end, it.hole, it.holeFill || '#15191e');
+      for (const t of it.straps || []) {
+        const at = ax === 'z' ? [x, y, z + len * t] : ax === 'x' ? [x + len * t, y, z] : [x, y + len * t, z];
+        s += tplIsoArc(P, ax, at, it.r * 1.01, it.strap || '#2b3138', P.s * 0.45);
+      }
+      continue;
+    }
+    if (it.disc) {
+      let fill = it.fill || '#15191e';
+      if (fill[0] === '@' && TPL_ART_FILLS[fill.slice(1)]) {
+        const id = 'f' + S.n++;
+        S.defs.push('<radialGradient id="' + id + '" cx=".46" cy=".42" r=".62">' + TPL_ART_FILLS[fill.slice(1)].map(([o, c]) => '<stop offset="' + o + '" stop-color="' + c + '"/>').join('') + '</radialGradient>');
+        fill = 'url(#' + id + ')';
+      }
+      s += tplIsoDisc(P, it.axis || 'z', it.disc, it.r, fill, it.opacity != null ? ' opacity="' + it.opacity + '"' : '');
+      continue;
+    }
+    if (it.glow) {
+      const id = 'g' + S.n++;
+      S.defs.push(tplIsoGlowDef(id, it.c0 || '#ffe3a1', it.c1 || '#ff8a1f', it.a != null ? it.a : 0.55));
+      const c = P(...it.glow);
+      s += '<ellipse cx="' + tplArtN(c[0]) + '" cy="' + tplArtN(c[1]) + '" rx="' + tplArtN(P.s * it.rx) + '" ry="' + tplArtN(P.s * (it.ry || it.rx * 0.6)) + '" fill="url(#' + id + ')"/>';
+      continue;
+    }
+    if (it.sparks) {
+      const c = P(...it.sparks), d = it.d || 16, l = it.l || 2.4;
+      s += tplIsoSparks(c[0], c[1], { a0: it.a0 != null ? it.a0 : -150, a1: it.a1 != null ? it.a1 : -30, d0: P.s * d * 0.12, d1: P.s * d, l0: P.s * l * 0.35, l1: P.s * l, n: it.n || 18, seed: it.seed || 5, w: P.s * 0.32, g: -P.s * (it.g != null ? it.g : 1.2), colors: it.colors });
+      continue;
+    }
+    if (it.figure) {
+      const c = P(...it.figure);
+      s += tplIsoFigure(c[0], c[1], P.s * (it.h || 17.5), it.fill || '#0a1118', it.hat || '', it.lean || 0);
+      continue;
+    }
+    if (it.shadow) { s += tplIsoShadow(P, ...it.shadow, it.ink); continue; }
+    if (it.stroke) {
+      s += '<path d="' + tplIsoSegs(P, it.stroke) + '" fill="none" stroke="' + (it.color || '#16191d') + '" stroke-width="' + tplArtN(P.s * (it.w || 0.4)) + '"' +
+        (it.dash ? ' stroke-dasharray="' + it.dash.map((v) => tplArtN(P.s * v)).join(' ') + '"' : '') + (it.opacity != null ? ' stroke-opacity="' + it.opacity + '"' : '') + ' stroke-linecap="round"/>';
+    }
+  }
+  return s;
+}
+
+/** Floor footprint [x0, y0, x1, y1] of a spec (boxes, cylinders, prisms; groups offset). */
+function tplIsoFoot(spec, off = [0, 0, 0]) {
+  let f = [Infinity, Infinity, -Infinity, -Infinity];
+  const add = (x0, y0, x1, y1) => { f = [Math.min(f[0], x0), Math.min(f[1], y0), Math.max(f[2], x1), Math.max(f[3], y1)]; };
+  for (const it of spec || []) {
+    if (!it) continue;
+    if (it.group) { const g = tplIsoFoot(it.items, [off[0] + it.group[0], off[1] + it.group[1], off[2] + it.group[2]]); add(g[0], g[1], g[2], g[3]); }
+    else if (it.box) add(off[0] + it.box[0], off[1] + it.box[1], off[0] + it.box[0] + it.box[3], off[1] + it.box[1] + it.box[4]);
+    else if (it.cyl) {
+      const [x, y] = [off[0] + it.cyl[0], off[1] + it.cyl[1]], r = Math.max(it.r, it.r1 || 0), ax = it.axis || 'z';
+      if (ax === 'z') add(x - r, y - r, x + r, y + r);
+      else if (ax === 'x') add(x, y - r, x + it.len, y + r);
+      else add(x - r, y, x + r, y + it.len);
+    } else if (it.prism) {
+      const us = it.profile.map((q) => q[0]), vs = it.profile.map((q) => q[1]);
+      const [x, y] = [off[0] + it.prism[0], off[1] + it.prism[1]], ax = it.axis || 'x';
+      if (ax === 'x') add(x, y + Math.min(...us), x + it.len, y + Math.max(...us));
+      else if (ax === 'y') add(x + Math.min(...us), y, x + Math.max(...us), y + it.len);
+      else add(x + Math.min(...us), y + Math.min(...vs), x + Math.max(...us), y + Math.max(...vs));
+    }
+  }
+  return f;
+}
+
+/** Common profiles for prisms (cross sections, counter-clockwise; units free). */
+const TPL_ART_PROFILE = {
+  /** I / H section: width b, height h, web tw, flange tf (centred on u, resting on v = 0). */
+  ibeam: (b, h, tw, tf) => [[-b / 2, 0], [b / 2, 0], [b / 2, tf], [tw / 2, tf], [tw / 2, h - tf], [b / 2, h - tf], [b / 2, h], [-b / 2, h], [-b / 2, h - tf], [-tw / 2, h - tf], [-tw / 2, tf], [-b / 2, tf]],
+  /** Channel (U) section. */
+  channel: (b, h, tw, tf) => [[0, 0], [b, 0], [b, tf], [tw, tf], [tw, h - tf], [b, h - tf], [b, h], [0, h]],
+  /** Angle (L) section. */
+  angle: (a, t) => [[0, 0], [a, 0], [a, t], [t, t], [t, a], [0, a]],
+  /** Trapezoid: bottom width b0, top width b1, height h (ingots, plinths). */
+  trapezoid: (b0, b1, h) => [[-b0 / 2, 0], [b0 / 2, 0], [b1 / 2, h], [-b1 / 2, h]],
+  /** Triangle gable: width b, height h. */
+  gable: (b, h) => [[-b / 2, 0], [b / 2, 0], [0, h]],
+  rect: (w, h) => [[0, 0], [w, 0], [w, h], [0, h]],
+};
+
+/* ---------- compositions: stages and studio shots ---------- */
+
+/**
+ * Stage for a scene (hero / gallery / band backgrounds). Dark blueprint by default; o.light = paper.
+ * o = {pad, dy, bg0, bg1, grid (line colour), glow:[cx, cy, r] (fractions), glowC0, glowC1, before(P), after(P), vignette}.
+ */
+function tplIsoStage(W, H, build, o = {}) {
+  const fit = tplIsoFit(build, W, H, o.pad || 60, o.dy || 0);
+  const P = fit.P;
+  const light = !!o.light;
+  const bg0 = o.bg0 || (light ? '#f7f5f0' : '#13283b'), bg1 = o.bg1 || (light ? '#e9e4d8' : '#0a141e');
+  const gc = o.grid || (light ? '#1f3a5f' : '#5f9bc4');
+  const vg = o.vignette || (light ? '#8a7f6a' : '#05090d');
+  const glow = o.glow ? '<ellipse cx="' + tplArtN(W * o.glow[0]) + '" cy="' + tplArtN(H * o.glow[1]) + '" rx="' + tplArtN(W * o.glow[2]) + '" ry="' + tplArtN(W * o.glow[2] * 0.5) + '" fill="url(#gl)"/>' : '';
+  return TPL_ART_SVG + 'viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '"><defs>' +
+    '<linearGradient id="bg" x1="0" y1="0" x2=".3" y2="1"><stop offset="0" stop-color="' + bg0 + '"/><stop offset="1" stop-color="' + bg1 + '"/></linearGradient>' +
+    '<pattern id="g1" width="30" height="30" patternUnits="userSpaceOnUse"><path d="M30 0H0V30" fill="none" stroke="' + gc + '" stroke-opacity="' + (light ? '.06' : '.10') + '"/></pattern>' +
+    '<pattern id="g2" width="150" height="150" patternUnits="userSpaceOnUse"><path d="M150 0H0V150" fill="none" stroke="' + gc + '" stroke-opacity="' + (light ? '.1' : '.18') + '"/></pattern>' +
+    tplIsoGlowDef('gl', o.glowC0 || (light ? '#fff6dd' : '#5f9bc4'), o.glowC1 || (light ? '#e8d9b0' : '#2e6a94'), light ? 0.8 : 0.35) +
+    '<radialGradient id="vg" cx=".5" cy=".5" r=".75"><stop offset=".55" stop-color="' + vg + '" stop-opacity="0"/><stop offset="1" stop-color="' + vg + '" stop-opacity="' + (light ? '.22' : '.6') + '"/></radialGradient>' +
+    fit.defs + '</defs>' +
+    '<rect width="' + W + '" height="' + H + '" fill="url(#bg)"/><rect width="' + W + '" height="' + H + '" fill="url(#g1)"/><rect width="' + W + '" height="' + H + '" fill="url(#g2)"/>' +
+    (o.before ? o.before(P) : '') + glow +
+    '<g stroke-linejoin="round" stroke="' + (light ? '#2a2e35' : '#06090c') + '" stroke-opacity="' + (light ? '.28' : '.55') + '" stroke-width="1.1">' + fit.body + '</g>' + (o.after ? o.after(P) : '') +
+    '<rect width="' + W + '" height="' + H + '" fill="url(#vg)"/></svg>';
+}
+
+/** Stage of a data spec. */
+function tplIsoScene(W, H, spec, o = {}) {
+  return tplIsoStage(W, H, (P, S) => tplIsoDraw(P, S, spec), o);
+}
+
+/**
+ * Light studio shot (square): blueprint backdrop, iso floor grid, dimension lines along the footprint and a small
+ * title block. o = {size (800), seed, accent ('#ea5b0c' tag stripe; '' = none), line ('#2e6a94')}.
+ */
+function tplIsoStudio(spec, o = {}) {
+  const W = o.size || 800, H = W;
+  const fit = tplIsoFit((P, S) => tplIsoDraw(P, S, spec), W, H, W * 0.19, W * 0.012);
+  const P = fit.P;
+  const [x0, y0, x1, y1] = tplIsoFoot(spec);
+  const line = o.line || '#2e6a94';
+  const grid = [];
+  for (let x = Math.floor(x0 / 8) * 8 - 16; x <= x1 + 16; x += 8) grid.push([[x, y0 - 14, 0], [x, y1 + 14, 0]]);
+  for (let y = Math.floor(y0 / 8) * 8 - 16; y <= y1 + 16; y += 8) grid.push([[x0 - 14, y, 0], [x1 + 14, y, 0]]);
+  const e = 6, t = 1.6;
+  const dims = [
+    [[x0, y1 + e, 0], [x1, y1 + e, 0]], [[x0, y1 + e - t, 0], [x0, y1 + e + t, 0]], [[x1, y1 + e - t, 0], [x1, y1 + e + t, 0]],
+    [[x1 + e, y0, 0], [x1 + e, y1, 0]], [[x1 + e - t, y0, 0], [x1 + e + t, y0, 0]], [[x1 + e - t, y1, 0], [x1 + e + t, y1, 0]],
+  ];
+  const ext = [[[x0, y1, 0], [x0, y1 + e + t, 0]], [[x1, y1, 0], [x1, y1 + e + t, 0]], [[x1, y0, 0], [x1 + e + t, y0, 0]], [[x1, y1, 0], [x1 + e + t, y1, 0]]];
+  const rnd = tplRand(o.seed || 1);
+  const hx = W * 0.05 + Math.round(rnd() * W * 0.01);
+  const acc = o.accent == null ? '#ea5b0c' : o.accent;
+  const k = W / 800, N = tplArtN;
+  return TPL_ART_SVG + 'viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '"><defs>' +
+    '<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="' + (o.bg0 || '#f4f6f8') + '"/><stop offset=".62" stop-color="' + (o.bg1 || '#e6eaee') + '"/><stop offset="1" stop-color="' + (o.bg2 || '#d5dbe1') + '"/></linearGradient>' +
+    '<pattern id="gr" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="' + line + '" stroke-opacity=".09"/></pattern>' +
+    '<radialGradient id="vg" cx=".5" cy=".45" r=".75"><stop offset=".6" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#9aa6b2" stop-opacity=".35"/></radialGradient>' +
+    (acc ? '<pattern id="hz" width="14" height="14" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="7" height="14" fill="' + acc + '"/><rect x="7" width="7" height="14" fill="#15191e"/></pattern>' : '') +
+    fit.defs + '</defs>' +
+    '<rect width="' + W + '" height="' + H + '" fill="url(#bg)"/><rect width="' + W + '" height="' + H + '" fill="url(#gr)"/>' +
+    '<path d="' + tplIsoSegs(P, grid) + '" stroke="' + line + '" stroke-opacity=".13" stroke-width="1"/>' +
+    '<g stroke-linejoin="round" stroke="#101418" stroke-opacity=".5" stroke-width="1.1">' + fit.body + '</g>' +
+    '<path d="' + tplIsoSegs(P, ext) + '" stroke="' + line + '" stroke-opacity=".45" stroke-width="1" stroke-dasharray="3 3"/>' +
+    '<path d="' + tplIsoSegs(P, dims) + '" stroke="' + line + '" stroke-opacity=".8" stroke-width="1.5"/>' +
+    '<rect width="' + W + '" height="' + H + '" fill="url(#vg)"/>' +
+    (acc ? '<rect x="' + N(hx) + '" y="' + N(728 * k) + '" width="' + N(132 * k) + '" height="' + N(14 * k) + '" fill="url(#hz)"/>' : '') +
+    '<g fill="none" stroke="' + line + '" stroke-opacity=".55"><rect x="' + N(604 * k) + '" y="' + N(712 * k) + '" width="' + N(156 * k) + '" height="' + N(48 * k) + '"/>' +
+    '<path d="M' + N(604 * k) + ' ' + N(736 * k) + 'H' + N(760 * k) + 'M' + N(664 * k) + ' ' + N(712 * k) + 'V' + N(760 * k) + 'M' + N(712 * k) + ' ' + N(736 * k) + 'V' + N(760 * k) + '"/></g>' +
+    '</svg>';
+}
+
+/* ---------- flat maps ---------- */
+
+/**
+ * Seeded street / region map (flat, top view). o = {seed, w, h, ground, block, building, park, water, road, minor,
+ * river (bool), coast ('right'|'bottom'|''), rail (bool), pins: [[x, y, colour, scale]], compass (bool), scale (bool)}.
+ */
+function tplArtMap(o = {}) {
+  const W = o.w || 1200, H = o.h || 900, N = tplArtN;
+  const rnd = tplRand(tplHash('map:' + (o.seed || 'x')));
+  const ground = o.ground || '#ece8df', block = o.block || '#ddd7ca', bld = o.building || '#cdc5b4', park = o.park || '#c9dcb6';
+  const water = o.water || '#a9cbe0', road = o.road || '#ffffff', minor = o.minor || '#f6f3ec';
+  let s = TPL_ART_SVG + 'viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '"><rect width="' + W + '" height="' + H + '" fill="' + ground + '"/>';
+  // street grid with jitter: columns and rows of blocks
+  const xs = [0], ys = [0];
+  while (xs[xs.length - 1] < W) xs.push(xs[xs.length - 1] + 110 + rnd() * 90);
+  while (ys[ys.length - 1] < H) ys.push(ys[ys.length - 1] + 95 + rnd() * 80);
+  const parkAt = new Set();
+  for (let k = 0; k < 3; k++) parkAt.add(Math.floor(rnd() * (xs.length - 1)) + ':' + Math.floor(rnd() * (ys.length - 1)));
+  let blocks = '', blds = '', parks = '';
+  for (let i = 0; i < xs.length - 1; i++) {
+    for (let j = 0; j < ys.length - 1; j++) {
+      const x = xs[i] + 9, y = ys[j] + 9, w = xs[i + 1] - xs[i] - 18, h = ys[j + 1] - ys[j] - 18;
+      if (parkAt.has(i + ':' + j)) {
+        parks += '<rect x="' + N(x) + '" y="' + N(y) + '" width="' + N(w) + '" height="' + N(h) + '" rx="6"/>';
+        continue;
+      }
+      blocks += '<rect x="' + N(x) + '" y="' + N(y) + '" width="' + N(w) + '" height="' + N(h) + '" rx="3"/>';
+      const n = 2 + Math.floor(rnd() * 4);
+      for (let k = 0; k < n; k++) {
+        const bw = 18 + rnd() * (w * 0.45), bh = 14 + rnd() * (h * 0.4);
+        blds += '<rect x="' + N(x + 5 + rnd() * Math.max(1, w - bw - 10)) + '" y="' + N(y + 5 + rnd() * Math.max(1, h - bh - 10)) + '" width="' + N(bw) + '" height="' + N(bh) + '"/>';
+      }
+    }
+  }
+  s += '<g fill="' + block + '">' + blocks + '</g><g fill="' + bld + '">' + blds + '</g><g fill="' + park + '">' + parks + '</g>';
+  // a few main avenues (wider white roads over the grid lines)
+  let av = '';
+  for (let k = 0; k < 2; k++) av += 'M' + N(xs[1 + Math.floor(rnd() * (xs.length - 3))]) + ' -10V' + (H + 10);
+  for (let k = 0; k < 2; k++) av += 'M-10 ' + N(ys[1 + Math.floor(rnd() * (ys.length - 3))]) + 'H' + (W + 10);
+  s += '<path d="' + av + '" stroke="' + road + '" stroke-width="20" fill="none"/><path d="' + av + '" stroke="' + minor + '" stroke-width="2" stroke-dasharray="14 10" fill="none" opacity=".9"/>';
+  if (o.river) {
+    const d = 'M-20 ' + N(H * 0.72) + 'C' + N(W * 0.25) + ' ' + N(H * 0.6) + ' ' + N(W * 0.42) + ' ' + N(H * 0.9) + ' ' + N(W * 0.62) + ' ' + N(H * 0.78) + 'S' + N(W * 0.9) + ' ' + N(H * 0.62) + ' ' + (W + 20) + ' ' + N(H * 0.68);
+    s += '<path d="' + d + '" stroke="' + water + '" stroke-width="46" fill="none" stroke-linecap="round"/><path d="' + d + '" stroke="#fff" stroke-opacity=".35" stroke-width="2" fill="none"/>';
+  }
+  if (o.coast === 'right') s += '<path d="M' + N(W * 0.78) + ' -10C' + N(W * 0.7) + ' ' + N(H * 0.3) + ' ' + N(W * 0.86) + ' ' + N(H * 0.55) + ' ' + N(W * 0.76) + ' ' + (H + 10) + 'H' + (W + 10) + 'V-10Z" fill="' + water + '"/>';
+  if (o.coast === 'bottom') s += '<path d="M-10 ' + N(H * 0.8) + 'C' + N(W * 0.3) + ' ' + N(H * 0.74) + ' ' + N(W * 0.6) + ' ' + N(H * 0.88) + ' ' + (W + 10) + ' ' + N(H * 0.78) + 'V' + (H + 10) + 'H-10Z" fill="' + water + '"/>';
+  if (o.rail) {
+    const d = 'M-10 ' + N(H * 0.3) + 'C' + N(W * 0.3) + ' ' + N(H * 0.36) + ' ' + N(W * 0.55) + ' ' + N(H * 0.18) + ' ' + (W + 10) + ' ' + N(H * 0.24);
+    s += '<path d="' + d + '" stroke="#5b5f66" stroke-width="7" fill="none"/><path d="' + d + '" stroke="#fff" stroke-width="3" stroke-dasharray="12 12" fill="none"/>';
+  }
+  for (const [x, y, c, k] of o.pins || []) {
+    s += '<g transform="translate(' + N(x) + ' ' + N(y) + ') scale(' + (k || 1) + ')"><ellipse cy="3" rx="14" ry="5" fill="#000" opacity=".18"/>' +
+      '<path d="M0 0C-16-20-28-33-28-50a28 28 0 1 1 56 0C28-33 16-20 0 0Z" fill="' + c + '" stroke="#fff" stroke-width="5"/><circle cy="-50" r="10" fill="#fff"/></g>';
+  }
+  if (o.compass !== false) s += '<g transform="translate(' + (W - 70) + ' 70)"><circle r="34" fill="#fff" opacity=".9"/><path d="M0-26L9 4L0-2L-9 4Z" fill="#1d2430"/></g>';
+  if (o.scale !== false) s += '<g transform="translate(40 ' + (H - 50) + ')"><rect width="180" height="9" fill="#fff"/><rect width="45" height="9" fill="#1d2430"/><rect x="90" width="45" height="9" fill="#1d2430"/></g>';
+  return s + '</svg>';
+}
+
+/* ---------- marks ---------- */
+
+/**
+ * Wordmark (fictional partner / client logos): geometric emblem + name. kind ∈ peak, gear, wave, drop, bars, hex, ring,
+ * arch, leaf, star. o = {font ('condensed'|'serif'|'sans'), weight}.
+ */
+function tplArtWordmark(kind, name, color, o = {}) {
+  const N = tplArtN;
+  const fonts = {
+    condensed: "'Bahnschrift SemiCondensed','Roboto Condensed','Arial Narrow',Arial,sans-serif",
+    serif: "Charter,'Iowan Old Style',Cambria,Georgia,'Times New Roman',serif",
+    sans: "system-ui,-apple-system,'Segoe UI',Roboto,Arial,sans-serif",
+  };
+  const W = Math.round(108 + name.length * (o.font === 'serif' ? 19 : 17.5));
+  let m = '';
+  if (kind === 'peak') m = '<path d="M8 72L36 22L52 48L62 34L84 72Z" fill="' + color + '"/><path d="M30 33L36 22L42 33L36 30Z" fill="#fff" opacity=".85"/>';
+  else if (kind === 'gear') {
+    let d = '';
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2, b = a + 0.26;
+      d += (i ? 'L' : 'M') + N(46 + Math.cos(a) * 34) + ' ' + N(48 + Math.sin(a) * 34) + 'L' + N(46 + Math.cos(b) * 34) + ' ' + N(48 + Math.sin(b) * 34) +
+        'L' + N(46 + Math.cos(b + 0.12) * 27) + ' ' + N(48 + Math.sin(b + 0.12) * 27) + 'L' + N(46 + Math.cos(a + 0.4) * 27) + ' ' + N(48 + Math.sin(a + 0.4) * 27);
+    }
+    m = '<path d="' + d + 'Z" fill="' + color + '"/><circle cx="46" cy="48" r="12" fill="#fff"/>';
+  } else if (kind === 'wave') m = '<rect x="10" y="14" width="72" height="68" rx="6" fill="' + color + '"/><path d="M18 46q9-9 18 0t18 0t18 0M18 62q9-9 18 0t18 0t18 0" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/>';
+  else if (kind === 'drop') m = '<path d="M46 12C60 34 74 46 74 60a28 28 0 0 1-56 0C18 46 32 34 46 12Z" fill="' + color + '"/><path d="M34 60a12 12 0 0 0 12 12" fill="none" stroke="#fff" stroke-width="5" stroke-linecap="round"/>';
+  else if (kind === 'bars') m = '<g fill="' + color + '"><rect x="12" y="50" width="16" height="30"/><rect x="34" y="36" width="16" height="44"/><rect x="56" y="18" width="16" height="62"/></g><path d="M10 84H76" stroke="' + color + '" stroke-width="4"/>';
+  else if (kind === 'ring') m = '<circle cx="46" cy="48" r="32" fill="none" stroke="' + color + '" stroke-width="8"/><circle cx="46" cy="48" r="13" fill="' + color + '"/>';
+  else if (kind === 'arch') m = '<path d="M12 82V44a34 34 0 0 1 68 0V82H64V46a18 18 0 0 0-36 0V82Z" fill="' + color + '"/><rect x="6" y="80" width="80" height="6" fill="' + color + '"/>';
+  else if (kind === 'leaf') m = '<path d="M14 80C14 40 40 16 82 14C80 56 56 82 14 80Z" fill="' + color + '"/><path d="M18 76L64 30" stroke="#fff" stroke-width="4" stroke-linecap="round"/>';
+  else if (kind === 'star') {
+    let d = '';
+    for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + (i * Math.PI) / 5, r = i % 2 ? 15 : 36; d += (i ? 'L' : 'M') + N(46 + Math.cos(a) * r) + ' ' + N(50 + Math.sin(a) * r); }
+    m = '<path d="' + d + 'Z" fill="' + color + '"/>';
+  } else m = '<path d="M46 12L76 29V65L46 82L16 65V29Z" fill="none" stroke="' + color + '" stroke-width="7"/><path d="M46 30L61 39V57L46 66L31 57V39Z" fill="' + color + '"/>';
+  return TPL_ART_SVG + 'viewBox="0 0 ' + W + ' 96" width="' + W + '" height="96">' + m +
+    '<text x="98" y="61" font-family="' + (fonts[o.font] || fonts.condensed) + '" font-size="' + (o.font === 'serif' ? 30 : 31) + '" font-weight="' + (o.weight || 700) + '" letter-spacing="1.5" fill="' + color + '">' +
+    escapeHTML(name) + '</text></svg>';
+}
+
+export {
+  TPL_ART_FILLS,
+  TPL_ART_PAINT,
+  TPL_ART_PROFILE,
+  TPL_ART_SVG,
+  tplArtMap,
+  tplArtMix,
+  tplArtN,
+  tplArtWordmark,
+  tplIsoArc,
+  tplIsoAt,
+  tplIsoBox,
+  tplIsoCyl,
+  tplIsoD,
+  tplIsoDisc,
+  tplIsoDraw,
+  tplIsoEl,
+  tplIsoFigure,
+  tplIsoFit,
+  tplIsoFoot,
+  tplIsoGlowDef,
+  tplIsoHull,
+  tplIsoPoly,
+  tplIsoPrism,
+  tplIsoProjector,
+  tplIsoRing,
+  tplIsoScene,
+  tplIsoSegs,
+  tplIsoShade,
+  tplIsoShadow,
+  tplIsoShift,
+  tplIsoSparks,
+  tplIsoStage,
+  tplIsoStudio
+};

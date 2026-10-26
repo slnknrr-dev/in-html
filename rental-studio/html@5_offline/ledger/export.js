@@ -1,0 +1,4 @@
+import{serializeCSV}from"../csv/csv.js";import{decimalText}from"./minor.js";import"./parties.js";import"./journal.js";function csvText(rows,{bom=true,delimiter=','}={}){return(bom?'﻿':'')+serializeCSV(rows,{delimiter,guard:true});}
+function kpiCsv(k,{bom=true}={}){const rows=[['from','to','currency','bookings','nights','occupancy_pct','gross','night_revenue','adr','revpar','owner_accrued','owner_deducted','owner_paid','owner_net','agency','expenses']];const occ=k.occupancy>=0?(k.occupancy/10).toFixed(1):'';for(const c of k.currencies||[]){const d=(v)=>decimalText(v,c.currency);rows.push([k.period.from,k.period.to,c.currency,k.bookings,c.nights,occ,d(c.gross),d(c.nightRevenue),d(c.adr),d(c.revpar),d(c.ownerAccrued),d(c.ownerDeducted),d(c.ownerPaid),d(c.ownerNet),d(c.agency),d(c.expenses)]);}
+return csvText(rows,{bom});}
+export{kpiCsv,csvText};

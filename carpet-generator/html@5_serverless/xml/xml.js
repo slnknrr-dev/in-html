@@ -1,0 +1,1 @@
+const escapeXML=(s)=>String(s).replace(/[&<>]/g,(c)=>(c==='&'?'&amp;':c==='<'?'&lt;':'&gt;')).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]/g,'');const escapeXMLAttr=(s)=>escapeXML(s).replace(/"/g,'&quot;').replace(/\t/g,'&#9;').replace(/\n/g,'&#10;').replace(/\r/g,'&#13;');export{escapeXMLAttr};

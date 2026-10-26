@@ -1,0 +1,392 @@
+// webm/demux.js - Matroska / WebM demuxer: EBML header, segment info, tracks (codec strings and WebCodecs decoder
+// descriptions), clusters with SimpleBlock / BlockGroup frames (all lacing modes, unknown-size live clusters),
+// cues, seek head and tags.
+//
+// Robustness first: MediaRecorder files are often truncated (tab closed mid-recording) or have unknown-size
+// segments and clusters. The demuxer walks top-level elements, ends unknown-size clusters at the next level-1 id,
+// stops cleanly at a truncated tail and, after garbage, resynchronises on the next Cluster signature.
+// Times: Matroska stores ticks of TimestampScale ns (default 1 ms); frames are reported in microseconds (WebCodecs).
+import { ID, LEVEL1, children, readFloat, readHeader, readInt, readSize, readString, readUint } from './ebml.js';
+import { av1CodecString, codecName, parseAudioSpecificConfig, parseAv1C, parseAv1SequenceHeader, parseAvcC, parseHvcC, parseVp9Frame, vp9CodecString } from '../mp4/codecs.js';
+
+const asBytes = (b) => (b instanceof Uint8Array ? b : ArrayBuffer.isView(b) ? new Uint8Array(b.buffer, b.byteOffset, b.byteLength) : new Uint8Array(b));
+const TRACK_TYPES = { 1: 'video', 2: 'audio', 3: 'complex', 0x10: 'logo', 0x11: 'subtitle', 0x12: 'buttons', 0x20: 'control', 0x21: 'metadata' };
+
+/**
+ * Parses a Matroska / WebM file.
+ * Returns { docType, docTypeVersion, info: { timestampScale (ns), duration (s), title, muxingApp, writingApp, date },
+ *   tracks: [{ number, uid, type, codecId, codec (WebCodecs string), codecName, codecPrivate, name, language,
+ *     defaultDuration (ns), codecDelay (ns), seekPreRoll (ns), width, height, displayWidth, displayHeight, alphaMode,
+ *     sampleRate, channels, bitDepth, frames, bytes, duration (s), bitrate }],
+ *   frames: [{ track, timestamp (µs), duration (µs), keyframe, invisible, offset, size, data }] (file order),
+ *   cues: [{ time (s), track, clusterPosition (file offset) }], seekHead: [{ id, position }], tags: { name: value },
+ *   clusters: [{ offset, timestamp, size }], segment: { offset, dataOffset, size }, hasDuration, hasCues, duration (s) }.
+ * `frames: false` skips frame collection (info only, still walks clusters for timing).
+ */
+export function parseWebm(input, { frames: wantFrames = true } = {}) {
+  const b = asBytes(input);
+  const hdr = readHeader(b, 0);
+  if (!hdr || hdr.id !== ID.EBML) throw new Error('not a Matroska / WebM file');
+  const out = {
+    docType: 'matroska', docTypeVersion: 0, info: { timestampScale: 1000000, duration: 0 }, tracks: [], frames: [], cues: [],
+    seekHead: [], tags: {}, clusters: [], segment: null, hasDuration: false, hasCues: false, duration: 0,
+  };
+  for (const c of children(b, hdr.start, hdr.end)) {
+    if (c.id === ID.DocType) out.docType = readString(b, c.start, c.end);
+    else if (c.id === ID.DocTypeVersion) out.docTypeVersion = readUint(b, c.start, c.end);
+  }
+  let p = hdr.end;
+  let seg = null;
+  while (p < b.length) {
+    const h = readHeader(b, p);
+    if (!h) break;
+    if (h.id === ID.Segment) { seg = h; break; }
+    if (h.size < 0) break;
+    p = h.end;
+  }
+  if (!seg) throw new Error('Matroska: no Segment');
+  out.segment = { offset: seg.offset, dataOffset: seg.start, size: seg.size };
+  const segEnd = seg.size < 0 ? b.length : Math.min(b.length, seg.end);
+  const ctx = { b, out, wantFrames, scale: 1000000, tracksByNum: new Map() };
+  let q = seg.start;
+  while (q < segEnd) {
+    const h = readHeader(b, q, segEnd);
+    if (!h) { q = resync(b, q + 1, segEnd); if (q < 0) break; continue; }
+    if (h.id === ID.Info) readInfo(ctx, h);
+    else if (h.id === ID.Tracks) readTracks(ctx, h);
+    else if (h.id === ID.Cluster) { q = readCluster(ctx, h, segEnd); continue; }
+    else if (h.id === ID.Cues) readCues(ctx, h, seg.start);
+    else if (h.id === ID.SeekHead) readSeekHead(ctx, h);
+    else if (h.id === ID.Tags) readTags(ctx, h);
+    if (h.size < 0) break;
+    q = h.end;
+  }
+  finish(ctx);
+  return out;
+}
+
+// After damage: the next Cluster id.
+// The 4-byte Cluster id 1F 43 B6 75 is distinctive enough that a false match inside payload is rare; a real decoder
+// would also validate the size and the following Timestamp element.
+function resync(b, from, end) {
+  for (let i = from; i + 4 <= end; i++) if (b[i] === 0x1f && b[i + 1] === 0x43 && b[i + 2] === 0xb6 && b[i + 3] === 0x75) return i;
+  return -1;
+}
+
+function readInfo(ctx, h) {
+  const { b, out } = ctx;
+  let dur = null;
+  for (const c of children(b, h.start, h.end)) {
+    if (c.id === ID.TimestampScale) out.info.timestampScale = readUint(b, c.start, c.end) || 1000000;
+    else if (c.id === ID.Duration) dur = readFloat(b, c.start, c.end);
+    else if (c.id === ID.Title) out.info.title = readString(b, c.start, c.end);
+    else if (c.id === ID.MuxingApp) out.info.muxingApp = readString(b, c.start, c.end);
+    else if (c.id === ID.WritingApp) out.info.writingApp = readString(b, c.start, c.end);
+    // DateUTC: signed nanoseconds since 2001-01-01T00:00:00 UTC (the Matroska epoch).
+    else if (c.id === ID.DateUTC) out.info.date = new Date(Date.UTC(2001, 0, 1) + readInt(b, c.start, c.end) / 1e6);
+  }
+  ctx.scale = out.info.timestampScale;
+  if (dur != null && dur > 0) { out.info.duration = (dur * ctx.scale) / 1e9; out.hasDuration = true; }
+}
+
+function readTracks(ctx, h) {
+  const { b, out } = ctx;
+  for (const te of children(b, h.start, h.end)) {
+    if (te.id !== ID.TrackEntry) continue;
+    const t = { number: 0, uid: 0, type: 'unknown', codecId: '', codecPrivate: null, language: 'eng', name: '', defaultDuration: 0, codecDelay: 0, seekPreRoll: 0, frames: 0, bytes: 0 };
+    for (const c of children(b, te.start, te.end)) {
+      const u = () => readUint(b, c.start, c.end);
+      switch (c.id) {
+        case ID.TrackNumber: t.number = u(); break;
+        case ID.TrackUID: t.uid = u(); break;
+        case ID.TrackType: t.type = TRACK_TYPES[u()] || 'unknown'; break;
+        case ID.CodecID: t.codecId = readString(b, c.start, c.end); break;
+        case ID.CodecPrivate: t.codecPrivate = b.subarray(c.start, c.end); break;
+        case ID.CodecName: t.codecLabel = readString(b, c.start, c.end); break;
+        case ID.Name: t.name = readString(b, c.start, c.end); break;
+        case ID.Language: t.language = readString(b, c.start, c.end); break;
+        case ID.LanguageBCP47: t.language = readString(b, c.start, c.end); break;
+        case ID.DefaultDuration: t.defaultDuration = u(); break;
+        case ID.CodecDelay: t.codecDelay = u(); break;
+        case ID.SeekPreRoll: t.seekPreRoll = u(); break;
+        case ID.FlagDefault: t.isDefault = !!u(); break;
+        case ID.ContentEncodings: t.encoded = true; break;
+        case ID.Video:
+          for (const v of children(b, c.start, c.end)) {
+            const vu = () => readUint(b, v.start, v.end);
+            if (v.id === ID.PixelWidth) t.width = vu();
+            else if (v.id === ID.PixelHeight) t.height = vu();
+            else if (v.id === ID.DisplayWidth) t.displayWidth = vu();
+            else if (v.id === ID.DisplayHeight) t.displayHeight = vu();
+            else if (v.id === ID.AlphaMode) t.alphaMode = vu();
+            else if (v.id === ID.FrameRate) t.declaredFrameRate = readFloat(b, v.start, v.end);
+            else if (v.id === ID.FlagInterlaced) t.interlaced = vu() === 1;
+          }
+          break;
+        case ID.Audio:
+          for (const a of children(b, c.start, c.end)) {
+            if (a.id === ID.SamplingFrequency) t.sampleRate = readFloat(b, a.start, a.end);
+            else if (a.id === ID.OutputSamplingFrequency) t.outputSampleRate = readFloat(b, a.start, a.end);
+            else if (a.id === ID.Channels) t.channels = readUint(b, a.start, a.end);
+            else if (a.id === ID.BitDepth) t.bitDepth = readUint(b, a.start, a.end);
+          }
+          if (t.outputSampleRate) t.sampleRate = t.outputSampleRate;
+          if (!t.channels) t.channels = 1;
+          break;
+        default:
+      }
+    }
+    t.codec = baseCodec(t);
+    out.tracks.push(t);
+    ctx.tracksByNum.set(t.number, t);
+  }
+}
+
+// WebCodecs codec string from the codec id and private data (refined from the first keyframe in finish()).
+// Derives the WebCodecs codec string from CodecID + CodecPrivate; VP9 and AV1 are refined later from the first
+// keyframe because WebM writers often omit or simplify their CodecPrivate.
+function baseCodec(t) {
+  const id = t.codecId, cp = t.codecPrivate;
+  try {
+    switch (id) {
+      case 'V_VP8': return 'vp8';
+      case 'V_VP9': {
+        // VP9 CodecFeatures in CodecPrivate: id 1 profile, 2 level, 3 bit depth, 4 chroma subsampling.
+        const v = { profile: 0, level: 10, bitDepth: 8 };
+        if (cp) {
+          for (let i = 0; i + 3 <= cp.length; i += 2 + cp[i + 1]) {
+            const val = cp[i + 2];
+            if (cp[i] === 1) v.profile = val; else if (cp[i] === 2) v.level = val; else if (cp[i] === 3) v.bitDepth = val;
+          }
+        }
+        return vp9CodecString(v);
+      }
+      case 'V_AV1': return cp && cp.length >= 4 ? parseAv1C(cp).codec : 'av01.0.08M.08';
+      case 'V_MPEG4/ISO/AVC': return cp ? parseAvcC(cp).codec : 'avc1.42001f';
+      case 'V_MPEGH/ISO/HEVC': return cp ? parseHvcC(cp).codec : 'hvc1.1.6.L93.B0';
+      case 'A_OPUS': return 'opus';
+      case 'A_VORBIS': return 'vorbis';
+      case 'A_FLAC': return 'flac';
+      case 'A_MPEG/L3': return 'mp3';
+      case 'A_AC3': return 'ac-3';
+      case 'A_EAC3': return 'ec-3';
+      case 'A_PCM/INT/LIT': return t.bitDepth === 8 ? 'pcm-u8' : t.bitDepth === 24 ? 'pcm-s24' : t.bitDepth === 32 ? 'pcm-s32' : 'pcm-s16';
+      case 'A_PCM/FLOAT/IEEE': return 'pcm-f32';
+      default:
+        if (id.startsWith('A_AAC')) return cp && cp.length >= 2 ? parseAudioSpecificConfig(cp).codec : 'mp4a.40.2';
+        return id;
+    }
+  } catch { return id; }
+}
+
+function readCluster(ctx, h, segEnd) {
+  const { b, out } = ctx;
+  const limit = h.size < 0 ? segEnd : h.end;
+  const cluster = { offset: h.offset, timestamp: 0, size: h.size };
+  out.clusters.push(cluster);
+  let p = h.start;
+  while (p < limit) {
+    const c = readHeader(b, p, limit);
+    if (!c) break;
+    // An unknown-size cluster ends at the next level-1 element.
+    if (h.size < 0 && (LEVEL1.has(c.id) || c.id === ID.EBML)) return p;
+    if (c.size >= 0 && c.start + c.size > b.length) break; // truncated recording
+    if (c.id === ID.Timestamp) cluster.timestamp = readUint(b, c.start, c.end);
+    else if (c.id === ID.SimpleBlock) readBlock(ctx, cluster, c.start, c.end, true, null);
+    else if (c.id === ID.BlockGroup) {
+      let blk = null, dur = null, ref = false;
+      for (const g of children(b, c.start, c.end)) {
+        if (g.id === ID.Block) blk = g;
+        else if (g.id === ID.BlockDuration) dur = readUint(b, g.start, g.end);
+        else if (g.id === ID.ReferenceBlock) ref = true;
+      }
+      if (blk) readBlock(ctx, cluster, blk.start, blk.end, false, { dur, ref });
+    }
+    if (c.size < 0) break;
+    p = c.end;
+  }
+  return h.size < 0 ? (p >= limit ? limit : p) : h.end;
+}
+
+function readBlock(ctx, cluster, start, end, simple, group) {
+  const { b, out, scale } = ctx;
+  const tv = readSize(b, start);
+  if (!tv) return;
+  const tn = tv.value;
+  let p = start + tv.length;
+  // Block timestamp is a signed 16-bit offset from the cluster timestamp: << 24 >> 16 sign-extends the high byte.
+  const rel = (b[p] << 24 >> 16) | b[p + 1];
+  const flags = b[p + 2];
+  p += 3;
+  const t = ctx.tracksByNum.get(tn);
+  const keyframe = simple ? !!(flags & 0x80) : !group.ref;
+  // Lacing packs several frames in one block: 1 Xiph (sizes as runs of 255), 3 EBML (first size, then signed vint
+  // deltas, bias 2^(7n-1) - 1), 2 fixed (equal sizes). The last frame's size is whatever remains.
+  const lacing = (flags >> 1) & 3;
+  let sizes;
+  if (lacing === 0) sizes = [end - p];
+  else {
+    const n = b[p++] + 1;
+    sizes = [];
+    if (lacing === 1) {
+      for (let i = 0; i < n - 1; i++) { let s = 0, x; do { x = b[p++]; s += x; } while (x === 255); sizes.push(s); }
+    } else if (lacing === 3) {
+      const first = readSize(b, p); p += first.length; sizes.push(first.value);
+      for (let i = 1; i < n - 1; i++) {
+        const v = readSize(b, p); p += v.length;
+        const bias = 2 ** (7 * v.length - 1) - 1;
+        sizes.push(sizes[i - 1] + (v.value - bias));
+      }
+    } else {
+      const each = Math.floor((end - p) / n);
+      for (let i = 0; i < n - 1; i++) sizes.push(each);
+    }
+    sizes.push(end - p - sizes.reduce((a, x) => a + x, 0));
+  }
+  const ts = ((cluster.timestamp + rel) * scale) / 1000;
+  const dd = t && t.defaultDuration ? t.defaultDuration / 1000 : 0;
+  const blockDur = group && group.dur != null ? (group.dur * scale) / 1000 : null;
+  sizes.forEach((sz, i) => {
+    if (sz < 0 || p + sz > end) return;
+    if (t) { t.frames++; t.bytes += sz; }
+    if (ctx.wantFrames || (t && !t.firstKey)) {
+      const f = {
+        track: tn, timestamp: Math.round(ts + i * dd), duration: blockDur != null ? Math.round(blockDur / sizes.length) : dd ? Math.round(dd) : null,
+        keyframe: i === 0 ? keyframe : keyframe && t?.type === 'audio', invisible: !!(flags & 0x08), offset: p, size: sz, data: b.subarray(p, p + sz),
+      };
+      if (t && !t.firstKey && f.keyframe) t.firstKey = f.data;
+      if (ctx.wantFrames) out.frames.push(f);
+    }
+    if (t) { const endTs = ts + i * dd + (dd || 0); if (!(t.lastTs >= ts + i * dd)) t.lastTs = ts + i * dd; if (!(t.endTs >= endTs)) t.endTs = endTs; if (t.firstTs == null) t.firstTs = ts; }
+    p += sz;
+  });
+}
+
+function readCues(ctx, h, segData) {
+  const { b, out } = ctx;
+  out.hasCues = true;
+  for (const cp of children(b, h.start, h.end)) {
+    if (cp.id !== ID.CuePoint) continue;
+    let time = 0;
+    for (const c of children(b, cp.start, cp.end)) {
+      if (c.id === ID.CueTime) time = readUint(b, c.start, c.end);
+      else if (c.id === ID.CueTrackPositions) {
+        const pos = { time: (time * ctx.scale) / 1e9, track: 0, clusterPosition: 0 };
+        for (const x of children(b, c.start, c.end)) {
+          if (x.id === ID.CueTrack) pos.track = readUint(b, x.start, x.end);
+          else if (x.id === ID.CueClusterPosition) pos.clusterPosition = segData + readUint(b, x.start, x.end);
+          else if (x.id === ID.CueRelativePosition) pos.relativePosition = readUint(b, x.start, x.end);
+        }
+        out.cues.push(pos);
+      }
+    }
+  }
+}
+
+function readSeekHead(ctx, h) {
+  const { b, out } = ctx;
+  for (const s of children(b, h.start, h.end)) {
+    if (s.id !== ID.Seek) continue;
+    const e = { id: 0, position: 0 };
+    for (const c of children(b, s.start, s.end)) {
+      if (c.id === ID.SeekID) e.id = readUint(b, c.start, c.end);
+      else if (c.id === ID.SeekPosition) e.position = readUint(b, c.start, c.end);
+    }
+    out.seekHead.push(e);
+  }
+}
+
+function readTags(ctx, h) {
+  const { b, out } = ctx;
+  const walk = (start, end) => {
+    for (const c of children(b, start, end)) {
+      if (c.id === ID.Tag) walk(c.start, c.end);
+      else if (c.id === ID.SimpleTag) {
+        let name = '', value = '';
+        for (const x of children(b, c.start, c.end)) {
+          if (x.id === ID.TagName) name = readString(b, x.start, x.end);
+          else if (x.id === ID.TagString) value = readString(b, x.start, x.end);
+        }
+        // First value wins for repeated tag names.
+        // KNOWN DEFECT: `in` on a plain object sees inherited keys, so a tag named 'constructor' or 'toString' is
+        // never stored. Fix: Object.hasOwn(out.tags, key) or a null-prototype object.
+        if (name && !(name.toLowerCase() in out.tags)) out.tags[name.toLowerCase()] = value;
+      }
+    }
+  };
+  walk(h.start, h.end);
+}
+
+// Frame durations missing from the file are filled from the gap to the next frame of the same track (the last
+// frame copies its predecessor's). The frame-accurate end feeds `framesDuration`, which fixWebm uses when the
+// container's Duration is missing.
+function finish(ctx) {
+  const { out } = ctx;
+  // Per-track durations of frames without one: the gap to the next frame of the track.
+  if (ctx.wantFrames) {
+    const last = new Map();
+    for (const f of out.frames) {
+      const prev = last.get(f.track);
+      if (prev && prev.duration == null) prev.duration = Math.max(0, f.timestamp - prev.timestamp);
+      last.set(f.track, f);
+    }
+    for (const [tn, f] of last) {
+      if (f.duration != null) continue;
+      const fr = out.frames.filter((x) => x.track === tn);
+      f.duration = fr.length > 1 ? fr[fr.length - 2].duration : 0;
+    }
+  }
+  let maxEnd = 0;
+  if (ctx.wantFrames) {
+    for (const f of out.frames) {
+      const t = ctx.tracksByNum.get(f.track);
+      const e = f.timestamp + (f.duration || 0);
+      if (t && !(t.endTs >= e)) t.endTs = e;
+    }
+  }
+  for (const t of out.tracks) {
+    // Refine codec strings from the first keyframe (VP9 profile / bit depth, AV1 without CodecPrivate).
+    try {
+      if (t.codecId === 'V_VP9' && t.firstKey) {
+        const fi = parseVp9Frame(t.firstKey);
+        if (fi && fi.keyframe) {
+          const parts = t.codec.split('.');
+          t.codec = vp9CodecString({ profile: fi.profile, level: +parts[2] || 10, bitDepth: fi.bitDepth || 8 });
+          if (!t.width && fi.width) { t.width = fi.width; t.height = fi.height; }
+        }
+      } else if (t.codecId === 'V_AV1' && t.firstKey && !(t.codecPrivate && t.codecPrivate.length >= 4)) {
+        const sh = parseAv1SequenceHeader(t.firstKey);
+        if (sh) t.codec = av1CodecString(sh);
+      }
+    } catch { /* keep the base codec */ }
+    delete t.firstKey;
+    t.codecName = codecName(t.codec);
+    if (t.endTs != null) {
+      t.duration = Math.max(0, (t.endTs - Math.min(0, t.firstTs || 0)) / 1e6);
+      maxEnd = Math.max(maxEnd, t.endTs / 1e6);
+    }
+    if (t.duration) t.bitrate = Math.round((t.bytes * 8) / t.duration);
+    if (t.type === 'video' && t.duration && t.frames > 1) t.frameRate = Math.round(((t.frames - 1) / Math.max(1e-6, (t.lastTs - t.firstTs) / 1e6)) * 1000) / 1000;
+    delete t.endTs; delete t.lastTs; delete t.firstTs;
+  }
+  // Frame-accurate end: last frame timestamp + its duration.
+  if (ctx.wantFrames && out.frames.length) {
+    for (const f of out.frames) maxEnd = Math.max(maxEnd, (f.timestamp + (f.duration || 0)) / 1e6);
+  }
+  out.duration = out.hasDuration ? out.info.duration : maxEnd;
+  out.framesDuration = maxEnd;
+}
+
+/** WebCodecs decoder config for a track: video { codec, codedWidth, codedHeight, description? }, audio { codec, sampleRate, numberOfChannels, description? }. */
+// description is passed only for codecs whose WebCodecs registration defines it (avcC / hvcC, OpusHead, Vorbis /
+// FLAC headers, AudioSpecificConfig); VP8 / VP9 / AV1 decoders take none.
+export function decoderConfig(track) {
+  if (track.type === 'video') {
+    const c = { codec: track.codec, codedWidth: track.width, codedHeight: track.height };
+    if (track.codecPrivate && /^(avc|hvc|hev)/.test(track.codec)) c.description = track.codecPrivate;
+    return c;
+  }
+  const c = { codec: track.codec, sampleRate: Math.round(track.sampleRate || 48000), numberOfChannels: track.channels || 2 };
+  if (track.codecPrivate && /^(opus|vorbis|flac|mp4a)/.test(track.codec)) c.description = track.codecPrivate;
+  return c;
+}

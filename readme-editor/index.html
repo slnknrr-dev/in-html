@@ -1,0 +1,48 @@
+<!doctype html>
+<!-- readme-editor/index.html — README Editor page. A shell, not a document: main.js builds the whole UI (toolbar,
+     source pane, rendered preview, side panel) into <main>. Why an empty shell: one render path for content, i18n
+     and state; static markup would duplicate it and drift. Cost accepted: nothing works without JS (see noscript).
+     The build (singlefile.js) strips every comment of this file from the artifacts. -->
+<html lang="en">
+<!-- lang="en" is only the static default; ui/i18n.js rewrites it on language switch (screen readers, hyphenation). -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: it must sit inside the first 1024 bytes, before any non-ASCII text, or the parser re-decodes. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- viewport-fit=cover: on notched phones the page extends under the safe areas. KNOWN DEFECT: no stylesheet
+     (ui/*.css, ./app.css) uses env(safe-area-inset-*), so in landscape content can sit under the notch.
+     Fix: drop viewport-fit=cover or pad .ap-main with env(safe-area-inset-left/right).
+     Without a viewport meta at all, mobile browsers lay out at ~980px and no max-width media query fires. -->
+<meta name="color-scheme" content="light dark">
+<!-- color-scheme: native controls, scrollbars and the pre-CSS canvas follow the OS theme, so a dark-mode user gets
+     no white flash before ui/base.css applies its tokens. -->
+<meta name="theme-color" content="#1f6feb">
+<!-- theme-color: mobile browser chrome tint; matches the icon's blue so the tab reads as one brand. -->
+<title>README Editor</title>
+<meta name="description" content="A visual README.md editor: the Markdown source and the README as GitHub or Codeberg show it, edited in place — text, tables, images, shields.io badges, formulas, Mermaid diagrams, alerts, footnotes — with a project folder, outline and hints. Works offline.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='5' width='26' height='22' rx='4' fill='%231f6feb'/%3E%3Cpath d='M8 21V11l4 5 4-5v10M22 11v10M19 18l3 3 3-3' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<!-- Icon as a data: URI (the Markdown "M" + down arrow): zero requests, works from file:// and offline builds.
+     URL-encoded rather than base64: shorter for SVG; '#' must be %23 or it would start a fragment. -->
+<!-- Cascade order is a contract (equal specificity: later file wins):
+       1. ui/base.css        tokens (the ed- custom properties), reset, shared primitives (.ed-*)
+       2. ui/app.css         app shell (.ap-*)
+       3. markdown/gfm.css   the GitHub-like rendering of Markdown, shared with other Markdown viewers
+       4. ./app.css          this app (.re-*): may override 1-3 (e.g. preview chrome around gfm.css) without !important
+     Moving gfm.css after app.css would silently undo the editor's overrides of rendered Markdown. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="../markdown/gfm.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- .ap on <body>: root hook for the shell styles in ui/app.css (scoped to a class, not bare body). -->
+<main class="ap-main ap-wide re-main" id="main"></main>
+<!-- The single mount point. ap-wide lifts the shell's max-width: a two-pane editor needs the full viewport.
+     id="main" is what main.js queries; re-main hooks this app's layout rules. -->
+<noscript><div class="ed-noscript">README Editor needs JavaScript. It runs in your browser; nothing is sent anywhere.</div></noscript>
+<!-- noscript states the dependency and the privacy model instead of leaving a blank page. -->
+<script type="module" src="./main.js"></script>
+<!-- type=module: deferred by default (runs after parsing, so #main exists), strict mode, and ES imports of the
+     shared ../ libraries. No defer/async attribute needed. -->
+</body>
+</html>

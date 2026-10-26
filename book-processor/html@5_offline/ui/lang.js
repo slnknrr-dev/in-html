@@ -1,0 +1,3 @@
+import{langName}from"../i18n/lang.js";import"../i18n/intl.js";import"../util/value.js";import"./i18n.js";const LANG_RE=/^[a-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$/;const SUGGESTED_LANGS=['en','ru','de','fr','es','uk','ka'];function canonLang(code){try{return Intl.getCanonicalLocales(String(code).trim().replace(/_/g,'-'))[0]||null;}catch{return null;}}
+function langLabel(code){try{return langName(code,'native')||code;}catch{return code;}}
+export{canonLang,langLabel,SUGGESTED_LANGS,LANG_RE};

@@ -1,0 +1,130 @@
+// access-designer/policies.js - the data policy page: entities with their own-fields, permissions with a value per
+// mode, the cascade organisation -> roles root to leaf -> member where each level may set a mode and overrides, the
+// resolved rules of one member with the level that decided each (resolvePolicy) and the trail of every level
+// (explainRule), and a preview of the sample records the member sees and edits.
+import { P, chip, entLabel, slugId, memberById, memberOptions, note, policyLevels, policyModel, roleLabel, ruleLabel, save, selectEl, startShell } from './common.js';
+import { projectCard } from './doc.js';
+import { button, card, field, t, textInput } from '../ui/app.js';
+import { $, h, lsGet, lsSet } from '../ui/dom.js';
+import { iconEl } from '../ui/icons.js';
+import { MODES, canEdit, canView, explainRule, policyAccess, resolvePolicy } from '../access/policy.js';
+import { roleChain } from '../access/roles.js';
+
+const UKEY = 'acd-ui-policies';
+const U = { member: '', rule: '', ...lsGet(UKEY, {}) };
+const keep = () => lsSet(UKEY, U);
+const main = $('#main');
+main.classList.add('acd-page', 'acd-policies');
+const changed = () => { save(); render(); };
+
+// Deleting an entity also removes its overrides at every level and its sample records: dangling "<entity>.*" keys
+// would otherwise be reported as unknown rules.
+function deleteEntity(e) {
+  delete P.policy.entities[e];
+  const drop = (o) => { for (const k of Object.keys(o.overrides || {})) if (k.startsWith(e + '.')) delete o.overrides[k]; };
+  drop(P.policy.org);
+  for (const b of [P.policy.roles, P.policy.members]) for (const v of Object.values(b)) drop(v);
+  P.policy.records = P.policy.records.filter((r) => r.entity !== e);
+  changed();
+}
+
+// Level settings are created lazily (||=) when a level is first edited or shown, so the stored project only has
+// entries for levels that matter.
+function levelCfg(scope, id) {
+  const pol = P.policy;
+  if (scope === 'org') return pol.org;
+  const bag = scope === 'role' ? pol.roles : pol.members;
+  return (bag[id] ||= { mode: null, overrides: {} });
+}
+
+// Each level: an optional mode (empty = inherit) and overrides of single rules; offered override values come from
+// the policy model (overrideValues), so impossible values cannot be chosen.
+function levelEditor(scope, id, label) {
+  const cfg = levelCfg(scope, id);
+  cfg.overrides ||= {};
+  const model = policyModel();
+  const keys = [...model.actions, ...Object.keys(model.permissions)];
+  const modeSel = selectEl([{ v: '', l: t('ad.inherit') }, ...MODES.map((m) => ({ v: m, l: t('ad.mode.' + m) }))], cfg.mode || '', (v) => { cfg.mode = v || null; changed(); }, { 'aria-label': `${label}: ${t('ad.mode')}` });
+  const ovs = h('div', { class: 'acd-ovs' });
+  for (const [k, v] of Object.entries(cfg.overrides)) {
+    ovs.append(h('div', { class: 'acd-ov' }, chip(ruleLabel(k), 'muted'),
+      selectEl((model.overrideValues(k) || []).map((x) => ({ v: x, l: t('ad.val.' + x) })), v, (x) => { cfg.overrides[k] = x; changed(); }, { 'aria-label': ruleLabel(k) }),
+      h('button', { type: 'button', class: 'ed-iconbtn', 'aria-label': t('ad.remove'), onclick: () => { delete cfg.overrides[k]; changed(); } }, iconEl('close'))));
+  }
+  const add = selectEl([{ v: '', l: t('ad.addOverride') }, ...keys.filter((k) => !(k in cfg.overrides)).map((k) => ({ v: k, l: ruleLabel(k) }))], '', (k) => { if (k) { cfg.overrides[k] = model.overrideValues(k)[0]; changed(); } }, { 'aria-label': t('ad.addOverride') });
+  return h('div', { class: 'acd-level', dataset: { scope, id: id || '' } }, h('div', { class: 'acd-level-h' }, h('b', {}, label), modeSel), ovs, add);
+}
+
+// resolvePolicy walks the levels in order; each rule records which level decided it (or the mode). explainRule gives
+// the per-level trail for one rule, including overrides that were present but ignored (e.g. a lower level cannot
+// widen beyond what the mode allows - the library decides, the page only displays).
+function render() {
+  main.textContent = '';
+  const model = policyModel();
+  const m = memberById(U.member) || P.members[0] || { id: '', name: '—', roleId: null };
+  const res = resolvePolicy(model, policyLevels(m.id ? { member: m } : {}));
+  const acc = policyAccess(model, res, { ref: m.id });
+  if (!res.rules[U.rule]) U.rule = Object.keys(res.rules)[0] || '';
+
+  // Model card: entities and permissions.
+  const ents = h('div', { class: 'acd-list' });
+  for (const [e, spec] of Object.entries(P.policy.entities)) {
+    const rm = h('button', { type: 'button', class: 'ed-iconbtn', title: t('ad.remove'), 'aria-label': t('ad.remove') + ': ' + entLabel(e), onclick: () => deleteEntity(e) }, iconEl('trash'));
+    ents.append(h('div', { class: 'acd-ent', dataset: { entity: e } },
+      h('div', { class: 'acd-list-r' }, textInput(spec.name, (v) => { spec.name = v; save(); }, { placeholder: entLabel(e), 'aria-label': t('ad.p.entityName') + ' ' + e, onchange: () => render() }), rm),
+      field('ad.p.ownFields', textInput((spec.own || []).join(', '), (v) => { spec.own = v.split(',').map((x) => x.trim()).filter(Boolean); save(); }, { onchange: () => render() }), 'ad.ownHint')));
+  }
+  const newEnt = textInput('', () => {}, { placeholder: t('ad.p.newEntity'), 'aria-label': t('ad.p.newEntity'), id: 'acd-new-entity' });
+  const addEnt = h('button', { type: 'button', class: 'ed-btn ed-sm', id: 'acd-add-entity', onclick: () => {
+    const name = newEnt.value.trim();
+    if (!name) return;
+    const id = slugId(name, [...Object.keys(P.policy.entities), ...Object.keys(P.policy.permissions).map((k) => k.split('.')[0])], 'e');
+    P.policy.entities[id] = { name, key: '', own: ['created_by'] };
+    U.rule = id + '.view'; keep(); changed();
+  } }, iconEl('plus'), t('ad.add'));
+  ents.append(h('div', { class: 'acd-addrow' }, newEnt, addEnt));
+  if (!Object.keys(P.policy.entities).length) ents.prepend(h('p', { class: 'ed-hint acd-mt0' }, t('ad.p.noEntities')));
+  const perms = h('table', { class: 'ap-table acd-small' }, h('thead', {}, h('tr', {}, h('th', {}, t('ad.permission')), MODES.map((x) => h('th', {}, t('ad.mode.' + x))))),
+    h('tbody', {}, Object.entries(P.policy.permissions).map(([k, by]) => h('tr', {}, h('td', {}, ruleLabel(k)), MODES.map((x) => h('td', {}, selectEl(['allow', 'deny'].map((v) => ({ v, l: t('ad.val.' + v) })), by[x], (v) => { by[x] = v; changed(); }, { 'aria-label': `${ruleLabel(k)} · ${t('ad.mode.' + x)}` })))))));
+  const modes = h('table', { class: 'ap-table acd-small' }, h('thead', {}, h('tr', {}, h('th', {}, t('ad.mode')), h('th', {}, t('ad.act.view')), h('th', {}, t('ad.act.edit')))),
+    h('tbody', {}, MODES.map((x) => h('tr', {}, h('td', {}, t('ad.mode.' + x)), h('td', {}, t('ad.val.' + (x === 'closed' ? 'own' : 'all'))), h('td', {}, t('ad.val.' + (x === 'open' ? 'all' : 'own')))))));
+  const side = h('div', { class: 'acd-col acd-side' }, card('ad.p.modes', modes, h('p', { class: 'ed-hint' }, t('ad.p.modesHint'))), card('ad.p.entities', ents), card('ad.p.perms', h('div', { class: 'ap-table-wrap' }, perms)), projectCard(render));
+
+  // Levels for the chosen member.
+  const levels = h('div', { class: 'acd-levels' }, levelEditor('org', null, t('ad.lvl.org')),
+    ...roleChain(P.roles, m.roleId).map((id) => levelEditor('role', id, roleLabel(id))), m.id ? levelEditor('member', m.id, m.name) : null);
+  const subject = field('ad.p.subject', selectEl(memberOptions(), m.id, (v) => { U.member = v; keep(); render(); }));
+
+  // Resolved rules.
+  const rows = Object.entries(res.rules).map(([k, r]) => h('tr', { class: k === U.rule ? 'acd-row-on' : '', dataset: { rule: k } },
+    h('td', {}, ruleLabel(k)), h('td', {}, chip(t('ad.val.' + r.value), r.value === 'all' || r.value === 'allow' ? 'ok' : r.value === 'deny' ? 'bad' : 'warn')),
+    h('td', {}, r.from === 'mode' ? t('ad.p.byMode', { mode: t('ad.mode.' + res.mode) }) : r.from.label),
+    h('td', {}, h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => { U.rule = k; keep(); render(); $('#acd-ptrail')?.focus(); } }, t('ad.why')))));
+  const resolved = h('div', { class: 'ap-table-wrap' }, h('table', { class: 'ap-table acd-small', id: 'acd-resolved' }, h('thead', {}, h('tr', {}, h('th', {}, t('ad.p.rule')), h('th', {}, t('ad.c.value')), h('th', {}, t('ad.p.decided')), h('th', {}, ''))), h('tbody', {}, rows)));
+  const modeLine = note('info', t('ad.p.modeIs', { mode: t('ad.mode.' + res.mode), from: res.modeFrom === 'default' ? t('ad.lvl.default') : res.modeFrom.label }));
+
+  // Trail of one rule.
+  const trail = h('ol', { class: 'acd-trail', id: 'acd-ptrail', tabindex: '-1' });
+  if (res.rules[U.rule]) for (const s of explainRule(res, U.rule)) {
+    trail.append(h('li', { class: 'acd-tr' + (s.decided ? ' acd-tr-dec' : '') }, h('span', { class: 'acd-tr-n' }, s.level === 'default' ? t('ad.lvl.default') : s.level),
+      s.mode ? chip(t('ad.mode.' + s.mode), 'acc') : null, s.override ? chip(`${t('ad.override')}: ${t('ad.val.' + s.override)}`, s.ignored ? 'warn' : 'ok') : null,
+      s.ignored ? h('span', { class: 'ed-hint' }, t('ad.p.ignored')) : null, s.decided ? chip(t('ad.p.decides'), 'ok') : null));
+  }
+
+  // Sample records evaluated with canView/canEdit for the chosen member: the policy's effect on concrete data.
+  // Records preview.
+  const recs = h('table', { class: 'ap-table acd-small' }, h('thead', {}, h('tr', {}, h('th', {}, t('ad.p.record')), h('th', {}, t('ad.p.author')), h('th', {}, t('ad.act.view')), h('th', {}, t('ad.act.edit')))),
+    h('tbody', {}, P.policy.records.filter((r) => P.policy.entities[r.entity]).map((r) => h('tr', {}, h('td', {}, `${entLabel(r.entity)} ${r.id}`),
+      h('td', {}, (P.policy.entities[r.entity].own || []).map((f) => r[f] && (memberById(r[f])?.name || r[f])).filter(Boolean).join(', ')),
+      h('td', {}, canView(acc, r.entity, r) ? '✓' : '—'), h('td', {}, canEdit(acc, r.entity, r) ? '✓' : '—')))));
+
+  const stage = h('div', { class: 'acd-col acd-stage' },
+    card('ad.p.cascade', subject, h('p', { class: 'ed-hint' }, t('ad.p.cascadeHint')), levels),
+    card('ad.p.resolved', modeLine, resolved),
+    card('ad.p.trail', h('p', { class: 'acd-mt0' }, h('b', {}, ruleLabel(U.rule))), trail),
+    card('ad.p.records', h('div', { class: 'ap-table-wrap' }, recs)));
+  main.append(h('p', { class: 'ap-lead' }, t('ad.lead.policies')), h('div', { class: 'acd-work' }, side, stage));
+}
+
+startShell('policies', () => render());
+render();

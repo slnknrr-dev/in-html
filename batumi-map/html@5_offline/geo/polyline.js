@@ -1,0 +1,3 @@
+function decodePolyline(str,precision=5){const s=String(str||'');const k=10**precision;const out=[];let i=0,lat=0,lng=0;const next=()=>{let shift=0,result=0,b;do{if(i>=s.length)return null;b=s.charCodeAt(i++)-63;if(b<0||b>63)return null;result|=(b&0x1f)<<shift;shift+=5;}while(b>=0x20&&shift<35);return result&1?~(result>>1):result>>1;};while(i<s.length){const a=next(),b=next();if(a===null||b===null)break;lat+=a;lng+=b;out.push([lat/k,lng/k]);}
+return out;}
+const decodeLines=(s,precision=5)=>String(s||'').split(' ').filter(Boolean).map((x)=>decodePolyline(x,precision));export{decodePolyline,decodeLines};

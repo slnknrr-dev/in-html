@@ -1,0 +1,306 @@
+/* book-processor/writer.css - the writer: the workspace bar, the side panel (book entries, chapter tree
+   with drag and drop, tools), the chapter editor (toolbar, the page with the book's own typography and labels of
+   epigraphs, poems, quotes, code, tables and images), the panes (details, cover, images, notes, check) and the
+   writer's dialogs (notes, styles, new book). Phones get the side panel as a drawer. */
+
+   /* CONTRACT
+      - Namespace `wr-`; state reuses the shared `ed-on` class (selected) so ui/ helpers that toggle it work here too.
+      - The editor page (.wr-page) uses the --bk-paper / --bk-ink tokens of app.css: it imitates the printed book in both
+        themes, while chrome around it uses the --ed-* panel tokens.
+      - Structure labels (epigraph, poem, code...) are ::before pseudo-elements whose text comes from --lbl-* variables
+        set by writer.js in the UI language: CSS cannot read i18n strings, and pseudo-content is never copied into the
+        exported FB2 / EPUB because it is not in the DOM.
+      - Workspace = column flex from body down to .wr-scroll, every level `min-height: 0`: a flex child defaults to
+        min-height: auto (its content height), which would make the whole page scroll instead of the editor pane. */
+
+/* Two declarations: browsers without dvh drop the second and keep 100vh (progressive enhancement by cascade). */
+body.bk-writing { height: 100vh; height: 100dvh; overflow: hidden; }
+body.bk-writing .ap-foot { display: none; }
+.wr-main { flex: 1 1 auto; min-height: 0; width: 100%; max-width: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.wr { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+
+/* Bar */
+.wr-bar { flex: none; display: flex; align-items: center; gap: 6px; padding: 7px 12px; border-bottom: 1px solid var(--ed-border); background: var(--ed-panel); min-width: 0; }
+.wr-titles { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; margin: 0 4px; }
+.wr-booktitle { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 42vw; font-family: Georgia, "Noto Serif", "Noto Serif Georgian", Sylfaen, serif; }
+.wr-status { font-size: 11.5px; color: var(--ed-muted); white-space: nowrap; }
+.wr-status[data-state="dirty"] { color: var(--ed-warn); }
+/* Save state as a data attribute: one element, three looks, no class juggling in JS. */
+.wr-status[data-state="saved"]::before { content: "● "; color: var(--ed-ok); font-size: 9px; vertical-align: 1px; }
+.wr-tbtn { flex: none; }
+.wr-ibtn .ed-ic, .wr-ibtn svg { width: 19px; height: 19px; }
+@media (max-width: 760px) {
+  .wr-bar { gap: 2px; padding: 6px 8px; }
+  .wr-tbtn-l { display: none; }
+  .wr-tbtn { width: 34px; padding: 0; border-color: transparent; background: transparent; }
+  .wr-wide-only { display: none; }
+  .wr-booktitle { max-width: 36vw; font-size: 13.5px; }
+}
+
+/* Workspace grid */
+.wr-grid { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 284px minmax(0, 1fr); }
+/* Collapsing the panel animates nothing but keeps the element (visibility: hidden), so its scroll and focus state
+   survive reopening; visibility also removes it from tab order. */
+.wr-side-closed .wr-grid { grid-template-columns: 0 minmax(0, 1fr); }
+.wr-side-closed .wr-side { visibility: hidden; padding: 0; border: 0; }
+.wr-side {
+  min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 16px; padding: 12px 8px 14px;
+  border-right: 1px solid var(--ed-border); background: var(--ed-panel-2); overscroll-behavior: contain;
+}
+.wr-side-g { display: flex; flex-direction: column; gap: 1px; }
+.wr-side-h { display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 0 6px 2px 10px; font-size: 10.5px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; color: var(--ed-faint); }
+.wr-navi { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--ed-text); text-align: left; }
+.wr-navi .ed-ic, .wr-navi svg { width: 17px; height: 17px; color: var(--ed-muted); }
+.wr-navi:hover { background: var(--ed-hover); }
+.wr-navi.ed-on { background: var(--ed-accent-weak); color: var(--ed-accent); font-weight: 600; }
+.wr-navi.ed-on .ed-ic, .wr-navi.ed-on svg { color: inherit; }
+.wr-navi-l { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wr-badge-err { background: var(--ed-danger-weak); color: var(--ed-danger); }
+.wr-side-stats { margin: auto 10px 0; font-size: 11.5px; color: var(--ed-muted); }
+
+/* Chapter tree */
+.wr-tree { display: flex; flex-direction: column; gap: 1px; }
+.wr-node {
+  position: relative; display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 2px 0 calc(10px + var(--d, 0) * 15px);
+  border-radius: 8px; cursor: pointer; outline: none; -webkit-user-select: none; user-select: none;
+}
+/* Tree guide line per depth: position computed from --d (depth, inline), same factor (15px) as the indentation.
+   aria-level is the treeitem's ARIA level, reused as the styling hook so semantics and looks cannot drift. */
+.wr-node:not([aria-level="1"])::before { content: ""; position: absolute; left: calc(3px + var(--d, 0) * 15px); top: 7px; bottom: 7px; width: 1px; background: var(--ed-border-strong); }
+.wr-node:hover { background: var(--ed-hover); }
+.wr-node:focus-visible { box-shadow: var(--ed-focus); }
+.wr-node.ed-on { background: var(--ed-accent-weak); color: var(--ed-accent); }
+.wr-node.ed-on .wr-node-t { font-weight: 620; }
+.wr-node-t { flex: 1 1 auto; min-width: 0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wr-node[aria-level="1"] .wr-node-t { font-weight: 560; }
+.wr-untitled .wr-node-t { font-style: italic; color: var(--ed-muted); }
+.wr-node-n { flex: none; font-size: 10.5px; color: var(--ed-faint); font-variant-numeric: tabular-nums; }
+.wr-node-more { opacity: 0; width: 26px; height: 26px; }
+.wr-node:hover .wr-node-more, .wr-node.ed-on .wr-node-more, .wr-node:focus .wr-node-more { opacity: 1; }
+@media (hover: none) { .wr-node-more { opacity: .7; } .wr-node { min-height: 42px; } }
+/* Drag and drop feedback by inset box-shadow lines (before / after) or a box (inside): no layout change while
+   dragging, so the hit-testing positions stay stable. */
+.wr-node.wr-drop-before { box-shadow: inset 0 2px 0 var(--ed-accent); border-radius: 0; }
+.wr-node.wr-drop-after { box-shadow: inset 0 -2px 0 var(--ed-accent); border-radius: 0; }
+.wr-node.wr-drop-inside { background: var(--ed-accent-weak); box-shadow: inset 0 0 0 1px var(--ed-accent); }
+.wr-node.wr-dragging { opacity: .4; }
+.wr-tree-empty { margin: 4px 10px; }
+.wr-add { display: flex; align-items: center; gap: 8px; min-height: 32px; margin: 6px 4px 0; padding: 0 10px; border: 1px dashed var(--ed-border-strong); border-radius: 8px; background: transparent; color: var(--ed-muted); }
+.wr-add:hover { color: var(--ed-accent); border-color: var(--ed-accent); }
+.wr-add .ed-ic, .wr-add svg { width: 16px; height: 16px; }
+
+/* Body: the editor or a pane */
+.wr-body { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--ed-stage); }
+.wr-toolbar {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 5px 10px; border-bottom: 1px solid var(--ed-border);
+  background: var(--ed-panel);
+}
+.wr-tb-grp { display: flex; align-items: center; gap: 1px; padding-right: 6px; margin-right: 2px; border-right: 1px solid var(--ed-border); }
+.wr-tb-grp:last-child { border-right: 0; }
+.wr-tb { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: var(--ed-muted); }
+.wr-tb svg { width: 18px; height: 18px; }
+.wr-tb:hover:not(:disabled) { background: var(--ed-hover); color: var(--ed-text); }
+.wr-tb.wr-on { background: var(--ed-accent-weak); color: var(--ed-accent); }
+.wr-type, .wr-style { width: auto; height: 32px; max-width: 160px; margin-right: 4px; }
+@media (max-width: 760px) {
+  /* Phones: one scrollable row of tools instead of several wrapped rows eating the screen. body.ap raises the
+     selector to (0,2,1); the -webkit-scrollbar rule hides the bar where scrollbar-width is unsupported (Safari). */
+  body.ap .wr-toolbar { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding: 4px 6px; }
+  .wr-toolbar::-webkit-scrollbar { display: none; }
+  .wr-tb-grp { flex: none; }
+  .wr-tb { width: 38px; height: 38px; }
+}
+.wr-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 30px 18px 90px; overscroll-behavior: contain; }
+
+/* The page */
+/* The page imitates print: fixed measure (780px), justified text with automatic hyphenation (needs the right lang
+   on the document, otherwise hyphens: auto does nothing). */
+.wr-page {
+  position: relative; max-width: 780px; min-height: 64vh; margin: 0 auto; padding: 60px 72px 80px;
+  background: var(--bk-paper); color: var(--bk-ink); border-radius: 3px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .08), 0 18px 40px -20px rgba(50, 30, 10, .35);
+  font: 17.5px/1.62 Georgia, "Palatino Linotype", "Book Antiqua", "Noto Serif", "Noto Serif Georgian", Sylfaen, serif;
+  text-align: justify; hyphens: auto; -webkit-hyphens: auto;
+}
+.wr-title { outline: none; margin: 0 0 1.2em; font-size: 1.65em; line-height: 1.25; text-align: center; hyphens: manual; }
+/* Placeholder for contenteditable: :empty + attr(data-ph). Pseudo-content is not editable and not exported. */
+.wr-title:empty::before { content: attr(data-ph); color: var(--bk-ink-soft); opacity: .7; }
+.wr-doc { outline: none; min-height: 44vh; caret-color: var(--ed-accent); }
+/* An "empty" contenteditable is never :empty: browsers keep <p><br></p> as the caret holder. :has() detects exactly
+   that state. position: absolute so the placeholder takes no space and the caret stays at the line start. */
+.wr-doc > p:only-child:has(> br:only-child)::before { content: var(--ph); position: absolute; color: var(--bk-ink-soft); opacity: .7; pointer-events: none; text-indent: 1.5em; }
+.wr-page ::selection { background: color-mix(in srgb, var(--ed-accent) 28%, transparent); }
+.wr-front-note { margin: -28px 0 26px; padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--ed-accent) 9%, transparent); font: 13px/1.45 var(--ed-font); color: var(--bk-ink-soft); text-align: left; }
+.wr-crumbs { display: flex; flex-wrap: wrap; gap: 2px; margin: -34px 0 22px; font: 12px/1.4 var(--ed-font); }
+.wr-crumb { padding: 2px 4px; border: 0; border-radius: 4px; background: none; color: var(--bk-ink-soft); }
+.wr-crumb:hover { color: var(--ed-accent); background: color-mix(in srgb, var(--ed-accent) 9%, transparent); }
+.wr-crumb::after { content: " ›"; opacity: .6; }
+/* Structure labels: what each block becomes in FB2 / EPUB. */
+.wr-doc :is(blockquote, .poem, pre.code, table, figure.image) { position: relative; }
+/* outline (not border): shows block bounds on hover without changing the box size, so text does not shift. */
+.wr-doc :is(blockquote, .poem, pre.code, figure.image) { outline: 1px dashed transparent; outline-offset: 7px; border-radius: 2px; transition: outline-color .15s; }
+.wr-doc :is(blockquote, .poem, pre.code, figure.image):hover, .wr-doc :is(blockquote, .poem, pre.code):focus-within { outline-color: color-mix(in srgb, var(--bk-ink-soft) 55%, transparent); }
+.wr-doc :is(blockquote.epigraph, blockquote.cite, .poem, pre.code, figure.image)::before {
+  position: absolute; top: -1.35em; left: 0; font: 650 9.5px/1 var(--ed-font); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--bk-ink-soft); opacity: 0; transition: opacity .15s; pointer-events: none; font-style: normal; text-indent: 0;
+}
+.wr-doc :is(blockquote.epigraph, blockquote.cite, .poem, pre.code, figure.image):is(:hover, :focus-within)::before { opacity: .85; }
+.wr-doc blockquote.epigraph::before { content: var(--lbl-epigraph); }
+.wr-doc blockquote.cite::before { content: var(--lbl-cite); }
+.wr-doc .poem::before { content: var(--lbl-poem); }
+.wr-doc pre.code::before { content: var(--lbl-code); }
+.wr-doc figure.image::before { content: var(--lbl-image); }
+.wr-doc .stanza { border-left: 2px solid color-mix(in srgb, var(--ed-accent) 25%, transparent); padding-left: .6em; margin-left: -.8em; }
+/* Same two "empty" states as above (truly empty, or only the caret <br>), covered for verse lines. */
+.wr-doc .verse:empty::before, .wr-doc .verse:has(> br:only-child)::before { content: "…"; color: var(--bk-ink-soft); opacity: .5; position: absolute; }
+.wr-doc pre.code { background: color-mix(in srgb, var(--bk-ink) 5%, transparent); padding: .5em .7em; border-radius: 5px; }
+.wr-doc td, .wr-doc th { min-width: 3em; }
+.wr-doc a:not(.noteref) { color: var(--ed-accent); text-decoration: underline; text-underline-offset: .15em; }
+.wr-doc a.noteref { color: var(--ed-accent); background: color-mix(in srgb, var(--ed-accent) 13%, transparent); border-radius: 3px; cursor: pointer; padding: 0 .3em; font-weight: 700; }
+.wr-doc figure.image img { cursor: default; }
+.wr-doc figcaption { outline: none; min-height: 1.2em; }
+.wr-doc figcaption:empty::before { content: "…"; opacity: .4; }
+.wr-doc hr.scene-break { cursor: default; }
+@media (max-width: 760px) {
+  .wr-scroll { padding: 0 0 70px; }
+  .wr-page { padding: 30px 18px 60px; border-radius: 0; box-shadow: none; font-size: 16.5px; min-height: 100%; text-align: left; }
+  .wr-front-note { margin: -10px 0 20px; }
+  .wr-crumbs { margin: -14px 0 16px; }
+  .wr-doc :is(blockquote.epigraph, blockquote.cite, .poem, pre.code, figure.image)::before { display: none; }
+}
+
+/* Panes */
+.wr-pane-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 26px 20px 70px; overscroll-behavior: contain; }
+.wr-pane { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+.wr-pane-head h2 { font-size: 21px; font-weight: 720; letter-spacing: -.01em; font-family: Georgia, "Noto Serif", "Noto Serif Georgian", Sylfaen, serif; }
+.wr-pane-head .ap-lead { margin: 6px 0 0; }
+.wr-card { display: flex; flex-direction: column; gap: 12px; }
+.wr-card > .ap-card-h { margin: 0; }
+.wr-card .ed-field + .ed-field { margin-top: 0; }
+.wr-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+@media (max-width: 640px) { .wr-two { grid-template-columns: minmax(0, 1fr); } .wr-pane-scroll { padding: 18px 12px 60px; } }
+.wr-persons { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.wr-person { display: flex; gap: 4px; width: 100%; align-items: center; }
+.wr-person .ed-input { flex: 1 1 auto; }
+.wr-series { display: flex; gap: 6px; align-items: center; }
+.wr-series .ed-input:first-child { flex: 1 1 auto; }
+.wr-series .ed-num { width: 72px; flex: none; }
+.wr-ann { min-height: 120px; resize: vertical; }
+.wr-genres { display: flex; flex-direction: column; gap: 8px; }
+.wr-genres .ed-tag { display: inline-flex; align-items: center; gap: 2px; padding: 3px 3px 3px 10px; font-size: 12.5px; }
+.wr-tag-x { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--ed-muted); }
+.wr-tag-x:hover { background: var(--ed-danger-weak); color: var(--ed-danger); }
+.wr-tag-x svg { width: 12px; height: 12px; }
+.wr-ids { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.wr-id { display: flex; gap: 8px; align-items: center; min-width: 0; max-width: 100%; }
+.wr-id code { font: 12px var(--ed-mono); overflow-wrap: anywhere; }
+
+/* Cover */
+.wr-cover-grid { display: grid; grid-template-columns: minmax(0, 290px) minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 820px) { .wr-cover-grid { grid-template-columns: minmax(0, 1fr); } }
+.wr-cover-box { display: flex; justify-content: center; padding: 14px; background: var(--ed-stage); border-radius: 12px; }
+.wr-cover-img, .wr-cover-gen { width: 100%; max-width: 230px; aspect-ratio: 2 / 3; object-fit: contain; border-radius: 3px 7px 7px 3px; box-shadow: 0 14px 28px -12px rgba(0, 0, 0, .5); }
+.wr-gen { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 1180px) { .wr-gen { grid-template-columns: minmax(0, 1fr); } }
+.wr-gen-ctl { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.wr-designs { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 8px; }
+.wr-design { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 6px; border: 2px solid transparent; border-radius: 10px; background: var(--ed-panel-2); font-size: 11px; color: var(--ed-muted); }
+.wr-design img { width: 100%; aspect-ratio: 2 / 3; border-radius: 2px 4px 4px 2px; box-shadow: 0 3px 8px -2px rgba(0, 0, 0, .3); }
+.wr-design:hover { border-color: var(--ed-border-strong); }
+.wr-design.ed-on { border-color: var(--ed-accent); color: var(--ed-accent); font-weight: 600; }
+.wr-palettes { display: flex; flex-wrap: wrap; gap: 9px; }
+/* Two-colour swatch with a hard stop (56% / 56%): a diagonal split shows both palette colours in one circle. */
+.wr-pal { width: 34px; height: 34px; padding: 0; border-radius: 50%; border: 3px solid var(--ed-panel); box-shadow: 0 0 0 1px var(--ed-border-strong); background: linear-gradient(135deg, var(--a) 56%, var(--b) 56%); }
+.wr-pal.ed-on { box-shadow: 0 0 0 2px var(--ed-accent); }
+
+/* Images */
+.wr-imgs { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.wr-imgcard { margin: 0; display: flex; flex-direction: column; background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: 12px; overflow: hidden; }
+.wr-imgbox { aspect-ratio: 4 / 3; display: grid; place-items: center; background: var(--ed-stage); }
+.wr-imgbox img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.wr-imgcard figcaption { display: flex; flex-direction: column; gap: 5px; padding: 10px; font-size: 12px; min-width: 0; }
+.wr-imgcard strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wr-imgtags { display: flex; gap: 4px; flex-wrap: wrap; }
+.wr-imgtags:empty { display: none; }
+.wr-focus { outline: 2px solid var(--ed-accent); outline-offset: 2px; }
+
+/* Notes */
+.wr-notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.wr-note { display: flex; gap: 12px; align-items: flex-start; padding: 12px; background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: 12px; }
+.wr-note-n { flex: none; min-width: 30px; height: 30px; padding: 0 7px; display: grid; place-items: center; border-radius: 9px; background: var(--ed-accent-weak); color: var(--ed-accent); font-weight: 750; font-size: 12.5px; }
+.wr-note-b { flex: 1 1 auto; min-width: 0; }
+.wr-note-b > p:first-child { margin: 0; font-family: Georgia, "Noto Serif", "Noto Serif Georgian", Sylfaen, serif; font-size: 14.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.wr-note-b .ed-hint { margin: 6px 0 0; }
+.wr-note-acts { display: flex; gap: 2px; flex: none; }
+.wr-link { padding: 0; border: 0; background: none; color: var(--ed-accent); text-decoration: underline; text-underline-offset: .15em; font: inherit; }
+.wr-warn { color: var(--ed-warn); }
+
+/* Check */
+.wr-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px; }
+.wr-stat { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 10px; background: var(--ed-panel-2); }
+.wr-stat b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.wr-stat span { font-size: 12px; color: var(--ed-muted); }
+.wr-issues { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.wr-issue { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: var(--ed-panel-2); }
+.wr-issue-t { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.wr-level { font-size: 10px; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-muted); }
+.wr-lv-error > .ed-ic, .wr-lv-error > svg { color: var(--ed-danger); }
+.wr-lv-warn > .ed-ic, .wr-lv-warn > svg { color: var(--ed-warn); }
+.wr-lv-info > .ed-ic, .wr-lv-info > svg { color: var(--ed-muted); }
+.wr-lv-ok > .ed-ic, .wr-lv-ok > svg { color: var(--ed-ok); }
+.wr-lv-error .wr-level { color: var(--ed-danger); }
+.wr-files { display: flex; flex-direction: column; gap: 8px; }
+.wr-file { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 4px 10px; padding: 10px 12px; border-radius: 10px; background: var(--ed-panel-2); }
+.wr-file-msgs { grid-column: 1 / -1; margin: 4px 0 0; padding-left: 22px; font-size: 12px; }
+.wr-file-msgs .wr-lv-error { color: var(--ed-danger); }
+
+/* Dialogs */
+.wr-dlg .ed-select { width: 100%; }
+.wr-note-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: end; }
+@media (max-width: 520px) { .wr-note-row { grid-template-columns: minmax(0, 1fr); } }
+.wr-note-ed {
+  min-height: 150px; max-height: 50vh; overflow: auto; padding: 10px 12px; border: 1px solid var(--ed-border-strong); border-radius: var(--ed-radius-sm);
+  background: var(--bk-paper); color: var(--bk-ink); font: 15.5px/1.55 Georgia, "Noto Serif", "Noto Serif Georgian", Sylfaen, serif; outline: none;
+}
+.wr-note-ed:focus { border-color: var(--ed-accent); box-shadow: var(--ed-focus); }
+.wr-note-ed.bk-text p { margin: 0 0 .45em; text-indent: 0; }
+.wr-st { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 18px; min-height: 380px; }
+/* !important here only because .wr-st-side is declared after this media block at equal specificity and would win
+   by order. Moving the media query below .wr-st-side would remove the need. */
+@media (max-width: 680px) { .wr-st { grid-template-columns: minmax(0, 1fr); } .wr-st-side { border-right: 0 !important; padding-right: 0 !important; } }
+.wr-st-side { display: flex; flex-direction: column; gap: 12px; border-right: 1px solid var(--ed-border); padding-right: 14px; }
+.wr-st-list { display: flex; flex-direction: column; gap: 2px; }
+.wr-st-h { margin: 6px 6px 2px; font-size: 10.5px; font-weight: 750; letter-spacing: .07em; text-transform: uppercase; color: var(--ed-faint); }
+.wr-st-list .ed-hint { margin: 2px 6px 6px; }
+.wr-st-item { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; text-align: left; }
+.wr-st-item:hover { background: var(--ed-hover); }
+.wr-st-item.ed-on { background: var(--ed-accent-weak); color: var(--ed-accent); font-weight: 600; }
+.wr-st-swatch { flex: none; display: grid; place-items: center; width: 36px; height: 28px; overflow: hidden; border: 1px solid var(--ed-border); border-radius: 6px; background: var(--bk-paper); color: var(--bk-ink); font: 13px Georgia, serif; }
+/* The swatch previews a named style whose generated CSS (book/css.js stylesCSS) may set margins / indents with a
+   scope prefix; !important keeps the preview fitting the 36x28 box whatever the style says. */
+.wr-st-swatch p { margin: 0 !important; padding: 0 !important; text-indent: 0 !important; }
+.wr-st-add { display: flex; flex-direction: column; gap: 6px; }
+.wr-st-add .ed-btn { justify-content: flex-start; }
+.wr-st-flags .ed-chip { cursor: pointer; }
+.wr-st-sample { padding: 14px 16px; border-radius: 10px; border: 1px solid var(--ed-border); background: var(--bk-paper); color: var(--bk-ink); font: 15px/1.55 Georgia, "Noto Serif", "Noto Serif Georgian", Sylfaen, serif; }
+.wr-st-sample p { margin: 0 0 .3em; }
+.wr-tpls { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.wr-tpl { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 10px 12px; border: 1.5px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel); text-align: left; }
+.wr-tpl:hover { border-color: var(--ed-border-strong); }
+.wr-tpl small { color: var(--ed-muted); font-size: 12px; line-height: 1.35; }
+.wr-tpl.ed-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.wr-tpl.ed-on strong { color: var(--ed-accent); }
+
+/* Phones and narrow windows: the side panel is a drawer */
+/* Drawer: the panel slides with transform; visibility is delayed by the transition length on close
+   (visibility 0s .22s) so the slide-out is visible, and immediate on open. Hidden panel = out of tab order. */
+.wr-scrim { display: none; }
+@media (max-width: 899px) {
+  .wr-grid, .wr-side-closed .wr-grid { grid-template-columns: minmax(0, 1fr); }
+  .wr-side, .wr-side-closed .wr-side {
+    position: fixed; z-index: 120; left: 0; top: 0; bottom: 0; width: min(86vw, 330px); padding: max(14px, env(safe-area-inset-top)) 8px 14px;
+    border-right: 1px solid var(--ed-border); visibility: hidden; transform: translateX(-104%); transition: transform .22s ease, visibility 0s .22s; box-shadow: var(--ed-shadow-lg);
+  }
+  .wr-side-open .wr-side { visibility: visible; transform: none; transition: transform .22s ease; }
+  .wr-side-open .wr-scrim { display: block; position: fixed; inset: 0; z-index: 110; background: rgba(12, 10, 8, .42); animation: ed-in .15s ease-out; }
+}

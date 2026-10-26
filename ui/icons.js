@@ -1,0 +1,171 @@
+// ui/icons.js - UI icons (24×24 stroke paths, currentColor) of the editors and tools.
+//
+// Contract: every icon is ONE path d string on a 24×24 viewBox, drawn as a stroke (fill none, round caps/joins,
+// width 1.8). Why strings in JS instead of an SVG sprite or files: zero requests (offline single-file builds inline
+// everything), no <use href> cross-document issues on file://, and icons inherit currentColor, so they follow
+// button/menu text colours and the theme without per-icon CSS. Single path keeps the table compact; multi-shape
+// glyphs use several subpaths (M…M…). Dot glyphs (grip, more) are zero-length segments ("h.01") that render as
+// round dots only with a thicker stroke (see icon()).
+import { h } from './dom.js';
+
+// name → path data. Large table: entries are not commented individually. Unknown names fall back to file.
+const ICON_PATHS = {
+  logo: 'M7 3h7l5 5v13H7zM14 3v5h5M10 12h6M10 15.5h6M10 19h3',
+  plus: 'M12 5v14M5 12h14',
+  minus: 'M5 12h14',
+  close: 'M18 6 6 18M6 6l12 12',
+  check: 'M20 6 9 17l-5-5',
+  undo: 'M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11',
+  redo: 'M15 14l5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13',
+  save: 'M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8',
+  folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
+  file: 'M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6',
+  filePlus: 'M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M12 12v6M9 15h6',
+  download: 'M12 3v12M7 10l5 5 5-5M5 21h14',
+  upload: 'M12 21V9M7 14l5-5 5 5M5 3h14',
+  export: 'M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7M16 6l-4-4-4 4M12 2v13',
+  eye: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
+  eyeOff: 'M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.2M6.6 6.6C3.9 8.3 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6',
+  trash: 'M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6',
+  copy: 'M9 9h11v11H9zM5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1',
+  paste: 'M9 3h6v4H9zM9 5H6a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1h-3',
+  up: 'M12 19V5M5 12l7-7 7 7',
+  down: 'M12 5v14M19 12l-7 7-7-7',
+  chevDown: 'M6 9l6 6 6-6',
+  chevRight: 'M9 6l6 6-6 6',
+  chevLeft: 'M15 6l-6 6 6 6',
+  grip: 'M9 5h.01M9 12h.01M9 19h.01M15 5h.01M15 12h.01M15 19h.01',
+  more: 'M5 12h.01M12 12h.01M19 12h.01',
+  sliders: 'M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6',
+  globe: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20',
+  image: 'M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21',
+  clip: 'M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5',
+  print: 'M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z',
+  zoomIn: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3M11 8v6M8 11h6',
+  zoomOut: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3M8 11h6',
+  fitWidth: 'M3 4v16M21 4v16M7 12h10M10 9l-3 3 3 3M14 9l3 3-3 3',
+  layout: 'M3 3h18v18H3zM3 9h18M9 21V9',
+  type: 'M4 7V4h16v3M9 20h6M12 4v16',
+  heading: 'M6 4v16M18 4v16M6 12h12',
+  list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+  table: 'M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18',
+  columns: 'M3 3h18v18H3zM12 3v18',
+  section: 'M3 4h18v16H3zM3 9h18M7 13h10M7 16h6',
+  quote: 'M7 7h4v4c0 3-2 5-4 6M14 7h4v4c0 3-2 5-4 6',
+  divider: 'M3 12h18M8 6h8M8 18h8',
+  spacer: 'M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4',
+  pagebreak: 'M4 4v5h16V4M4 20v-5h16v5M2 12h3M9 12h6M19 12h3',
+  user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
+  mail: 'M3 5h18v14H3zM3 6l9 7 9-7',
+  timeline: 'M6 3v18M10 6h10M10 12h8M10 18h10M4 6h4M4 12h4M4 18h4',
+  skills: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
+  languages: 'M4 5h8M8 3v2M6 5c0 4 3 7 6 8M10 5c-1 4-4 7-7 8M13 21l4-10 4 10M14.5 18h5',
+  keyvalue: 'M4 6h6M14 6h6M4 12h6M14 12h6M4 18h6M14 18h6',
+  qr: 'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM18 18h3v3h-3zM18 14h3M14 18v3',
+  link: 'M10 13a5 5 0 0 0 7.1 0l3-3a5 5 0 0 0-7.1-7.1l-1.7 1.7M14 11a5 5 0 0 0-7.1 0l-3 3a5 5 0 0 0 7.1 7.1l1.7-1.7',
+  star: 'M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z',
+  palette: 'M12 22a10 10 0 1 1 10-10c0 2.8-2.2 4-4 4h-2a2 2 0 0 0-1.5 3.3c.4.5.5 1 .5 1.5 0 .7-.6 1.2-3 1.2zM7.5 11h.01M10 7h.01M15 7h.01M17.5 11h.01',
+  template: 'M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z',
+  stack: 'M12 2 2 7l10 5 10-5zM2 17l10 5 10-5M2 12l10 5 10-5',
+  panelLeft: 'M3 3h18v18H3zM9 3v18',
+  panelRight: 'M3 3h18v18H3zM15 3v18',
+  info: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 16v-4M12 8h.01',
+  warn: 'M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01',
+  edit: 'M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z',
+  search: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3',
+  replace: 'M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5',
+  monitor: 'M2 4h20v13H2zM8 21h8M12 17v4',
+  phone: 'M7 2h10v20H7zM11 18h2',
+  paper: 'M6 2h12v20H6zM9 7h6M9 11h6M9 15h4',
+  font: 'M4 20 10 4h1l6 16M6.5 14h8',
+  guides: 'M3 3h18v18H3zM3 12h18',
+  moon: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z',
+  external: 'M14 3h7v7M10 14 21 3M19 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5',
+  settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
+  parent: 'M18 15l-6-6-6 6M12 9v12M4 3h16',
+  // landing blocks, devices, settings
+  menu: 'M4 6h16M4 12h16M4 18h16',
+  hero: 'M3 4h18v12H3zM7 20h10M8 8.5h8M9.5 11.5h5',
+  footer: 'M3 3h18v18H3zM3 15h18M6.5 18h4M14 18h3.5',
+  button: 'M3 8h18v8H3zM8 12h8',
+  grid: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z',
+  chart: 'M3 20h18M6 16v-5M11 16V6M16 16v-8M20 16v-3',
+  steps: 'M3 20h5v-5h5v-5h5V5h3',
+  users: 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21a7 7 0 0 1 14 0M16 3.1a4 4 0 0 1 0 7.8M22 21a7 7 0 0 0-4.5-6.5',
+  chat: 'M21 12a8 8 0 0 1-11.6 7.1L4 21l1.9-5.4A8 8 0 1 1 21 12zM8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01',
+  award: 'M12 15a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM8.5 14 7 22l5-3 5 3-1.5-8',
+  help: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01',
+  megaphone: 'M3 11v2a1 1 0 0 0 1 1h3l5 4V6L7 10H4a1 1 0 0 0-1 1zM16 8.5a5 5 0 0 1 0 7M19 5.5a9 9 0 0 1 0 13',
+  send: 'M22 2 11 13M22 2l-7 20-4-9-9-4z',
+  bag: 'M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4zM3 6h18M16 10a4 4 0 0 1-8 0',
+  tag: 'M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8zM7 7h.01',
+  calendar: 'M3 5h18v16H3zM16 3v4M8 3v4M3 10h18',
+  cart: 'M2 3h3l2.7 12.4a2 2 0 0 0 2 1.6h8.6a2 2 0 0 0 2-1.6L22 7H6M9.5 21h.01M18 21h.01',
+  gallery: 'M7 3h14v14H7zM3 7v14h14M11 8.5h.01M21 13l-4-4-7 8',
+  embed: 'M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M10 13l-2 2 2 2M14 13l2 2-2 2',
+  music: 'M9 18V5l12-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM21 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
+  play: 'M6 4l14 8-14 8z',
+  pause: 'M7 4h3v16H7zM14 4h3v16h-3z',
+  stop: 'M6 6h12v12H6z',
+  laptop: 'M4 5h16v11H4zM2 19h20',
+  tablet: 'M5 2h14v20H5zM11 18h2',
+  pin: 'M12 22s7-7.4 7-12.5a7 7 0 0 0-14 0C5 14.6 12 22 12 22zM12 12a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z',
+  plug: 'M8 3v5M16 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4',
+  zap: 'M13 2 3 14h9l-1 8 10-12h-9z',
+  shield: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z',
+  store: 'M3 9l1.5-5h15L21 9M3 9v11h18V9M3 9a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0M9 20v-6h6v6',
+  anchor: 'M12 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM12 8v14M5 12H2a10 10 0 0 0 20 0h-3',
+  key: 'M15.5 7.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0zM12 11v10M12 15h3M12 18h2',
+  seo: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.3-4.3M8 11l2 2 4-4',
+  // tools
+  sun: 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4',
+  lock: 'M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4',
+  unlock: 'M5 11h14v10H5zM8 11V7a4 4 0 0 1 7.5-2',
+  hash: 'M4 9h16M4 15h16M10 3 8 21M16 3l-2 18',
+  refresh: 'M21 12a9 9 0 1 1-2.6-6.4M21 3v6h-6',
+  crop: 'M6 2v14a2 2 0 0 0 2 2h14M18 22V8a2 2 0 0 0-2-2H2',
+  rotate: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5',
+  flip: 'M12 3v18M16 7l4 5-4 5zM8 7 4 12l4 5z',
+  scissors: 'M6 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12',
+  film: 'M3 3h18v18H3zM7 3v18M17 3v18M3 7.5h4M3 12h18M3 16.5h4M17 7.5h4M17 16.5h4',
+  wave: 'M2 12h2l2-6 3 12 3-15 3 18 3-12 2 3h2',
+  sheet: 'M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18',
+  doc: 'M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h6',
+  filter: 'M3 4h18l-7 8.5V19l-4 2v-8.5z',
+  sort: 'M7 4v16M3 8l4-4 4 4M17 20V4M13 16l4 4 4-4',
+  sigma: 'M18 4H6l6 8-6 8h12',
+  terminal: 'M3 4h18v16H3zM7 9l3 3-3 3M12 15h5',
+  drop: 'M12 2.7s7 7.3 7 12.3a7 7 0 0 1-14 0c0-5 7-12.3 7-12.3z',
+  sparkle: 'M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z',
+  scan: 'M3 7V3h4M17 3h4v4M21 17v4h-4M7 21H3v-4M7 12h10',
+  camera: 'M3 7h4l2-3h6l2 3h4v13H3zM12 17a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
+  layers: 'M12 2 2 7l10 5 10-5zM2 12l10 5 10-5',
+};
+
+// Editor icon markup (stroke icons, inherit currentColor).
+// Returns an HTML STRING (for h(..., { html })) — cheap to embed in templates. aria-hidden + focusable=false: icons
+// are decorative, the accessible name comes from the button label / aria-label (focusable=false stops old Edge/IE
+// from putting SVGs in the tab order). width/height attributes give a sane size before CSS loads; .ed-ico (base.css)
+// governs afterwards. Unknown name → file glyph rather than an empty box, so a typo is visible but not broken.
+// d comes from the trusted table (or addIcons from app code), never user input — it is interpolated unescaped.
+function icon(name, cls = '') {
+  const d = ICON_PATHS[name] || ICON_PATHS.file;
+  const dots = name === 'grip' || name === 'more';
+  return `<svg class="ed-ico${cls ? ' ' + cls : ''}" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="${dots ? 3 : 1.8}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="${d}"/></svg>`;
+}
+// DOM variant: <span class="ed-ic"> wrapper (fixed box, flex:none) around the svg — the span is what layout rules
+// target (.ed-btn.ed-sm .ed-ic), so icons size consistently whatever the svg's attributes.
+function iconEl(name, cls) {
+  const s = h('span', { class: 'ed-ic', html: icon(name, cls) });
+  return s;
+}
+
+// Adds or replaces icons (an application's own logo, extra glyphs): { name: 'path data' }.
+// Global and last-writer-wins: two apps never share a document, so collisions only matter within one app.
+function addIcons(paths) { Object.assign(ICON_PATHS, paths); }
+
+export {
+  addIcons,
+  icon,
+  iconEl
+};

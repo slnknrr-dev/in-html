@@ -1,0 +1,484 @@
+// jpg/decode.js - JPEG decoder: baseline and extended sequential (SOF0 / SOF1) and progressive (SOF2) Huffman JPEGs,
+// 8-bit, any sampling factors, restart markers. Integer IDCT, "fancy" (triangle) chroma upsampling and fixed-point
+// colour conversion follow libjpeg(-turbo), so pixels match browsers closely. YCbCr, grayscale, RGB, CMYK and YCCK
+// (Adobe APP14 transform, inverted Adobe CMYK). Arithmetic, lossless, hierarchical and 12-bit files are rejected.
+// Pixels are returned as stored: the EXIF orientation is reported, not applied.
+//
+//   decodeJPEG(bytes, { maxPixels = 2^28, fancyUpsampling = true }) ->
+//     { width, height, data: Uint8ClampedArray RGBA, colorSpace, components, progressive, subsampling, orientation,
+//       jfif, adobe, exif (TIFF bytes | null), icc (bytes | null), comments }
+
+import { parseAPP, parseDHT, parseDQT, parseSOF, parseSOS, ZIGZAG } from './segments.js';
+
+// --- Huffman tables ------------------------------------------------------------------------------------
+
+// Huffman decoding: a 9-bit lookahead table resolves most codes (short codes are the frequent ones) in one array
+// read; longer codes fall back to the canonical maxcode / valptr walk of the JPEG spec (F.2.2.3). 9 bits = 512
+// entries per table, small enough for cache.
+const LOOK = 9;
+function huffTable({ counts, symbols }) {
+  const lookup = new Uint16Array(1 << LOOK);
+  const maxcode = new Int32Array(18).fill(-1), mincode = new Int32Array(17), valptr = new Int32Array(17);
+  let code = 0, k = 0;
+  for (let l = 1; l <= 16; l++) {
+    const n = counts[l - 1];
+    valptr[l] = k; mincode[l] = code;
+    for (let i = 0; i < n; i++, k++, code++) {
+      if (l <= LOOK) {
+        const shift = LOOK - l, base = code << shift;
+        for (let j = 0; j < 1 << shift; j++) lookup[base + j] = (l << 8) | symbols[k];
+      }
+    }
+    maxcode[l] = n ? code - 1 : -1;
+    code <<= 1;
+  }
+  maxcode[17] = 0x7fffffff;
+  return { lookup, maxcode, mincode, valptr, symbols };
+}
+
+// --- IDCT (libjpeg jidctint.c, "islow") ----------------------------------------------------------------
+
+const CB = 13, P1 = 2;
+const F0298 = 2446, F0390 = 3196, F0541 = 4433, F0765 = 6270, F0899 = 7373, F1175 = 9633, F1501 = 12299, F1847 = 15137,
+  F1961 = 16069, F2053 = 16819, F2562 = 20995, F3072 = 25172;
+
+// Dequantizes + inverse-transforms the block at coefs[off] into out (8x8 at outOff, row stride `stride`).
+function idct(coefs, off, q, ws, out, outOff, stride) {
+  for (let c = 0; c < 8; c++) {
+    const i1 = coefs[off + c + 8], i2 = coefs[off + c + 16], i3 = coefs[off + c + 24], i4 = coefs[off + c + 32];
+    const i5 = coefs[off + c + 40], i6 = coefs[off + c + 48], i7 = coefs[off + c + 56];
+    if ((i1 | i2 | i3 | i4 | i5 | i6 | i7) === 0) {
+      const dc = (coefs[off + c] * q[c]) << P1;
+      for (let r = 0; r < 64; r += 8) ws[c + r] = dc;
+      continue;
+    }
+    let z2 = i2 * q[c + 16], z3 = i6 * q[c + 48];
+    let z1 = (z2 + z3) * F0541;
+    const t2e = z1 - z3 * F1847, t3e = z1 + z2 * F0765;
+    z2 = coefs[off + c] * q[c]; z3 = i4 * q[c + 32];
+    const t0e = (z2 + z3) << CB, t1e = (z2 - z3) << CB;
+    const t10 = t0e + t3e, t13 = t0e - t3e, t11 = t1e + t2e, t12 = t1e - t2e;
+    let t0 = i7 * q[c + 56], t1 = i5 * q[c + 40], t2 = i3 * q[c + 24], t3 = i1 * q[c + 8];
+    z1 = t0 + t3; z2 = t1 + t2; z3 = t0 + t2; let z4 = t1 + t3;
+    const z5 = (z3 + z4) * F1175;
+    t0 *= F0298; t1 *= F2053; t2 *= F3072; t3 *= F1501;
+    z1 *= -F0899; z2 *= -F2562; z3 *= -F1961; z4 *= -F0390;
+    z3 += z5; z4 += z5;
+    t0 += z1 + z3; t1 += z2 + z4; t2 += z2 + z3; t3 += z1 + z4;
+    const R = 1 << (CB - P1 - 1), S = CB - P1;
+    ws[c] = (t10 + t3 + R) >> S; ws[c + 56] = (t10 - t3 + R) >> S;
+    ws[c + 8] = (t11 + t2 + R) >> S; ws[c + 48] = (t11 - t2 + R) >> S;
+    ws[c + 16] = (t12 + t1 + R) >> S; ws[c + 40] = (t12 - t1 + R) >> S;
+    ws[c + 24] = (t13 + t0 + R) >> S; ws[c + 32] = (t13 - t0 + R) >> S;
+  }
+  const R2 = 1 << (CB + P1 + 3 - 1), S2 = CB + P1 + 3;
+  for (let r = 0; r < 64; r += 8) {
+    const o = outOff + (r >> 3) * stride;
+    const w1 = ws[r + 1], w2 = ws[r + 2], w3 = ws[r + 3], w4 = ws[r + 4], w5 = ws[r + 5], w6 = ws[r + 6], w7 = ws[r + 7];
+    if ((w1 | w2 | w3 | w4 | w5 | w6 | w7) === 0) {
+      let v = ((ws[r] + (1 << (P1 + 2))) >> (P1 + 3)) + 128;
+      v = v < 0 ? 0 : v > 255 ? 255 : v;
+      for (let i = 0; i < 8; i++) out[o + i] = v;
+      continue;
+    }
+    let z1 = (w2 + w6) * F0541;
+    const t2e = z1 - w6 * F1847, t3e = z1 + w2 * F0765;
+    const t0e = (ws[r] + w4) << CB, t1e = (ws[r] - w4) << CB;
+    const t10 = t0e + t3e, t13 = t0e - t3e, t11 = t1e + t2e, t12 = t1e - t2e;
+    let t0 = w7, t1 = w5, t2 = w3, t3 = w1;
+    z1 = t0 + t3; let z2 = t1 + t2, z3 = t0 + t2, z4 = t1 + t3;
+    const z5 = (z3 + z4) * F1175;
+    t0 *= F0298; t1 *= F2053; t2 *= F3072; t3 *= F1501;
+    z1 *= -F0899; z2 *= -F2562; z3 *= -F1961; z4 *= -F0390;
+    z3 += z5; z4 += z5;
+    t0 += z1 + z3; t1 += z2 + z4; t2 += z2 + z3; t3 += z1 + z4;
+    let x;
+    x = ((t10 + t3 + R2) >> S2) + 128; out[o] = x < 0 ? 0 : x > 255 ? 255 : x;
+    x = ((t11 + t2 + R2) >> S2) + 128; out[o + 1] = x < 0 ? 0 : x > 255 ? 255 : x;
+    x = ((t12 + t1 + R2) >> S2) + 128; out[o + 2] = x < 0 ? 0 : x > 255 ? 255 : x;
+    x = ((t13 + t0 + R2) >> S2) + 128; out[o + 3] = x < 0 ? 0 : x > 255 ? 255 : x;
+    x = ((t13 - t0 + R2) >> S2) + 128; out[o + 4] = x < 0 ? 0 : x > 255 ? 255 : x;
+    x = ((t12 - t1 + R2) >> S2) + 128; out[o + 5] = x < 0 ? 0 : x > 255 ? 255 : x;
+    x = ((t11 - t2 + R2) >> S2) + 128; out[o + 6] = x < 0 ? 0 : x > 255 ? 255 : x;
+    x = ((t10 - t3 + R2) >> S2) + 128; out[o + 7] = x < 0 ? 0 : x > 255 ? 255 : x;
+  }
+}
+
+// --- colour conversion tables (libjpeg jdcolor.c, 16-bit fixed point) ----------------------------------------
+
+// YCbCr -> RGB in 16.16 fixed point with precomputed per-value products (libjpeg jdcolor.c): integer-only inner loop,
+// and bit-identical rounding to libjpeg, which is what makes output match browsers.
+const CR_R = new Int32Array(256), CB_B = new Int32Array(256), CR_G = new Int32Array(256), CB_G = new Int32Array(256);
+for (let i = 0; i < 256; i++) {
+  const x = i - 128;
+  CR_R[i] = (Math.round(1.402 * 65536) * x + 32768) >> 16;
+  CB_B[i] = (Math.round(1.772 * 65536) * x + 32768) >> 16;
+  CR_G[i] = -Math.round(0.71414 * 65536) * x;
+  CB_G[i] = -Math.round(0.34414 * 65536) * x + 32768;
+}
+const clamp8 = (v) => (v < 0 ? 0 : v > 255 ? 255 : v);
+
+// --- upsampling (libjpeg jdsample.c) ----------------------------------------------------------------------
+
+// Returns row(y, out) filling `out` (length >= width) with the component's samples for output row y.
+// "Fancy" upsampling interpolates chroma with a triangle filter (3/4 near + 1/4 far sample) instead of replicating
+// pixels; replication produces visible blockiness on coloured edges. Rows are produced on demand, so a full-size
+// upsampled chroma plane is never allocated.
+function rowSampler(c, width, height, hmax, vmax, fancy) {
+  const sx = hmax / c.h, sy = vmax / c.v;
+  const plane = c.plane, stride = c.stride;
+  const dw = Math.ceil((width * c.h) / hmax), dh = Math.ceil((height * c.v) / vmax);
+  const wide = new Uint8Array(dw * 2 + 2);
+  const sums = new Int32Array(dw);
+  if (sx === 1 && sy === 1) return (y, out) => { out.set(plane.subarray(y * stride, y * stride + width)); };
+  if (fancy && sx === 2 && sy === 1 && dw > 2) {
+    return (y, out) => {
+      const p = y * stride;
+      wide[0] = plane[p];
+      wide[1] = (plane[p] * 3 + plane[p + 1] + 2) >> 2;
+      for (let i = 1; i < dw - 1; i++) {
+        const v = plane[p + i] * 3;
+        wide[i * 2] = (v + plane[p + i - 1] + 1) >> 2;
+        wide[i * 2 + 1] = (v + plane[p + i + 1] + 2) >> 2;
+      }
+      const l = dw - 1;
+      wide[l * 2] = (plane[p + l] * 3 + plane[p + l - 1] + 1) >> 2;
+      wide[l * 2 + 1] = plane[p + l];
+      out.set(wide.subarray(0, width));
+    };
+  }
+  if (fancy && sx === 2 && sy === 2 && dw > 2) {
+    return (y, out) => {
+      const inrow = y >> 1, v = y & 1;
+      const near = Math.min(inrow, dh - 1), far = Math.max(0, Math.min(dh - 1, v ? inrow + 1 : inrow - 1));
+      const a = near * stride, b = far * stride;
+      for (let i = 0; i < dw; i++) sums[i] = plane[a + i] * 3 + plane[b + i];
+      wide[0] = (sums[0] * 4 + 8) >> 4;
+      wide[1] = (sums[0] * 3 + sums[1] + 7) >> 4;
+      for (let i = 1; i < dw - 1; i++) {
+        wide[i * 2] = (sums[i] * 3 + sums[i - 1] + 8) >> 4;
+        wide[i * 2 + 1] = (sums[i] * 3 + sums[i + 1] + 7) >> 4;
+      }
+      const l = dw - 1;
+      wide[l * 2] = (sums[l] * 3 + sums[l - 1] + 8) >> 4;
+      wide[l * 2 + 1] = (sums[l] * 4 + 7) >> 4;
+      out.set(wide.subarray(0, width));
+    };
+  }
+  if (fancy && sx === 1 && sy === 2) {
+    return (y, out) => {
+      const inrow = y >> 1, v = y & 1;
+      const near = Math.min(inrow, dh - 1), far = Math.max(0, Math.min(dh - 1, v ? inrow + 1 : inrow - 1));
+      const a = near * stride, b = far * stride, bias = v ? 2 : 1;
+      for (let i = 0; i < width; i++) out[i] = (plane[a + i] * 3 + plane[b + i] + bias) >> 2;
+    };
+  }
+  // Replication for any other ratio (and when fancy upsampling is off).
+  return (y, out) => {
+    const p = Math.min(dh - 1, Math.floor(y / sy)) * stride;
+    for (let x = 0; x < width; x++) out[x] = plane[p + Math.min(dw - 1, Math.floor(x / sx))];
+  };
+}
+
+/** Decodes a JPEG to RGBA (see the header). */
+// maxPixels guards against decompression bombs: a 100-byte header can claim 65535 x 65535 pixels (17 GB of RGBA);
+// the check runs before any plane is allocated. Unsupported processes are rejected explicitly rather than decoded
+// into garbage.
+export function decodeJPEG(input, { maxPixels = 1 << 28, fancyUpsampling = true } = {}) {
+  const b = input instanceof Uint8Array ? input : new Uint8Array(input);
+  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) throw new Error('not a JPEG file');
+  const qts = [], dcs = [], acs = [];
+  let frame = null, restart = 0, jfif = null, adobe = null, exif = null;
+  const comments = [], icc = [];
+  let p = 2, scans = 0;
+  while (p < b.length - 1) {
+    if (b[p] !== 0xff) { p++; continue; }
+    const m = b[p + 1];
+    if (m === 0xff) { p++; continue; }
+    if (m === 0xd9) break;
+    if (m === 0xd8 || m === 0x00 || m === 0x01 || (m >= 0xd0 && m <= 0xd7)) { p += 2; continue; }
+    if (p + 4 > b.length) break;
+    const len = (b[p + 2] << 8) | b[p + 3];
+    const data = b.subarray(p + 4, Math.min(b.length, p + 2 + len));
+    p += 2 + len;
+    if (m === 0xdb) { for (const t of parseDQT(data)) qts[t.id] = t.table; }
+    else if (m === 0xc4) { for (const t of parseDHT(data)) (t.cls ? acs : dcs)[t.id] = huffTable(t); }
+    else if (m === 0xdd) restart = (data[0] << 8) | data[1];
+    else if (m === 0xc0 || m === 0xc1 || m === 0xc2) {
+      if (frame) throw new Error('JPEG: more than one frame');
+      frame = setupFrame(parseSOF(data, m), maxPixels);
+    } else if ((m >= 0xc3 && m <= 0xcf) && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
+      const s = parseSOF(data, m);
+      throw new Error(`JPEG: ${s.arithmetic ? 'arithmetic coding' : s.process} is not supported`);
+    } else if (m === 0xda) {
+      if (!frame) throw new Error('JPEG: scan before frame header');
+      p = decodeScan(b, p, frame, parseSOS(data), dcs, acs, restart);
+      scans++;
+    } else if (m >= 0xe0 && m <= 0xef) {
+      const a = parseAPP(m, data);
+      if (a.type === 'JFIF' && !jfif) jfif = a;
+      else if (a.type === 'Adobe') adobe = a;
+      else if (a.type === 'EXIF' && !exif) exif = new Uint8Array(a.tiff);
+      else if (a.type === 'ICC') icc.push(a);
+    } else if (m === 0xfe) comments.push(new TextDecoder().decode(data));
+  }
+  if (!frame) throw new Error('JPEG: no frame header');
+  if (!scans) throw new Error('JPEG: no image data');
+  const { width: W, height: H, comps } = frame;
+  // IDCT into component planes.
+  const ws = new Int32Array(64);
+  for (const c of comps) {
+    const q = qts[c.tq];
+    if (!q) throw new Error('JPEG: missing quantization table ' + c.tq);
+    c.stride = c.bw * 8;
+    c.plane = new Uint8Array(c.stride * c.bh * 8);
+    const rows = Math.min(c.bh, c.realBH), cols = Math.min(c.bw, c.realBW);
+    for (let by = 0; by < rows; by++) for (let bx = 0; bx < cols; bx++) idct(c.coefs, (by * c.bw + bx) * 64, q, ws, c.plane, by * 8 * c.stride + bx * 8, c.stride);
+    c.coefs = null;
+  }
+  // Colour space
+  const n = comps.length;
+  const t = adobe ? adobe.transform : -1;
+  const ids = comps.map((c) => c.id).join();
+  const colorSpace = n === 1 ? 'gray' : n === 3 ? (t === 0 || (t < 0 && !jfif && ids === '82,71,66') ? 'RGB' : 'YCbCr') : n === 4 ? (t === 2 ? 'YCCK' : 'CMYK') : '';
+  if (!colorSpace) throw new Error('JPEG: unsupported component count ' + n);
+  const out = new Uint8ClampedArray(W * H * 4);
+  const rows = comps.map((c) => ({ fill: rowSampler(c, W, H, frame.hmax, frame.vmax, fancyUpsampling), buf: new Uint8Array(W + 16) }));
+  const inverted = !!adobe;
+  for (let y = 0; y < H; y++) {
+    for (const r of rows) r.fill(y, r.buf);
+    let o = y * W * 4;
+    const c0 = rows[0].buf;
+    if (n === 1) { for (let x = 0; x < W; x++, o += 4) { out[o] = out[o + 1] = out[o + 2] = c0[x]; out[o + 3] = 255; } continue; }
+    const c1 = rows[1].buf, c2 = rows[2].buf;
+    if (colorSpace === 'RGB') { for (let x = 0; x < W; x++, o += 4) { out[o] = c0[x]; out[o + 1] = c1[x]; out[o + 2] = c2[x]; out[o + 3] = 255; } continue; }
+    if (colorSpace === 'YCbCr') {
+      for (let x = 0; x < W; x++, o += 4) {
+        const yy = c0[x], cb = c1[x], cr = c2[x];
+        out[o] = yy + CR_R[cr]; out[o + 1] = yy + ((CB_G[cb] + CR_G[cr]) >> 16); out[o + 2] = yy + CB_B[cb]; out[o + 3] = 255;
+      }
+      continue;
+    }
+    const c3 = rows[3].buf;
+    for (let x = 0; x < W; x++, o += 4) {
+      let C = c0[x], M = c1[x], Y = c2[x];
+      const K = c3[x];
+      if (colorSpace === 'YCCK') {
+        // libjpeg ycck_cmyk_convert: C = 255 - R(Y, Cb, Cr) etc.; K passes through
+        const yy = C, cb = M, cr = Y;
+        C = 255 - clamp8(yy + CR_R[cr]); M = 255 - clamp8(yy + ((CB_G[cb] + CR_G[cr]) >> 16)); Y = 255 - clamp8(yy + CB_B[cb]);
+      }
+      if (inverted) { out[o] = (C * K) / 255; out[o + 1] = (M * K) / 255; out[o + 2] = (Y * K) / 255; }
+      else { const k = 255 - K; out[o] = ((255 - C) * k) / 255; out[o + 1] = ((255 - M) * k) / 255; out[o + 2] = ((255 - Y) * k) / 255; }
+      out[o + 3] = 255;
+    }
+  }
+  let orientation = 1;
+  if (exif) orientation = exifOrientation(exif);
+  icc.sort((a, b2) => a.seq - b2.seq);
+  const iccBytes = icc.length ? concat(icc.map((a) => a.data)) : null;
+  return {
+    width: W, height: H, data: out, colorSpace, components: n, progressive: frame.progressive, subsampling: frame.subsampling,
+    orientation, jfif, adobe, exif, icc: iccBytes, comments,
+  };
+}
+
+function concat(list) {
+  const out = new Uint8Array(list.reduce((a, x) => a + x.length, 0));
+  let o = 0;
+  for (const x of list) { out.set(x, o); o += x.length; }
+  return out;
+}
+
+// Orientation tag straight from TIFF bytes (keeps the decoder independent of exif.js).
+function exifOrientation(t) {
+  if (t.length < 8) return 1;
+  const le = t[0] === 0x49;
+  const u16 = (q) => (le ? t[q] | (t[q + 1] << 8) : (t[q] << 8) | t[q + 1]);
+  const u32 = (q) => (le ? (t[q] | (t[q + 1] << 8) | (t[q + 2] << 16) | (t[q + 3] << 24)) >>> 0 : ((t[q] << 24) | (t[q + 1] << 16) | (t[q + 2] << 8) | t[q + 3]) >>> 0);
+  const ifd = u32(4);
+  if (ifd + 2 > t.length) return 1;
+  const n = u16(ifd);
+  for (let i = 0; i < n && ifd + 2 + i * 12 + 12 <= t.length; i++) {
+    const e = ifd + 2 + i * 12;
+    if (u16(e) === 0x0112) { const v = u16(e + 8); return v >= 1 && v <= 8 ? v : 1; }
+  }
+  return 1;
+}
+
+// Coefficient planes are allocated for whole MCUs (padded), but realBW / realBH record the blocks that hold image
+// data: non-interleaved scans of subsampled components cover only those (spec A.2.2).
+function setupFrame(sof, maxPixels) {
+  const { width: W, height: H, components } = sof;
+  if (!W || !H) throw new Error('JPEG: missing image size (DNL is not supported)');
+  if (W * H > maxPixels) throw new Error('JPEG: image too large');
+  if (sof.precision !== 8) throw new Error(`JPEG: ${sof.precision}-bit samples are not supported`);
+  if (!components.length || components.length > 4) throw new Error('JPEG: bad component count');
+  const hmax = Math.max(...components.map((c) => c.h)), vmax = Math.max(...components.map((c) => c.v));
+  if (components.some((c) => c.h < 1 || c.v < 1 || c.h > 4 || c.v > 4)) throw new Error('JPEG: bad sampling factors');
+  const mcusX = Math.ceil(W / (8 * hmax)), mcusY = Math.ceil(H / (8 * vmax));
+  const comps = components.map((c) => {
+    const bw = mcusX * c.h, bh = mcusY * c.v;
+    return {
+      ...c, bw, bh, realBW: Math.ceil(Math.ceil((W * c.h) / hmax) / 8), realBH: Math.ceil(Math.ceil((H * c.v) / vmax) / 8),
+      coefs: new Int16Array(bw * bh * 64), pred: 0,
+    };
+  });
+  let subsampling = '';
+  if (comps.length >= 3) {
+    const [y, cb] = comps;
+    const hr = y.h / cb.h, vr = y.v / cb.v;
+    subsampling = hr === 1 && vr === 1 ? '4:4:4' : hr === 2 && vr === 1 ? '4:2:2' : hr === 2 && vr === 2 ? '4:2:0' : hr === 1 && vr === 2 ? '4:4:0' : hr === 4 && vr === 1 ? '4:1:1' : comps.map((c) => c.h + 'x' + c.v).join(' ');
+  }
+  return { width: W, height: H, comps, hmax, vmax, mcusX, mcusY, progressive: sof.progressive, subsampling };
+}
+
+// Decodes one scan starting at byte p (entropy-coded data); returns the offset of the next marker.
+function decodeScan(b, p, frame, scan, dcs, acs, restart) {
+  const sc = scan.components.map((s) => {
+    const c = frame.comps.find((x) => x.id === s.id);
+    if (!c) throw new Error('JPEG: scan component not in frame');
+    c.dc = dcs[s.td]; c.ac = acs[s.ta];
+    return c;
+  });
+  const { ss, se, ah, al } = scan;
+  const progressive = frame.progressive;
+  for (const c of sc) {
+    const needDC = !progressive || (ss === 0 && ah === 0);
+    const needAC = !progressive ? true : ss > 0;
+    if ((needDC && !c.dc) || (needAC && !c.ac)) throw new Error('JPEG: missing Huffman table');
+    c.pred = 0;
+  }
+  // Bit reader: 0xFF00 unstuffing; at a marker it feeds zeros and remembers the marker position.
+  // Feeding zeros past a marker (instead of throwing) is libjpeg's behaviour for truncated files: the missing part
+  // decodes as filler (no error), which is more useful than nothing for a partially downloaded photo.
+  let pos = p, buf = 0, cnt = 0, hit = false;
+  const fill = () => {
+    while (cnt <= 16) {
+      let byte = 0;
+      if (!hit && pos < b.length) {
+        byte = b[pos];
+        if (byte === 0xff) {
+          const nx = b[pos + 1];
+          if (nx === 0) pos += 2;
+          else if (nx === 0xff) { pos++; continue; }
+          else { hit = true; byte = 0; }
+        } else pos++;
+      }
+      buf = ((buf << 8) | byte) & 0xffffff;
+      cnt += 8;
+    }
+  };
+  const get = (n) => { if (cnt < n) fill(); cnt -= n; return (buf >>> cnt) & ((1 << n) - 1); };
+  const bit = () => { if (cnt < 1) fill(); cnt--; return (buf >>> cnt) & 1; };
+  const decode = (tb) => {
+    if (cnt < 16) fill();
+    const e = tb.lookup[(buf >>> (cnt - LOOK)) & ((1 << LOOK) - 1)];
+    if (e) { cnt -= e >> 8; return e & 255; }
+    for (let l = LOOK + 1; l <= 16; l++) {
+      const code = (buf >>> (cnt - l)) & ((1 << l) - 1);
+      if (code <= tb.maxcode[l]) { cnt -= l; return tb.symbols[tb.valptr[l] + code - tb.mincode[l]]; }
+    }
+    cnt -= 16;
+    return 0; // corrupt code: treated as end of block
+  };
+  const extend = (v, s) => (v < 1 << (s - 1) ? v - (1 << s) + 1 : v);
+  let eobrun = 0;
+
+  const baseline = (c, off) => {
+    const z = c.coefs;
+    const t = decode(c.dc);
+    c.pred += t ? extend(get(t), t) : 0;
+    z[off] = c.pred;
+    for (let k = 1; k < 64;) {
+      const rs = decode(c.ac), s = rs & 15, r = rs >> 4;
+      if (!s) { if (r < 15) break; k += 16; continue; }
+      k += r;
+      if (k > 63) break;
+      z[off + ZIGZAG[k]] = extend(get(s), s);
+      k++;
+    }
+  };
+  const dcFirst = (c, off) => {
+    const t = decode(c.dc);
+    c.pred += t ? extend(get(t), t) * (1 << al) : 0;
+    c.coefs[off] = c.pred;
+  };
+  const dcRefine = (c, off) => { if (bit()) c.coefs[off] |= 1 << al; };
+  const acFirst = (c, off) => {
+    if (eobrun > 0) { eobrun--; return; }
+    const z = c.coefs;
+    for (let k = ss; k <= se;) {
+      const rs = decode(c.ac), s = rs & 15, r = rs >> 4;
+      if (!s) {
+        if (r < 15) { eobrun = (1 << r) - 1 + (r ? get(r) : 0); break; }
+        k += 16;
+        continue;
+      }
+      k += r;
+      if (k > 63) break;
+      z[off + ZIGZAG[k]] = extend(get(s), s) * (1 << al);
+      k++;
+    }
+  };
+  const p1 = 1 << al, m1 = -1 << al;
+  const acRefine = (c, off) => {
+    const z = c.coefs;
+    let k = ss;
+    if (eobrun === 0) {
+      for (; k <= se; k++) {
+        const rs = decode(c.ac);
+        let r = rs >> 4, s = rs & 15;
+        if (s) s = bit() ? p1 : m1;
+        else if (r !== 15) { eobrun = (1 << r) + (r ? get(r) : 0); break; }
+        while (k <= se) {
+          const zi = off + ZIGZAG[k];
+          if (z[zi] !== 0) { if (bit() && (z[zi] & p1) === 0) z[zi] += z[zi] >= 0 ? p1 : m1; }
+          else if (--r < 0) break;
+          k++;
+        }
+        if (s && k <= se) z[off + ZIGZAG[k]] = s;
+      }
+    }
+    if (eobrun > 0) {
+      for (; k <= se; k++) {
+        const zi = off + ZIGZAG[k];
+        if (z[zi] !== 0 && bit() && (z[zi] & p1) === 0) z[zi] += z[zi] >= 0 ? p1 : m1;
+      }
+      eobrun--;
+    }
+  };
+  const fn = !progressive ? baseline : ss === 0 ? (ah === 0 ? dcFirst : dcRefine) : ah === 0 ? acFirst : acRefine;
+
+  // Restart: drop the bit buffer, expect RSTn, reset predictions and the EOB run.
+  const doRestart = () => {
+    let q = pos;
+    while (q < b.length - 1 && !(b[q] === 0xff && b[q + 1] !== 0 && b[q + 1] !== 0xff)) q++;
+    if (q >= b.length - 1 || b[q + 1] < 0xd0 || b[q + 1] > 0xd7) { pos = q; hit = true; return false; }
+    pos = q + 2; hit = false; buf = 0; cnt = 0; eobrun = 0;
+    for (const c of sc) c.pred = 0;
+    return true;
+  };
+  if (sc.length === 1) {
+    const c = sc[0];
+    const total = c.realBW * c.realBH;
+    for (let i = 0; i < total; i++) {
+      if (restart && i > 0 && i % restart === 0 && !doRestart()) break;
+      const by = (i / c.realBW) | 0, bx = i - by * c.realBW;
+      fn(c, (by * c.bw + bx) * 64);
+    }
+  } else {
+    const total = frame.mcusX * frame.mcusY;
+    for (let i = 0; i < total; i++) {
+      if (restart && i > 0 && i % restart === 0 && !doRestart()) break;
+      const my = (i / frame.mcusX) | 0, mx = i - my * frame.mcusX;
+      for (const c of sc) {
+        for (let v = 0; v < c.v; v++) for (let h = 0; h < c.h; h++) fn(c, ((my * c.v + v) * c.bw + mx * c.h + h) * 64);
+      }
+    }
+  }
+  // Next marker (skipping any trailing bytes / RST markers of the scan).
+  let q = pos;
+  while (q < b.length - 1 && !(b[q] === 0xff && b[q + 1] !== 0 && b[q + 1] !== 0xff && !(b[q + 1] >= 0xd0 && b[q + 1] <= 0xd7))) q++;
+  return q;
+}

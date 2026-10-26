@@ -1,0 +1,8 @@
+const T_WIDTH=9,C_WIDTH=4;const C_MAX=36**C_WIDTH-1;const STAMP_RE=/^[0-9a-z]{9}\.[0-9a-z]{4}\.[0-9a-z]{1,24}$/;const isStamp=(s)=>typeof s==='string'&&STAMP_RE.test(s);function parseStamp(s){if(!isStamp(s))return null;return{t:parseInt(s.slice(0,T_WIDTH),36),c:parseInt(s.slice(T_WIDTH+1,T_WIDTH+1+C_WIDTH),36),client:s.slice(T_WIDTH+C_WIDTH+2)};}
+function makeStamp(t,c,client){return Math.max(0,Math.floor(t)).toString(36).padStart(T_WIDTH,'0')+'.'+c.toString(36).padStart(C_WIDTH,'0')+'.'+client;}
+const ID_CHARS='abcdefghijklmnopqrstuvwxyz0123456789';function randomBytes(n){const b=new Uint8Array(n);const c=globalThis.crypto;if(c&&typeof c.getRandomValues==='function')c.getRandomValues(b);else for(let i=0;i<n;i++)b[i]=(Math.random()*256)|0;return b;}
+function newId(n=12){const b=randomBytes(n);let s=ID_CHARS[b[0]%26];for(let i=1;i<n;i++)s+=ID_CHARS[b[i]%36];return s;}
+const randomClientId=()=>newId(8);function createClock(client=randomClientId(),now=()=>Date.now()){if(!/^[0-9a-z]{1,24}$/.test(client))throw new Error('client id must be 1-24 characters [0-9a-z]');let lt=0,lc=0;const clock={client,skew:0,get last(){return lt?makeStamp(lt,lc,client):'';},next(){const wall=Math.floor(now()+clock.skew);if(wall>lt){lt=wall;lc=0;}
+else if(lc<C_MAX)lc++;else{lt++;lc=0;}
+return makeStamp(lt,lc,client);},observe(stamp){const p=parseStamp(stamp);if(!p)return;if(p.t>lt||(p.t===lt&&p.c>lc)){lt=p.t;lc=p.c;}},};return clock;}
+export{isStamp,randomClientId,createClock,newId};

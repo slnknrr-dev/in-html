@@ -1,0 +1,220 @@
+// battleship-game/replay.js - the replay viewer of SBN records: paste a record (or open a saved game, or a #sbn= link),
+// step through it on the seas with the fleets open when the record carries them, the moves in words with the bits of
+// every answer, and the information analysis: the entropy curve of every sea (log2 of the fleets it could still hide)
+// with the bits of each shot, luck and skill of every player (battleship/notation.js analysisSteps, run in small steps).
+//
+//   renderReplays(main, { text?, onBack }) -> element
+
+import { h } from '../ui/dom.js';
+import { t } from '../ui/i18n.js';
+import { iconEl } from '../ui/icons.js';
+import { toast } from '../ui/overlays.js';
+import { copyText } from '../ui/app.js';
+import { parse, replay, analysisSteps } from '../battleship/notation.js';
+import { publicMarks } from '../battleship/knowledge.js';
+import { decodeLayout, validateLayout } from '../battleship/placement.js';
+import { createGrid } from './grid.js';
+import { applySkin, skinOf } from './skins.js';
+import { store, save } from './store.js';
+import { rulesetName, botLabel, moveText } from './names.js';
+
+// One colour per seat (up to 6 players) for the chart lines; raw colours because the chart is data, and they are
+// chosen to stay distinct on both light and dark panels.
+const COLORS = ['#ff8a3d', '#4cc2ff', '#b48cff', '#5fd38d', '#ffd166', '#ff6b9a'];
+
+export function renderReplays(main, { text = '', onBack }) {
+  const root = h('section', { class: 'bs-replays bs-screen' });
+  applySkin(root, skinOf(store.settings));
+  main.append(root);
+  let R = null, P = null, idx = 0, open = true, playing = null, grids = [], fleets = null, A = null, job = 0;
+
+  const input = h('textarea', { class: 'ed-input ap-mono bs-sbnin', rows: '3', spellcheck: 'false', placeholder: 'SBN1;r=…', 'aria-label': t('rp.paste') }, text);
+  const msg = h('p', { class: 'ed-hint' });
+  const stage = h('div', { class: 'bs-rp-stage' });
+  const controls = h('div', { class: 'bs-rp-controls' });
+  const side = h('div', { class: 'bs-rp-side' });
+  const saved = h('div', { class: 'bs-rp-saved' });
+
+  root.append(
+    h('div', { class: 'bs-screen-h' },
+      h('button', { type: 'button', class: 'ed-iconbtn', 'aria-label': t('nav.back'), onclick: () => { stop(); job++; for (const g of grids) g.destroy(); onBack(); } }, iconEl('parent')),
+      h('h2', {}, t('rp.title'))),
+    h('section', { class: 'ap-card' }, h('h2', { class: 'ap-card-h' }, t('rp.record')), input,
+      h('div', { class: 'ap-actions' },
+        h('button', { type: 'button', class: 'ed-btn ed-primary', dataset: { a: 'open' }, onclick: () => load(input.value) }, iconEl('eye'), t('rp.open')),
+        h('button', { type: 'button', class: 'ed-btn', onclick: async () => { try { input.value = await navigator.clipboard.readText(); load(input.value); } catch { toast(t('rp.noClipboard'), 'warn'); } } }, iconEl('paste'), t('rp.pasteBtn'))),
+      msg),
+    h('div', { class: 'bs-rp-main' }, h('div', { class: 'bs-rp-left' }, stage, controls), side),
+    h('section', { class: 'ap-card' }, h('h2', { class: 'ap-card-h' }, t('rp.saved')), saved));
+
+  function renderSaved() {
+    saved.textContent = '';
+    if (!store.replays.length) { saved.append(h('p', { class: 'ap-empty' }, t('rp.none'))); return; }
+    const list = h('div', { class: 'bs-rp-list' });
+    store.replays.forEach((r, i) => list.append(h('div', { class: 'bs-rp-item' },
+      h('button', { type: 'button', class: 'bs-rp-open', onclick: () => { input.value = r.sbn; load(r.sbn); root.scrollIntoView({ behavior: 'smooth' }); } },
+        h('span', { class: 'bs-rp-res' }, r.won ? '🏆' : r.result === '=' ? '🤝' : '🌊'), h('b', {}, r.title), h('span', { class: 'ed-muted' }, new Date(r.at).toLocaleString())),
+      h('button', { type: 'button', class: 'ed-iconbtn', title: t('rp.copy'), 'aria-label': t('rp.copy'), onclick: () => copyText(r.sbn) }, iconEl('copy')),
+      h('button', { type: 'button', class: 'ed-iconbtn', title: t('rp.delete'), 'aria-label': t('rp.delete'), onclick: () => { store.replays.splice(i, 1); save('replays'); renderSaved(); } }, iconEl('trash')))));
+    saved.append(list);
+  }
+  renderSaved();
+
+  function load(txt) {
+    stop();
+    job++;
+    const p = parse(txt);
+    if (!p.ok) { msg.textContent = t('rp.bad', { msg: p.error }); msg.className = 'ed-hint ed-error'; return; }
+    const r = replay(p, { extra: store.rulesets });
+    if (!r.frames || !r.frames.length || !r.rs) { msg.textContent = t('rp.bad', { msg: r.error }); msg.className = 'ed-hint ed-error'; return; }
+    P = p; R = r; A = null;
+    msg.className = 'ed-hint' + (r.ok ? '' : ' ed-error');
+    msg.textContent = r.ok ? (r.full ? t('rp.full') : t('rp.public')) : t('rp.partial', { msg: r.error });
+    fleets = r.fleets || (p.fleets ? p.fleets.map((x) => decodeLayout(r.rs, x)) : null);
+    open = !!fleets;
+    idx = r.frames.length - 1;
+    for (const g of grids) g.destroy();
+    grids = [];
+    stage.textContent = '';
+    for (let b = 0; b < r.n; b++) {
+      const box = h('div', { class: 'bs-rp-sea' }, h('div', { class: 'bs-seahead' }, h('i', { class: 'bs-dot', style: { background: COLORS[b % COLORS.length] } }), h('b', {}, P.names[b] || t('tb.player', { n: b + 1 }))));
+      stage.append(box);
+      grids.push(createGrid(box, { rs: r.rs, small: r.n > 2, label: t('tb.enemySea', { name: P.names[b] || '' }) }));
+    }
+    show();
+    analyze();
+  }
+
+  function analyze() {
+    const my = job;
+    const it = analysisSteps(R.rs, R.log, { samples: 220, n: R.n, seed: 'replay' });
+    const step = () => {
+      if (my !== job) return;
+      const t0 = performance.now();
+      let res;
+      while (performance.now() - t0 < 30) { res = it.next(); if (res.done) break; }
+      if (!res.done) { const pr = side.querySelector('.bs-rp-progress'); if (pr) pr.textContent = t('end.analyzingN', { done: res.value.done, total: res.value.total }); setTimeout(step, 0); return; }
+      A = res.value;
+      renderSide();
+    };
+    setTimeout(step, 50);
+  }
+
+  function show() {
+    if (!R) return;
+    const f = R.frames[idx];
+    for (let b = 0; b < R.n; b++) {
+      const pm = publicMarks(R.rs, R.log, b, f.upto);
+      let ships = [];
+      if (open && fleets && fleets[b]) {
+        const v = validateLayout(R.rs, fleets[b]);
+        if (v.ok) ships = v.ships.map((s) => ({ t: s.t, cells: s.cells, sunk: s.cells.every((c) => pm.marks[c] === 2 || pm.marks[c] === 3), foe: true }));
+      }
+      const mines = open && fleets && fleets[b] ? fleets[b].mines || [] : [];
+      grids[b].render({ rs: R.rs, marks: pm.marks, sunk: pm.sunk, ships, mines, motion: store.settings.motion, active: f.target === b });
+    }
+    renderControls();
+    renderSide();
+  }
+
+  function stop() { if (playing) clearInterval(playing); playing = null; }
+  function step(d) { if (!R) return; idx = Math.max(0, Math.min(R.frames.length - 1, idx + d)); show(); }
+
+  function renderControls() {
+    controls.textContent = '';
+    const n = R.frames.length - 1;
+    const slider = h('input', { type: 'range', class: 'ed-range bs-rp-slider', min: '0', max: String(n), value: String(idx), 'aria-label': t('rp.position') });
+    slider.addEventListener('input', () => { stop(); idx = +slider.value; show(); });
+    const b = (ic, label, fn, on = false) => h('button', { type: 'button', class: 'ed-iconbtn' + (on ? ' ed-on' : ''), title: label, 'aria-label': label, onclick: fn }, h('span', { class: 'bs-ctl' }, ic));
+    controls.append(
+      b('⏮', t('rp.start'), () => { stop(); idx = 0; show(); }),
+      b('◀', t('rp.prev'), () => { stop(); step(-1); }),
+      b(playing ? '⏸' : '▶', playing ? t('rp.pause') : t('rp.play'), () => {
+        if (playing) { stop(); renderControls(); return; }
+        if (idx >= n) idx = 0;
+        playing = setInterval(() => { if (idx >= R.frames.length - 1) { stop(); renderControls(); return; } step(1); }, 600);
+        renderControls();
+      }, !!playing),
+      b('▶|', t('rp.next'), () => { stop(); step(1); }),
+      b('⏭', t('rp.end'), () => { stop(); idx = n; show(); }),
+      slider,
+      h('span', { class: 'bs-rp-pos' }, `${idx} / ${n}`),
+      fleets ? h('label', { class: 'bs-rp-open-l' }, h('input', { type: 'checkbox', checked: open, onchange: (e) => { open = e.target.checked; show(); } }), t('rp.showFleets')) : '',
+      h('button', { type: 'button', class: 'ed-iconbtn', title: t('rp.copy'), 'aria-label': t('rp.copy'), onclick: () => copyText(input.value.trim()) }, iconEl('copy')));
+  }
+
+  function renderSide() {
+    side.textContent = '';
+    if (!R) return;
+    const names = P.names;
+    const res = R.result || P.result;
+    const players = h('ul', { class: 'bs-rp-players' }, Array.from({ length: R.n }, (_, i) => h('li', {},
+      h('i', { class: 'bs-dot', style: { background: COLORS[i % COLORS.length] } }), h('b', {}, names[i] || t('tb.player', { n: i + 1 })),
+      P.bots[i] ? h('span', { class: 'ed-muted' }, ' · ' + botLabel(P.bots[i])) : null,
+      A ? h('span', { class: 'bs-rp-bits' }, t('rp.seatLine', { bits: A.seats[i].bits.toFixed(1), luck: (A.seats[i].luck >= 0 ? '+' : '') + A.seats[i].luck.toFixed(1), skill: A.seats[i].skill == null ? '—' : Math.round(A.seats[i].skill * 100) + '%' })) : null)));
+    side.append(
+      h('section', { class: 'ap-card' }, h('h2', { class: 'ap-card-h' }, rulesetName(R.rs)), players,
+        res ? h('p', {}, res.draw ? t('st.draw') : t('st.winner', { name: res.winners.map((i) => names[i] || '?').join(', ') })) : null,
+        P.seed ? h('p', { class: 'ed-muted' }, t('rp.seed', { seed: P.seed })) : null),
+      h('section', { class: 'ap-card' }, h('h2', { class: 'ap-card-h' }, t('rp.entropy')),
+        A ? chart(R, A, R.frames[idx].upto, (upto) => { stop(); const k = R.frames.findIndex((fr) => fr.upto >= upto); idx = k < 0 ? R.frames.length - 1 : k; show(); }) : h('p', { class: 'ed-hint bs-rp-progress' }, t('end.analyzing')),
+        A ? h('dl', { class: 'ap-kv' }, ...A.boards.flatMap((b, i) => [h('dt', {}, t('rp.boardOf', { name: names[i] || t('tb.player', { n: i + 1 }) })), h('dd', {}, t('rp.boardLine', { start: b.start.toFixed(1), end: b.end.toFixed(1), prior: b.prior.toFixed(1) }))])) : null,
+        h('details', {}, h('summary', {}, t('rp.whatIs')), h('p', { class: 'ed-hint' }, t('rp.bitsExplain')), h('p', { class: 'ed-hint' }, t('rp.luckExplain')))),
+      h('section', { class: 'ap-card' }, h('h2', { class: 'ap-card-h' }, t('rp.moves')), moveList()));
+  }
+
+  function moveList() {
+    const ol = h('ol', { class: 'bs-rp-moves' });
+    const bitsAt = new Map();
+    if (A) for (const s of A.shots) bitsAt.set(s.i, s);
+    R.frames.forEach((f, i) => {
+      if (!i) return;
+      const a = R.frames[i - 1].upto, b = f.upto;
+      const parts = [];
+      let bits = 0;
+      for (let k = a; k < b; k++) {
+        const e = R.log[k];
+        if (e[0] === 'F' || e[0] === 'H' || e[0] === 'T') continue;
+        const txt = moveText(R.rs, e, P.names, R.n);
+        if (txt) parts.push(txt);
+        const s = bitsAt.get(k);
+        if (s) bits += s.bits;
+      }
+      ol.append(h('li', { class: i === idx ? 'bs-on' : '', onclick: () => { stop(); idx = i; show(); } },
+        h('code', {}, f.token), h('span', {}, ' ' + parts.join(' · ')), A ? h('small', { class: 'ed-muted' }, ` ${bits.toFixed(1)} b`) : null));
+    });
+    requestAnimationFrame(() => { const on = ol.querySelector('.bs-on'); if (on) on.scrollIntoView({ block: 'nearest' }); });
+    return ol;
+  }
+
+  if (text) load(text);
+  return root;
+}
+
+// The entropy of every sea (lines) and the bits of every shot (bars, coloured by the shooter) along the record.
+// Information chart as inline SVG. x = move index; per board a line of the remaining entropy (log2 of the fleets the
+// sea can still hide, scaled to the largest starting entropy), and per shot a bar of the bits it revealed, scaled to
+// the largest shot into the lower 40% so bars and lines do not collide. A click picks the nearest move (onPick).
+function chart(R, A, at, onPick) {
+  const W = 340, H = 140, pad = 6;
+  const L = Math.max(1, R.log.length);
+  const maxH = Math.max(1, ...A.boards.map((b) => b.start));
+  const maxB = Math.max(1, ...A.shots.map((s) => s.bits));
+  const x = (i) => pad + (i / L) * (W - 2 * pad);
+  const yH = (v) => H - pad - (v / maxH) * (H - 2 * pad);
+  const yB = (v) => H - pad - (v / maxB) * (H * 0.4);
+  let svg = `<svg class="bs-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${t('rp.chart').replace(/["<&]/g, '')}">`;
+  for (const s of A.shots) if (s.bits > 0) svg += `<rect x="${(x(s.i) - 0.9).toFixed(1)}" y="${yB(s.bits).toFixed(1)}" width="1.8" height="${(H - pad - yB(s.bits)).toFixed(1)}" fill="${COLORS[s.seat % COLORS.length]}" opacity=".55"/>`;
+  A.boards.forEach((b, i) => {
+    const d = b.series.map((p, k) => `${k ? 'L' : 'M'}${x(p.i).toFixed(1)} ${yH(p.h).toFixed(1)}`).join('');
+    svg += `<path d="${d}" fill="none" stroke="${COLORS[i % COLORS.length]}" stroke-width="1.6"/>`;
+  });
+  svg += `<line x1="${x(at)}" x2="${x(at)}" y1="0" y2="${H}" class="bs-ch-at"/></svg>`;
+  const el = h('div', { html: svg }).firstElementChild;
+  el.addEventListener('click', (e) => {
+    const r = el.getBoundingClientRect();
+    const i = Math.round(((e.clientX - r.left) / r.width * W - pad) / (W - 2 * pad) * L);
+    onPick(Math.max(0, Math.min(L, i)));
+  });
+  return h('div', { class: 'bs-chartbox' }, el, h('div', { class: 'bs-ch-legend' }, h('span', { class: 'bs-lg-line' }, t('rp.legendEntropy', { n: maxH.toFixed(0) })), h('span', { class: 'bs-lg-bar' }, t('rp.legendBits'))));
+}

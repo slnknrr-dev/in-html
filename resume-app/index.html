@@ -1,0 +1,74 @@
+<!doctype html>
+<!-- resume-app/index.html - Resume Builder editor. The shell of the shared document studio (studio/): fixed regions
+     (top bar, format toolbar, left / stage / right panels, status, overlays) that studio/boot.js fills. The same
+     shell serves every paper-based product; only the entry module (editor.js) decides it is a resume.
+     class="ed-is-loading" on <html>: lets base / editor CSS hide the half-built UI until boot removes the class.
+     Build (singlefile.js) strips these comments. -->
+<html lang="en" class="ed-is-loading">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Resume Builder</title>
+<meta name="description" content="Visual builder for single-file, multilingual resume pages with attachments. Everything stays in your browser.">
+<!-- color-scheme: native controls and scrollbars follow the OS theme before any CSS loads; theme-color per scheme
+     tints the mobile browser chrome to match the shell background tokens. -->
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14171c" media="(prefers-color-scheme: dark)">
+<!-- Favicon as an SVG data: URI (a document with a portrait): no request, works offline. %23 = '#'. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='2' width='26' height='28' rx='5' fill='%232563eb'/%3E%3Ccircle cx='12' cy='11' r='3.5' fill='%23fff'/%3E%3Cpath d='M7 20h18M7 24.5h12M17.5 9.5h7.5M17.5 13h5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E">
+<!-- Cascade order: shared tokens and primitives, then the rich-text editing styles, then the studio layout. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../richtext/richtext.css">
+<link rel="stylesheet" href="../studio/editor.css">
+<!-- Inline rule instead of a file: one product-specific selector. #ed-canvas id (1,0,0) + classes beats the paper
+     stylesheet's guide background; !important because that background is set by generated page CSS whose weight
+     the studio does not control. -->
+<style>
+/* Resume canvas: paper page guides follow the stage-bar toggle. */
+#ed-canvas.ed-noguides .rv-page { background-image: none !important; }
+</style>
+</head>
+<body class="ed-shell">
+<!-- noscript explains the requirement; exported resumes are static HTML and work without JS, the editor cannot. -->
+<noscript><div class="ed-noscript"><p><strong>Resume Builder needs JavaScript.</strong><br>Please enable JavaScript in your browser settings to use the editor. Exported resume pages work without it.</p></div></noscript>
+<!-- Landmark roles + aria-labels on every region; data-i18n-aria lets the studio translate the labels at runtime
+     while the static English text is the fallback before boot. -->
+<header id="ed-top" role="banner"></header>
+<div id="ed-format" role="toolbar" aria-label="Formatting" data-i18n-aria="aria.format"></div>
+<div id="ed-main">
+  <aside id="ed-left" aria-label="Blocks, outline and files" data-i18n-aria="aria.left"></aside>
+  <section id="ed-stage" aria-label="Page" data-i18n-aria="aria.stage">
+    <div id="ed-stagebar"></div>
+    <!-- role=status + aria-live=polite: banners and the status bar are announced without stealing focus. -->
+    <div id="ed-banner" role="status" aria-live="polite" hidden></div>
+    <div id="ed-scroll">
+      <div id="ed-canvas"></div>
+      <div id="ed-chrome" role="toolbar" aria-label="Block" data-i18n-aria="aria.chrome" hidden></div>
+      <div id="ed-drop" hidden></div>
+    </div>
+  </section>
+  <aside id="ed-right" aria-label="Properties" data-i18n-aria="aria.right"></aside>
+</div>
+<footer id="ed-status" role="status" aria-live="polite"></footer>
+<div id="ed-overlays"></div>
+<!-- Loading indicator in markup (visible before any module loads); boot replaces it once ready. -->
+<div id="ed-loading" role="status"><div class="ed-spinner" aria-hidden="true"></div><p data-i18n="app.loading">Loading editor…</p></div>
+<!-- Classic inline script, deliberately not a module: it must run even when module loading fails (file:// CORS
+     block, old browser), which is exactly the case it diagnoses. ES5 syntax for the same reason. 9 s is long enough
+     for a slow first load, short enough that the user is not left with an endless spinner. window.__edReady is set
+     by studio/boot.js. -->
+<script>
+  // Diagnose a module that never starts (e.g. opened via file:// or an old browser).
+  setTimeout(function () {
+    if (window.__edReady) return;
+    var box = document.getElementById('ed-loading');
+    if (!box || box.className.indexOf('ed-load-err') >= 0) return;
+    box.className = 'ed-load-err';
+    box.innerHTML = '<p><strong>The editor could not start.</strong></p><p>Open it through a web server (for example <code>node server.js</code>, then http://127.0.0.1:8080/) in a current Chrome, Edge, Firefox or Safari.</p>';
+  }, 9000);
+</script>
+<!-- Deferred module entry: runs after parsing, so every region above exists. -->
+<script type="module" src="./editor.js"></script>
+</body>
+</html>

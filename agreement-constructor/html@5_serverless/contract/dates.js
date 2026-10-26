@@ -1,0 +1,12 @@
+const isLeap=(y)=>(y%4===0&&y%100!==0)||y%400===0;const MONTH_DAYS=[31,28,31,30,31,30,31,31,30,31,30,31];const daysInMonth=(y,m)=>(m===2&&isLeap(y)?29:MONTH_DAYS[m-1]);const pad=(n,w=2)=>String(n).padStart(w,'0');const fmtISO=(dt)=>(dt?`${pad(dt.y,4)}-${pad(dt.m)}-${pad(dt.d)}`:'');function parseDate(s){if(s&&typeof s==='object'&&Number.isInteger(s.y))s=fmtISO(s);if(typeof s!=='string')return null;const t=s.trim();let m=/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s].*)?$/.exec(t);let y,mo,d;if(m){y=+m[1];mo=+m[2];d=+m[3];}
+else if((m=/^(\d{1,2})[./](\d{1,2})[./](\d{4})$/.exec(t))){d=+m[1];mo=+m[2];y=+m[3];}
+else return null;if(y<1000||y>9999||mo<1||mo>12||d<1||d>daysInMonth(y,mo))return null;return{y,m:mo,d};}
+const isoDate=(s)=>fmtISO(parseDate(s));function dayNumber(dt){let{y}=dt;const{m,d}=dt;y-=m<=2?1:0;const era=Math.floor(y/400);const yoe=y-era*400;const doy=Math.floor((153*(m+(m>2?-3:9))+2)/5)+d-1;const doe=yoe*365+Math.floor(yoe/4)-Math.floor(yoe/100)+doy;return era*146097+doe-719468;}
+function fromDayNumber(n){const z=n+719468;const era=Math.floor(z/146097);const doe=z-era*146097;const yoe=Math.floor((doe-Math.floor(doe/1460)+Math.floor(doe/36524)-Math.floor(doe/146096))/365);const doy=doe-(365*yoe+Math.floor(yoe/4)-Math.floor(yoe/100));const mp=Math.floor((5*doy+2)/153);const d=doy-Math.floor((153*mp+2)/5)+1;const m=mp+(mp<10?3:-9);return{y:yoe+era*400+(m<=2?1:0),m,d};}
+function monthAnchor(y,m,k,day){const mi=(m-1)+k;const yy=y+Math.floor(mi/12);const mm=((mi%12)+12)%12+1;return{y:yy,m:mm,d:Math.min(day,daysInMonth(yy,mm))};}
+function addDays(iso,n){const dt=parseDate(iso);if(!dt||!Number.isFinite(+n))return'';return fmtISO(fromDayNumber(dayNumber(dt)+Math.trunc(+n)));}
+function addMonths(iso,n,anchorDay){const dt=parseDate(iso);if(!dt||!Number.isFinite(+n))return'';return fmtISO(monthAnchor(dt.y,dt.m,Math.trunc(+n),anchorDay||dt.d));}
+function diffDays(a,b){const x=parseDate(a),y=parseDate(b);return x&&y?dayNumber(y)-dayNumber(x):null;}
+function monthsBetween(a,b){const x=parseDate(a),y=parseDate(b);if(!x||!y)return null;let n=(y.y-x.y)*12+(y.m-x.m);const anchor=monthAnchor(x.y,x.m,n,x.d);if(dayNumber(anchor)>dayNumber(y))n--;return n;}
+function cmpDate(a,b){const x=parseDate(a),y=parseDate(b);if(!x||!y)return null;return Math.sign(dayNumber(x)-dayNumber(y));}
+export{isoDate,addDays,addMonths,diffDays,monthsBetween,parseDate,dayNumber,monthAnchor,fmtISO,fromDayNumber,cmpDate};

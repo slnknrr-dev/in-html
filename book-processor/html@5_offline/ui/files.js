@@ -1,0 +1,5 @@
+import{h}from"./dom.js";function fmtBytes(n){n=+n||0;if(n<1024)return n+' B';if(n<1024*1024)return(n/1024).toFixed(n<10240?1:0)+' KB';return(n/1024/1024).toFixed(1)+' MB';}
+function safeFileName(name,fallback='document'){const s=String(name||'').normalize('NFKC').replace(/[\\/:*?"<>|\u0000-\u001f]+/g,' ').replace(/\s+/g,' ').trim();return(s||fallback).slice(0,80);}
+function downloadBlob(blob,name){const url=URL.createObjectURL(blob);const a=h('a',{href:url,download:name,style:{display:'none'}});document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);}
+function pickFiles({accept='',multiple=false}={}){return new Promise((resolve)=>{const inp=h('input',{type:'file',accept,multiple,style:{display:'none'}});let done=false;const finish=(files)=>{if(done)return;done=true;inp.remove();resolve(files);};inp.addEventListener('change',()=>finish(Array.from(inp.files||[])));inp.addEventListener('cancel',()=>finish([]));document.body.append(inp);inp.click();});}
+export{pickFiles,downloadBlob,safeFileName,fmtBytes};

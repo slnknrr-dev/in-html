@@ -1,0 +1,287 @@
+// knowledge-processor/ed-fields.js - field controls of the editor: markup text areas (toolbar, keyboard shortcuts,
+// [[link]] completion), link inputs with page completion, layer pickers, media pickers, colour inputs, list items,
+// grids (tables) and the labelled row around them. Values are written through the callbacks; nothing re-renders.
+//
+// Contract of every control here: built once with an initial value, reports changes through a callback, and never
+// re-renders itself from state. Why: a field that re-rendered on its own commit would lose focus, caret and IME
+// composition mid-word. The caller commits; structural repaints (main.js) rebuild the fields when needed.
+import { h } from '../ui/dom.js';
+import { iconEl } from '../ui/icons.js';
+import { t } from '../ui/i18n.js';
+import { S } from './state.js';
+import { pageLayers } from './model.js';
+
+// Generated ids for label-for wiring; a counter is enough (ids only need to be unique within the document).
+let seq = 0;
+const nid = () => 'kpf' + (++seq);
+
+// Labelled row. Finds the first form control inside `control` and links <label for> to it, so clicking the label
+// focuses the control and screen readers announce the label. A bare checkbox gets the label after it (switch style).
+export function row(label, control, hint, wide = false) {
+  const tgt = control.matches && control.matches('input, select, textarea') ? control : control.querySelector && control.querySelector('input, select, textarea');
+  if (tgt && !tgt.id) tgt.id = nid();
+  const check = tgt && tgt.type === 'checkbox' && control === tgt;
+  return h('div', { class: 'ed-field kp-f' + (check ? ' ed-field-check' : '') + (wide ? ' kp-f-wide' : '') },
+    check ? [control, h('label', { class: 'ed-label', for: tgt.id }, label)] : [h('label', { class: 'ed-label', for: tgt ? tgt.id : null }, label), control],
+    hint ? h('div', { class: 'ed-hint' }, hint) : null);
+}
+
+// spellcheck off by default: most single-line fields are slugs, ids, URLs; prose fields opt in (markupArea).
+export function input(value, onInput, attrs = {}) {
+  const i = h('input', { class: 'ed-input', type: 'text', value: value ?? '', spellcheck: 'false', autocomplete: 'off', ...attrs });
+  i.addEventListener('input', () => onInput(i.value));
+  return i;
+}
+
+// Empty field reports null (not 0): callers decide the default, e.g. `v || 3`. min/max are hints for the
+// spinner only; the browser does not stop typed out-of-range values, so callers clamp.
+export function numInput(value, onInput, { min, max, step = 1 } = {}) {
+  const i = h('input', { class: 'ed-input kp-num', type: 'number', value: value ?? '', min, max, step, inputmode: 'decimal' });
+  i.addEventListener('input', () => onInput(i.value === '' ? null : Number(i.value)));
+  return i;
+}
+
+// role=switch: announced as on/off, matching the toggle look of .ed-switch.
+export function check(value, onChange) {
+  const c = h('input', { type: 'checkbox', class: 'ed-switch', role: 'switch', checked: !!value });
+  c.addEventListener('change', () => onChange(c.checked));
+  return c;
+}
+
+// Values compared as strings: <option value> is always a string, while callers pass numbers or ids.
+export function selectEl(options, value, onChange) {
+  const s = h('select', { class: 'ed-input ed-select' }, options.map((o) => h('option', { value: String(o.v), selected: String(o.v) === String(value) }, o.l)));
+  s.addEventListener('change', () => onChange(s.value));
+  return s;
+}
+
+// <input type=color> cannot be empty (it always holds a colour), so "no colour" is a separate clear button plus
+// the .kp-empty class that fades the swatch. '#3366cc' is only the picker's starting point, not a stored value.
+export function colorEl(value, onChange) {
+  const wrap = h('div', { class: 'kp-color' + (value ? '' : ' kp-empty') });
+  const c = h('input', { type: 'color', class: 'kp-color-in', value: value || '#3366cc', 'aria-label': t('kp.color') });
+  const x = h('button', { type: 'button', class: 'ed-iconbtn ed-sm', title: t('kp.clear'), 'aria-label': t('kp.clear') }, iconEl('close'));
+  c.addEventListener('input', () => { wrap.classList.remove('kp-empty'); onChange(c.value); });
+  x.addEventListener('click', () => { wrap.classList.add('kp-empty'); onChange(''); });
+  wrap.append(c, x);
+  return wrap;
+}
+
+// Pages for link completion: <datalist id="kp-pages"> kept up to date by the editor.
+// One shared <datalist> for every link input (list="kp-pages"): native completion, no custom popup. Rebuilt on
+// every change (main.js), cheap for hundreds of options. Only public pages: 451 slugs must not be suggested.
+export function updatePageList() {
+  let dl = document.getElementById('kp-pages');
+  if (!dl) { dl = h('datalist', { id: 'kp-pages' }); document.body.append(dl); }
+  const opts = [];
+  for (const p of S.kb ? S.kb.pages : []) if (p.access === 'public') opts.push(h('option', { value: p.slug }, p.title));
+  for (const c of S.kb ? S.kb.cats : []) opts.push(h('option', { value: 'category:' + c.slug }, c.name));
+  dl.replaceChildren(...opts);
+}
+
+export function linkInput(value, onInput) {
+  return input(value, onInput, { list: 'kp-pages', placeholder: t('kp.linkPh') });
+}
+
+// Layers usable on the edited page.
+export function layerOptions(obj) {
+  return pageLayers(S.kb ? S.kb.layers : [], obj).map((l) => ({ v: l.id, l: l.label || l.id }));
+}
+
+export function layerSelect(value, onChange, obj) {
+  return selectEl([{ v: '', l: t('kp.noLayer') }, ...layerOptions(obj)], value || '', onChange);
+}
+
+// Toggle chips with aria-pressed; the chip updates itself locally (no re-render) and reports the full list.
+export function layersMulti(values, onChange, obj) {
+  const cur = new Set(values || []);
+  const box = h('div', { class: 'kp-chips' });
+  const opts = layerOptions(obj);
+  if (!opts.length) box.append(h('span', { class: 'ed-hint' }, t('kp.noLayersYet')));
+  for (const o of opts) {
+    const b = h('button', { type: 'button', class: 'ed-chip' + (cur.has(o.v) ? ' ed-on' : ''), 'aria-pressed': String(cur.has(o.v)) }, o.l);
+    b.addEventListener('click', () => {
+      if (cur.has(o.v)) cur.delete(o.v); else cur.add(o.v);
+      b.classList.toggle('ed-on', cur.has(o.v));
+      b.setAttribute('aria-pressed', String(cur.has(o.v)));
+      // Keep the order of the layer list.
+      onChange(opts.map((x) => x.v).filter((v) => cur.has(v)));
+    });
+    box.append(b);
+  }
+  return box;
+}
+
+// ---- markup text area
+
+// Markup inserted around the selection by toolbar/shortcuts: [before, after]. Syntax defined by markup.js.
+const WRAPS = {
+  bold: ['**', '**'], italic: ['*', '*'], link: ['[[', ']]'], ref: ['{{ref|', '}}'], cite: ['{{cite|author=|title=|year=|url=', '}}'],
+  layer: ['{{layer|', '}}'], tip: ['{{tip|', '|…}}'], ph: ['{{placeholder|', '}}'], code: ['`', '`'], mark: ['==', '=='],
+};
+
+// setRangeText (not value assignment) keeps the browser's own undo stack for the textarea in most engines and
+// leaves the scroll position alone. Empty selection: caret placed between the markers; otherwise the wrapped text
+// stays selected. The synthetic 'input' event runs the same commit path as typing.
+function wrapSel(ta, [a, b], layerId) {
+  const s = ta.selectionStart, e = ta.selectionEnd, v = ta.value;
+  const pre = a === '{{layer|' ? `{{layer|${layerId || 'id'}|` : a;
+  ta.setRangeText(pre + v.slice(s, e) + b, s, e, 'select');
+  if (s === e) ta.setSelectionRange(s + pre.length, s + pre.length);
+  else ta.setSelectionRange(s + pre.length, e + pre.length);
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+  ta.focus();
+}
+
+// Inserts at the start of the caret's line (lastIndexOf('\n', s - 1) + 1 is 0 on the first line).
+function linePrefix(ta, prefix) {
+  const v = ta.value, s = ta.selectionStart;
+  const ls = v.lastIndexOf('\n', s - 1) + 1;
+  ta.setRangeText(prefix, ls, ls, 'end');
+  ta.dispatchEvent(new Event('input', { bubbles: true }));
+  ta.focus();
+}
+
+// Reset to auto first, otherwise scrollHeight never shrinks. Capped at 70% of the viewport: a huge text keeps a
+// scrollbar instead of pushing the rest of the editor off screen.
+function autoGrow(ta) {
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(window.innerHeight * 0.7, ta.scrollHeight + 2) + 'px';
+}
+
+// [[ completion: a list of pages under the text area.
+// [[ completion. The trigger is the last '[[' before the caret, valid only while no ']]', '|' or newline follows
+// it and it is at most 60 chars back: past that the user is not typing a link target any more.
+function linkComplete(ta) {
+  const box = h('ul', { class: 'kp-ac', role: 'listbox', hidden: true });
+  let items = [], sel = 0, start = -1;
+  const close = () => { box.hidden = true; items = []; start = -1; };
+  const choose = (p) => {
+    const end = ta.selectionStart;
+    ta.setRangeText(p.slug + ']]', start, end, 'end');
+    close();
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    ta.focus();
+  };
+  const paint = () => {
+    box.replaceChildren(...items.map((p, i) => {
+      const li = h('li', { role: 'option', 'aria-selected': String(i === sel), class: i === sel ? 'kp-on' : '' }, h('b', {}, p.title), h('small', {}, p.slug));
+      // mousedown + preventDefault: the textarea keeps focus (a click would blur it first and close the list).
+      li.addEventListener('mousedown', (e) => { e.preventDefault(); choose(p); });
+      return li;
+    }));
+  };
+  ta.addEventListener('input', () => {
+    const v = ta.value, c = ta.selectionStart;
+    const i = v.lastIndexOf('[[', c);
+    if (i < 0 || v.slice(i, c).includes(']]') || v.slice(i, c).includes('|') || v.slice(i, c).includes('\n') || c - i > 60) { close(); return; }
+    start = i + 2;
+    const q = v.slice(start, c).toLowerCase();
+    items = (S.kb ? S.kb.pages : []).filter((p) => p.access === 'public' && (p.slug.includes(q) || (p.title || '').toLowerCase().includes(q))).slice(0, 8);
+    sel = 0;
+    if (!items.length) { close(); return; }
+    paint();
+    box.hidden = false;
+  });
+  ta.addEventListener('keydown', (e) => {
+    if (box.hidden) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); sel = (sel + 1) % items.length; paint(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = (sel - 1 + items.length) % items.length; paint(); }
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); choose(items[sel]); }
+    // stopPropagation: Escape closes only the list, not the surrounding dialog.
+    else if (e.key === 'Escape') { e.stopPropagation(); close(); }
+  });
+  // Delayed close: lets a pending click on an item land before the list disappears.
+  ta.addEventListener('blur', () => setTimeout(close, 150));
+  return box;
+}
+
+// dir=auto: the paragraph direction follows the first strong character, so RTL text edits naturally.
+// Autogrow runs in the next frame: before insertion into the document scrollHeight is 0.
+export function markupArea(value, onInput, { rows = 5, obj = null, multiline = true, toolbar = true } = {}) {
+  const ta = h('textarea', { class: 'ed-input ed-textarea kp-markup', rows, spellcheck: 'true', dir: 'auto' });
+  ta.value = value || '';
+  ta.addEventListener('input', () => { onInput(ta.value); autoGrow(ta); });
+  requestAnimationFrame(() => autoGrow(ta));
+  ta.addEventListener('keydown', (e) => {
+    // Ctrl/Cmd+B/I/K, as in common editors. altKey excluded: AltGr combinations type characters on many layouts.
+    if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === 'b') { e.preventDefault(); wrapSel(ta, WRAPS.bold); }
+    else if (k === 'i') { e.preventDefault(); wrapSel(ta, WRAPS.italic); }
+    else if (k === 'k') { e.preventDefault(); wrapSel(ta, WRAPS.link); }
+  });
+  const wrap = h('div', { class: 'kp-mk' });
+  if (toolbar) {
+    const tb = h('div', { class: 'kp-mk-tb', role: 'toolbar', 'aria-label': t('kp.format') });
+    const btn = (key, label, fn) => {
+      const b = h('button', { type: 'button', class: 'kp-mk-b', title: t('kp.mk.' + key), 'aria-label': t('kp.mk.' + key) }, label);
+      // Toolbar buttons must not take focus: the textarea's selection would be lost before the click handler runs.
+      b.addEventListener('mousedown', (e) => e.preventDefault());
+      b.addEventListener('click', fn);
+      tb.append(b);
+    };
+    btn('bold', h('b', {}, 'B'), () => wrapSel(ta, WRAPS.bold));
+    btn('italic', h('i', {}, 'I'), () => wrapSel(ta, WRAPS.italic));
+    btn('link', '[[ ]]', () => wrapSel(ta, WRAPS.link));
+    if (multiline) {
+      btn('heading', 'H', () => linePrefix(ta, '## '));
+      btn('list', '•', () => linePrefix(ta, '- '));
+      btn('quote', '❝', () => linePrefix(ta, '> '));
+    }
+    btn('ref', '[1]', () => wrapSel(ta, WRAPS.ref));
+    btn('cite', '“”', () => wrapSel(ta, WRAPS.cite));
+    btn('layer', '◧', () => {
+      const ls = layerOptions(obj);
+      wrapSel(ta, WRAPS.layer, ls[0] ? ls[0].v : 'id');
+    });
+    btn('tip', '?', () => wrapSel(ta, WRAPS.tip));
+    btn('ph', '▭', () => wrapSel(ta, WRAPS.ph));
+    btn('code', '</>', () => wrapSel(ta, WRAPS.code));
+    wrap.append(tb);
+  }
+  wrap.append(ta, linkComplete(ta));
+  wrap.focusInput = () => ta.focus();
+  return wrap;
+}
+
+// One line of inline markup ([[ completion works here too).
+export function lineMarkup(value, onInput) {
+  const i = input(value, onInput, { dir: 'auto' });
+  return h('div', { class: 'kp-mk kp-mk-line' }, i, linkComplete(i));
+}
+
+// ---- grid (table cells)
+// Table editor on a private copy; each change emits a fresh deep copy so the caller never shares arrays with
+// the editor. Ragged rows are displayed padded to the widest row; Enter moves down a column like a spreadsheet.
+export function gridEditor(rows, onChange) {
+  let data = (rows && rows.length ? rows : [['']]).map((r) => r.slice());
+  const box = h('div', { class: 'kp-grid' });
+  const emit = () => onChange(data.map((r) => r.slice()));
+  function paint() {
+    const w = Math.max(1, ...data.map((r) => r.length));
+    const table = h('table', { class: 'kp-grid-t' });
+    data.forEach((r, ri) => {
+      const tr = h('tr');
+      for (let ci = 0; ci < w; ci++) {
+        const inp = h('input', { class: 'ed-input', value: r[ci] ?? '', dir: 'auto', 'aria-label': `${ri + 1}:${ci + 1}` });
+        // KNOWN DEFECT: in a ragged row, typing into a padded cell two or more columns past the row end leaves a hole
+        // (sparse array) that JSON saves as null, not ''. Fix: pad the row first, e.g. while (data[ri].length < ci) data[ri].push('');
+        inp.addEventListener('input', () => { data[ri][ci] = inp.value; emit(); });
+        inp.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); const nx = table.rows[ri + 1]; if (nx) nx.cells[ci].querySelector('input').focus(); }
+        });
+        tr.append(h('td', {}, inp));
+      }
+      table.append(tr);
+    });
+    const ctl = h('div', { class: 'kp-grid-ctl' },
+      h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => { data.push(Array(w).fill('')); emit(); paint(); } }, iconEl('plus'), t('kp.row')),
+      h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => { data = data.map((r) => r.concat([''])); emit(); paint(); } }, iconEl('plus'), t('kp.column')),
+      h('button', { type: 'button', class: 'ed-btn ed-sm', disabled: data.length < 2, onclick: () => { data.pop(); emit(); paint(); } }, iconEl('minus'), t('kp.row')),
+      h('button', { type: 'button', class: 'ed-btn ed-sm', disabled: w < 2, onclick: () => { data = data.map((r) => r.slice(0, w - 1)); emit(); paint(); } }, iconEl('minus'), t('kp.column')));
+    box.replaceChildren(h('div', { class: 'kp-grid-wrap' }, table), ctl);
+  }
+  paint();
+  return box;
+}

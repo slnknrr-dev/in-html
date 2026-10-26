@@ -1,0 +1,6 @@
+const MARKS=/[̀-ͯ᪰-᫿᷀-᷿⃐-⃿︠-︯]/g;function fold(s){let t=String(s==null?'':s);try{t=t.normalize('NFKD');}catch{}
+return t.replace(MARKS,'').toLowerCase().replace(/ё/g,'е').replace(/ß/g,'ss').replace(/\s+/g,' ').trim();}
+const WORD_RE=/[\p{L}\p{N}][\p{L}\p{M}\p{N}'’-]*/gu;function words(s){return(fold(s).match(WORD_RE)||[]).map((w)=>w.replace(/['’-]+$/g,'')).filter(Boolean);}
+const CYR_KA_END=/[аеёиоуыэюяіїєйьიაეოუ]{1,2}$/;const PLURAL_TAIL=new Set(['','s','es']);function stemOf(w){const s=String(w||'');if(s.length<5)return s;if(CYR_KA_END.test(s))return s.replace(CYR_KA_END,'').length>=4?s.replace(CYR_KA_END,''):s.slice(0,-1);return s.replace(/(?:es|s|e)$/,'');}
+function stemEq(a,b){if(a===b)return true;if(!a||!b)return false;const short=a.length<=b.length?a:b;const l=short===a?b:a;if(short.length<3)return false;if(short.length<4)return l.startsWith(short)&&PLURAL_TAIL.has(l.slice(short.length));const s=stemOf(short);if(!l.startsWith(s))return false;return l.length-s.length<=(s.length>=6?7:5);}
+export{words,stemEq};

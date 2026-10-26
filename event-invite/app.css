@@ -1,0 +1,302 @@
+/* event-invite/app.css - Event Invite: designer page (template chips, content languages, forms, theme and ornament
+   pickers, the sticky preview stage with a phone / wide frame, exports), guests page (paste and reply import, the
+   summary with tiles, capacity, poll bars and chips, the guest list as rows on wide screens and cards on phones), and
+   the print sheets (A5 / A6 invitation cards, folded name cards). Loaded third, after ui/base.css + ui/app.css.
+
+   CONTRACT
+   - Namespace `ei-` (this app), `ed-` (shared primitives, ui/base.css), `ap-` (shell, ui/app.css). `iv-` belongs to
+     the invitation document itself: its CSS lives as a string in invite.js and is reused here only inside print rules.
+   - Specificity budget: one class; two for state/context (`.ei-tpl.ei-on`, `.ei-g-filters .ed-select`). The one id
+     (#ei-print) is a JS-created print container; it is the only reason for !important (see the print section).
+   - Colours via --ed-* tokens so both themes work. Raw colours appear only where the colour is content, not chrome:
+     the phone bezel (#111827, a device is dark in either theme), the iframe paper (#fff, the invitation draws its own
+     background), ornament previews (gold/wine = the ornament's own palette) and print (paper is white).
+   - Custom properties set inline from JS (--a --b --p --c --s on theme chips; --acc --ink --paper --seal --head on
+     print sheets) carry per-item data into CSS. Alternative (inline background on each child) would duplicate the
+     gradient/box-shadow recipes in JS and split the look between two files.
+   - State: .ei-on = selected (chips, themes, ornaments); data-st="yes|no|..." on guest rows = RSVP status, styled by
+     attribute so JS writes one value and never toggles a class set. */
+
+/* 1440px: wider than the usual 1320px because the designer shows a form column plus a full phone frame. */
+.ei-design, .ei-guests { max-width: 1440px; }
+/* Vertical stack with gap (no margin collapsing). min-width:0 lets long URLs / names shrink inside grid tracks. */
+.ei-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.ei-lead { margin: 0 0 4px; }
+/* Links styled as buttons (export downloads, open-in-tab). .ed-btn sets no color / text-decoration because it
+   targets <button>; an <a> would inherit link blue + underline. Tag+class (0,1,1) beats .ed-btn (0,1,0). */
+a.ed-btn { color: inherit; text-decoration: none; }
+/* Redundant: ui/base.css already has `[hidden] { display: none !important; }`. Harmless; kept as a local guarantee
+   in case this sheet is used without base.css. */
+a.ed-btn[hidden] { display: none; }
+/* Small numeric inputs (plus-ones, capacity). text-align:end: digits align right like a table column. */
+.ei-num { width: 72px; text-align: end; }
+
+/* ---------------------------------------------------------------- designer layout */
+/* Named areas: on desktop the stage spans both rows of the right column; the mobile media query only re-lists the
+   areas ("tpl" "stage" "ctl") so the preview comes right after the template choice without touching DOM order.
+   minmax(330px,440px): two side-by-side fields stay usable; capped so the stage gets the rest. */
+.ei-work {
+  display: grid; gap: 18px; align-items: start;
+  grid-template-columns: minmax(330px, 440px) minmax(0, 1fr);
+  grid-template-areas: "tpl stage" "ctl stage";
+}
+.ei-tpl-card { grid-area: tpl; }
+.ei-ctl { grid-area: ctl; }
+.ei-stage-col { grid-area: stage; }
+/* Sticky preview only when it fits (min-height 640px): a sticky stage taller than the screen could never be
+   scrolled to its bottom. top:72px = shell header + gap. Works because align-items:start keeps the grid item at
+   content height; a stretched item has nowhere to stick. */
+@media (min-width: 901px) and (min-height: 640px) { .ei-stage-col { position: sticky; top: 72px; } }
+@media (max-width: 900px) {
+  .ei-work { grid-template-columns: minmax(0, 1fr); grid-template-areas: "tpl" "stage" "ctl"; }
+}
+
+/* ---------------------------------------------------------------- template chips */
+/* auto-fill + minmax(118px,1fr): as many columns as fit, no media queries. auto-fill (not auto-fit) keeps empty
+   tracks, so a short last row does not stretch chips wider than the rest. */
+.ei-tpls { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); }
+.ei-tpl {
+  display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 10px; text-align: start;
+  border: 1px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel-2); color: var(--ed-text);
+  font-size: 12.5px; font-weight: 600; line-height: 1.15; transition: border-color .15s, background .15s;
+}
+.ei-tpl:hover { border-color: var(--ed-border-strong); }
+/* Selected: inset box-shadow doubles the border visually (2px) without changing the box size, so the grid does not
+   shift when selection moves. A real 2px border would reflow by 1px on each side. */
+.ei-tpl.ei-on { color: var(--ed-accent); border-color: var(--ed-accent); background: var(--ed-accent-weak); box-shadow: inset 0 0 0 1px var(--ed-accent); }
+/* Emoji icon: line-height:1 removes the font's tall line box that would push the label off-centre. */
+.ei-tpl-i { font-size: 18px; line-height: 1; flex: none; }
+/* The hint is a grid child; 1 / -1 spans every auto-filled column however many there are. */
+.ei-tpl-hint { grid-column: 1 / -1; margin: 4px 0 0; }
+
+/* ---------------------------------------------------------------- languages */
+.ei-lchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ei-lchip {
+  padding: 5px 11px; border-radius: 999px; border: 1px solid var(--ed-border); background: var(--ed-panel-2);
+  color: var(--ed-muted); font-size: 12.5px; font-weight: 600;
+}
+.ei-lchip:hover { color: var(--ed-text); border-color: var(--ed-border-strong); }
+/* Language chips are a multi-select of content languages: solid accent (stronger than the template outline) because
+   several can be on at once and must read as a set. */
+.ei-lchip.ei-on { color: var(--ed-accent-text); background: var(--ed-accent); border-color: var(--ed-accent); }
+
+/* ---------------------------------------------------------------- when */
+.ei-words-box { padding: 10px 12px; border-radius: 10px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.ei-when-words { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
+.ei-when-words li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px; }
+/* Label column: min-width keeps the words aligned across rows without a table. */
+.ei-when-words b { font-size: 11px; color: var(--ed-muted); min-width: 22px; }
+.ei-count { font-size: 11.5px; font-weight: 650; padding: 1px 8px; border-radius: 999px; color: var(--ed-accent); background: var(--ed-accent-weak); }
+
+/* ---------------------------------------------------------------- programme */
+.ei-pg-rows { display: flex; flex-direction: column; gap: 6px; }
+/* Programme row: time | title | buttons. 104px fits a native time input in most locales; minmax(0,1fr) lets the
+   title shrink instead of overflowing. The multi-day variant prepends a date column. */
+.ei-pg-row { display: grid; grid-template-columns: 104px minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.ei-pg-days .ei-pg-row { grid-template-columns: 136px 104px minmax(0, 1fr) auto; }
+.ei-pg-btns { display: flex; gap: 0; }
+/* Phones: buttons go to their own row; in the multi-day variant the title (3rd child) takes a full row. nth-child
+   relies on the DOM order date, time, title emitted by main.js; reordering there breaks this layout. */
+@media (max-width: 480px) {
+  .ei-pg-row { grid-template-columns: 96px minmax(0, 1fr); }
+  .ei-pg-days .ei-pg-row { grid-template-columns: minmax(0, 1fr) 96px; }
+  .ei-pg-days .ei-pg-row > input:nth-child(3) { grid-column: 1 / -1; }
+  .ei-pg-btns { grid-column: 1 / -1; justify-content: flex-end; }
+}
+
+/* ---------------------------------------------------------------- dress code */
+.ei-swatches { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ei-sw { display: inline-flex; align-items: center; gap: 2px; padding: 2px 2px 2px 4px; border: 1px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel-2); }
+
+/* ---------------------------------------------------------------- design pickers */
+/* Theme preview drawn purely in CSS from custom properties set inline per chip (--a/--b background gradient,
+   --p paper, --c seal, --s secondary). No thumbnails to ship; a new theme needs no new image. */
+.ei-themes { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); }
+.ei-theme {
+  display: flex; flex-direction: column; gap: 5px; padding: 5px; border-radius: 12px; border: 1px solid var(--ed-border);
+  background: var(--ed-panel-2); color: var(--ed-text); font-size: 11.5px; font-weight: 600; text-align: center;
+}
+.ei-theme-art { position: relative; display: block; height: 46px; border-radius: 8px; background: linear-gradient(160deg, var(--a), var(--b)); }
+.ei-theme-art i { position: absolute; inset: 9px 16px; border-radius: 3px; background: var(--p); box-shadow: 0 2px 6px rgba(0, 0, 0, .2); }
+/* Seal dot via ::after centred with negative margin (-6px = half its size). The second dot is a box-shadow offset 9px
+   with -2px spread (smaller), so one pseudo element draws two circles. */
+.ei-theme-art i::after { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; margin: -6px; border-radius: 50%; background: var(--c); box-shadow: 9px 0 0 -2px var(--s); }
+.ei-theme.ei-on, .ei-orn.ei-on { border-color: var(--ed-accent); box-shadow: inset 0 0 0 1px var(--ed-accent); color: var(--ed-accent); }
+.ei-orns { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); }
+.ei-orn {
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px; border-radius: 10px; border: 1px solid var(--ed-border);
+  background: var(--ed-panel-2); color: var(--ed-text); font-size: 11.5px; font-weight: 600;
+}
+/* Ornament previews use the ornament's own palette (gold stroke, .o2 wine, .o3 pale gold) rather than tokens: the
+   chip shows what the card will look like, and the card ignores the UI theme. */
+.ei-orn-art { display: block; width: 100%; color: #a07f35; }
+.ei-orn-art svg { display: block; width: 100%; height: 26px; }
+.ei-orn-art .o2 { fill: #9b2c2c; }
+.ei-orn-art .o3 { fill: #cdb68a; }
+
+/* ---------------------------------------------------------------- stage */
+.ei-stage { padding: 10px; }
+.ei-stage-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.ei-stage-bar .ed-select { width: auto; }
+.ei-stage-in {
+  /* Dotted "canvas" backdrop: a 1px radial dot repeated every 16px. Colour is a token mix so it follows the theme. */
+  display: flex; justify-content: center; padding: 14px; border-radius: 12px; background-color: var(--ed-stage);
+  background-image: radial-gradient(color-mix(in srgb, var(--ed-text) 8%, transparent) 1px, transparent 1.3px); background-size: 16px 16px;
+}
+/* Width transition animates the switch between the wide and phone frames. */
+.ei-device { width: 100%; transition: width .25s; }
+/* min(100%, 392px): phone width capped, but never wider than the column on small screens. */
+.ei-device.ei-phone { width: min(100%, 392px); padding: 10px; border-radius: 34px; background: #111827; box-shadow: 0 20px 40px -18px rgba(0, 0, 0, .55); }
+/* Height: viewport minus header + toolbar (250px), capped at 760px, floored at 480px so the invitation is never a
+   sliver on short screens. The iframe isolates the invitation's own CSS (iv-*) from the app's stylesheets. */
+.ei-frame { display: block; width: 100%; height: min(760px, calc(100vh - 250px)); min-height: 480px; border: 0; border-radius: 10px; background: #fff; }
+.ei-phone .ei-frame { border-radius: 24px; }
+/* Below 900px the stage is not sticky; a fixed height avoids 100vh jumps from mobile URL bars. */
+@media (max-width: 900px) { .ei-frame { height: 620px; } }
+@media (max-width: 480px) { .ei-stage-in { padding: 8px; } .ei-device.ei-phone { padding: 6px; border-radius: 26px; } }
+
+.ei-x { margin-top: 8px; }
+.ei-details { margin-top: 12px; border: 1px solid var(--ed-border); border-radius: 10px; padding: 8px 10px; background: var(--ed-panel-2); }
+/* Custom disclosure: hide the native marker (list-style:none for standards browsers, ::-webkit-details-marker for
+   Safari) and rotate our chevron icon on [open]. */
+.ei-details > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 600; font-size: 13px; list-style: none; }
+.ei-details > summary::-webkit-details-marker { display: none; }
+.ei-details > summary .ed-ic { transition: transform .15s; }
+.ei-details[open] > summary .ed-ic { transform: rotate(90deg); }
+/* .ics preview: pre-wrap keeps line structure; overflow-wrap:anywhere breaks long URL lines. */
+.ei-ics-text { margin: 8px 0 0; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11.5px; }
+.ei-proj { padding-top: 10px; border-top: 1px solid var(--ed-border); }
+
+/* ---------------------------------------------------------------- guests layout */
+/* Guests page: import/summary aside + list. Breakpoint 980px is wider than the designer's 900px because the list
+   needs room for six columns. order:-1 puts the list first on narrow screens without changing DOM order (tab order
+   still follows DOM: aside first, an accepted trade-off). */
+.ei-g-work { display: grid; gap: 18px; align-items: start; grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); }
+@media (max-width: 980px) { .ei-g-work { grid-template-columns: minmax(0, 1fr); } .ei-g-main { order: -1; } }
+
+.ei-tiles { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+.ei-tile { display: flex; flex-direction: column; gap: 1px; padding: 10px 12px; border-radius: 12px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.ei-tile-n { font-size: 24px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.ei-tile span { font-size: 12px; color: var(--ed-muted); font-weight: 600; }
+.ei-tile small { font-size: 11px; color: var(--ed-muted); }
+/* Status variants colour only the number; the label stays muted, so colour is not the sole signal. */
+.ei-tile-yes .ei-tile-n { color: var(--ed-ok); }
+.ei-tile-no .ei-tile-n { color: var(--ed-danger); }
+.ei-tile-maybe .ei-tile-n, .ei-tile-waitlist .ei-tile-n { color: var(--ed-warn); }
+.ei-tile-seats { background: var(--ed-accent-weak); border-color: color-mix(in srgb, var(--ed-accent) 30%, transparent); }
+.ei-tile-seats .ei-tile-n { color: var(--ed-accent); }
+.ei-cap-row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-end; margin-top: 12px; }
+.ei-cap-row .ed-field { flex: 0 0 auto; }
+.ei-cap-bar { flex: 1 1 220px; min-width: 0; }
+/* Capacity bar: the span sits above the fill (position:relative paints after the absolute fill in DOM order), so
+   the text stays readable at any fill width. overflow:hidden clips the fill to the rounded shape. inset: 0 auto 0 0
+   anchors the fill left; JS sets its width. .ei-almost / .ei-over recolour by threshold. */
+.ei-bar { position: relative; height: 26px; border-radius: 999px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); overflow: hidden; }
+.ei-bar i { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--ed-ok) 55%, transparent); }
+.ei-bar.ei-almost i { background: color-mix(in srgb, var(--ed-warn) 60%, transparent); }
+.ei-bar.ei-over i { background: color-mix(in srgb, var(--ed-danger) 55%, transparent); }
+.ei-bar span { position: relative; display: block; padding: 0 12px; line-height: 24px; font-size: 12px; font-weight: 650; }
+.ei-polls { display: flex; flex-direction: column; gap: 5px; margin-top: 14px; }
+/* Poll row: label | bar | count. 36px fits three tabular digits. */
+.ei-poll { display: grid; grid-template-columns: minmax(90px, 150px) minmax(0, 1fr) 36px; gap: 8px; align-items: center; font-size: 12.5px; }
+.ei-poll-b { height: 10px; border-radius: 999px; background: var(--ed-panel-2); overflow: hidden; }
+.ei-poll-b i { display: block; height: 100%; border-radius: 999px; background: var(--ed-accent); }
+.ei-poll-yes .ei-poll-b i { background: var(--ed-ok); }
+.ei-poll-no .ei-poll-b i { background: var(--ed-danger); }
+/* maybeNo: camelCase status key used verbatim as a class suffix; keep status keys and these classes in sync. */
+.ei-poll-maybe .ei-poll-b i, .ei-poll-maybeNo .ei-poll-b i { background: var(--ed-warn); }
+.ei-poll-none .ei-poll-b i { background: var(--ed-faint); }
+.ei-poll b { text-align: end; font-variant-numeric: tabular-nums; }
+.ei-chipsets { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.ei-chip { display: inline-flex; gap: 6px; align-items: baseline; }
+.ei-chip b { font-variant-numeric: tabular-nums; }
+.ei-chip small { color: var(--ed-muted); }
+
+/* ---------------------------------------------------------------- guest list */
+.ei-g-bar { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.ei-g-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.ei-g-filters .ei-g-q { flex: 1 1 200px; width: auto; }
+.ei-g-filters .ed-select { width: auto; flex: 0 1 auto; }
+.ei-g-count { font-size: 12px; color: var(--ed-muted); }
+.ei-g-list { display: flex; flex-direction: column; }
+/* Wide layout: a CSS-grid "table" (name, email, party size, status, note, buttons) built from divs, so the same row
+   markup re-flows into cards at the breakpoints below. A real <table> cannot re-flow without display overrides that
+   drop its semantics. */
+.ei-g-row {
+  display: grid; gap: 6px 8px; align-items: start; padding: 8px 4px; border-bottom: 1px solid var(--ed-border);
+  grid-template-columns: minmax(150px, 1.5fr) minmax(120px, 1fr) 70px minmax(150px, 1fr) minmax(70px, .6fr) auto;
+}
+/* Header row shares the grid template; hidden once rows become cards (labels move into .ei-g-mlabel). */
+.ei-g-head { padding-top: 0; font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: var(--ed-muted); }
+.ei-g-cell { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ei-g-cell .ed-input { height: 30px; font-size: 13px; }
+.ei-g-email { color: var(--ed-muted); }
+.ei-g-name { font-weight: 600; }
+/* Per-cell labels: hidden in table mode (the header row names the columns), shown in card mode. */
+.ei-g-mlabel { display: none; font-size: 11px; color: var(--ed-muted); }
+.ei-g-st { flex-direction: row; flex-wrap: wrap; align-items: center; }
+.ei-g-st .ed-select { flex: 1 1 100px; height: 30px; font-size: 13px; }
+.ei-g-plus { display: inline-flex; align-items: center; gap: 2px; font-size: 12px; color: var(--ed-muted); }
+.ei-g-plus .ei-num { width: 56px; }
+.ei-g-btns { flex-direction: row; gap: 0; }
+/* Status stripe: inset box-shadow draws a left bar without changing the box model or the border-bottom. */
+.ei-g-row[data-st="yes"] { box-shadow: inset 3px 0 0 var(--ed-ok); }
+.ei-g-row[data-st="no"] { box-shadow: inset 3px 0 0 var(--ed-danger); }
+.ei-g-row[data-st="maybe"], .ei-g-row[data-st="maybeNo"], .ei-g-row[data-st="waitlist"] { box-shadow: inset 3px 0 0 var(--ed-warn); }
+/* 1180px: six columns become a three-column card; header hidden, per-cell labels shown. */
+@media (max-width: 1180px) {
+  .ei-g-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 70px; }
+  .ei-g-head { display: none; }
+  .ei-g-mlabel { display: block; }
+  .ei-g-row { padding: 10px 8px; }
+}
+/* Phones: two columns; identity and status cells take full rows. */
+@media (max-width: 560px) {
+  .ei-g-row { grid-template-columns: minmax(0, 1fr) 76px; }
+  .ei-g-who, .ei-g-st { grid-column: 1 / -1; }
+}
+
+/* ---------------------------------------------------------------- print */
+/* Print container is created by JS (main.js / guests.js) as a body child; never visible on screen. */
+#ei-print { display: none; }
+@media print {
+  /* Printing mode: JS adds body.ei-printing, calls print(), and removes the sheet on afterprint.
+     `> :not(#ei-print)` hides every other body child (shell, dialogs); !important beats their own display rules,
+     whose weight this file does not control. */
+  body.ei-printing { display: block; background: #fff; min-height: 0; margin: 0; }
+  body.ei-printing > :not(#ei-print) { display: none !important; }
+  /* !important needed: `#ei-print { display: none }` above is an id rule (1,0,0); only !important lifts it in print. */
+  body.ei-printing #ei-print { display: block !important; }
+  #ei-print.ei-print { background: none; min-height: 0; }
+  /* A5 card in physical units (148x210mm). break-after:page = one card per sheet; print-color-adjust:exact keeps the
+     paper colour / gradients that browsers drop by default to save ink. */
+  .ei-print .iv-card {
+    width: 148mm; height: 210mm; margin: 0; border-radius: 0; box-shadow: none; padding: 16mm 13mm 12mm; font-size: 10.5pt;
+    display: flex; flex-direction: column; justify-content: center; break-after: page; overflow: hidden;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .ei-print .iv-card:last-child { break-after: auto; }
+  .ei-print .iv-c { width: 22mm; height: 22mm; }
+  .ei-print .iv-title { font-size: 2.6em; }
+  .ei-print .iv-sec { margin-top: 5mm; }
+  .ei-print .iv-qr-img { width: 26mm; height: 26mm; padding: 1mm; }
+  /* A6 variant: smaller type, programme and lead dropped to fit a quarter sheet. */
+  .ei-a6 .iv-card { width: 105mm; height: 148mm; padding: 10mm 8mm 8mm; font-size: 7.6pt; }
+  .ei-a6 .iv-c { width: 14mm; height: 14mm; }
+  .ei-a6 .iv-pg-sec, .ei-a6 .iv-lead { display: none; }
+  .ei-a6 .iv-qr-img { width: 20mm; height: 20mm; }
+
+  /* Folded name cards (tents): two per row. display:grid needs !important because the sheet is #ei-print (id rule,
+     display:none) and .ei-tents is only (0,1,0). */
+  .ei-tents { display: grid !important; grid-template-columns: repeat(2, 96mm); gap: 0; justify-content: center; }
+  .ei-tent { width: 96mm; height: 128mm; display: flex; flex-direction: column; outline: .2mm dashed #9ca3af; break-inside: avoid; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .ei-tent-half { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3mm; padding: 6mm; text-align: center; background: var(--paper); color: var(--ink); }
+  /* The back half is rotated 180deg so after folding along the dotted line both faces read upright. */
+  .ei-tent-back { transform: rotate(180deg); border-bottom: .2mm dotted #9ca3af; }
+  .ei-tent-orn { display: block; width: 50mm; color: var(--acc); }
+  .ei-tent-orn svg { display: block; width: 100%; height: auto; }
+  .ei-tent-orn .o2 { fill: var(--seal); }
+  .ei-tent-orn .o3 { fill: color-mix(in srgb, var(--acc) 55%, var(--paper)); }
+  .ei-tent b { font: 400 20pt/1.15 var(--head); overflow-wrap: anywhere; }
+  .ei-tent small { font: 600 9pt/1.2 system-ui, sans-serif; letter-spacing: .12em; text-transform: uppercase; color: var(--acc); }
+}

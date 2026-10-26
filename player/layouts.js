@@ -1,0 +1,190 @@
+// player/layouts.js - the player-layout constructor's model: a now-playing screen is a list of rows, each row a list
+// of controls with options (buttons, seek-bar styles, waveform, cover, texts, lyrics and queue panels, visualizers,
+// spacers), plus panels, gestures and the mini player's controls. Layouts are plain JSON (saved in the catalogue,
+// shared as files); the application renders them.
+//
+//   CONTROLS { type: { group, label key, options: { name: [values] | { min, max } }, defaults } }
+//   GESTURES, GESTURE_ACTIONS
+//   BUILTIN_LAYOUTS [layout] ; layoutById(id, custom = []) -> layout
+//   normLayout(raw) -> layout   { id, name, for: 'audio' | 'video' | 'any', background: 'skin' | 'art' | 'blur',
+//                                 rows: [{ id, align, gap, wrap, controls: [{ type, …options }] }],
+//                                 panels: { lyrics: 'off' | 'side' | 'below' | 'tab', queue: 'off' | 'side' | 'tab' },
+//                                 gestures: { swipeLeft: action, … }, mini: [types] }
+//   layoutWarnings(layout) -> [message keys]  ('noPlay', 'noSeek', 'duplicate:<type>', 'empty')
+//   addControl(layout, rowIndex, type, at) / removeControl(layout, rowIndex, i) / moveControl(layout, from, to)
+//   addRow(layout, at) / removeRow(layout, i) / moveRow(layout, from, to) / setOption(layout, rowIndex, i, name, value)
+
+const sizes = ['s', 'm', 'l', 'xl'];
+export const CONTROLS = {
+  cover: { group: 'display', options: { size: ['s', 'm', 'l', 'xl', 'full'], shape: ['square', 'rounded', 'circle', 'vinyl'], spin: [false, true], glow: [true, false] }, defaults: { size: 'l', shape: 'rounded', spin: false, glow: true } },
+  title: { group: 'display', options: { size: sizes, align: ['start', 'center', 'end'], marquee: [false, true] }, defaults: { size: 'l', align: 'center', marquee: false } },
+  artist: { group: 'display', options: { size: sizes, align: ['start', 'center', 'end'] }, defaults: { size: 'm', align: 'center' } },
+  album: { group: 'display', options: { size: sizes, align: ['start', 'center', 'end'] }, defaults: { size: 's', align: 'center' } },
+  chapter: { group: 'display', options: { size: sizes }, defaults: { size: 's' } },
+  'next-up': { group: 'display', options: {}, defaults: {} },
+  presence: { group: 'display', options: {}, defaults: {} },
+  tags: { group: 'display', options: { max: { min: 1, max: 12 } }, defaults: { max: 4 } },
+  seek: { group: 'seek', options: { style: ['line', 'thick', 'wave', 'dots', 'ring'], times: ['below', 'sides', 'none'] }, defaults: { style: 'line', times: 'below' } },
+  'time-current': { group: 'seek', options: {}, defaults: {} },
+  'time-total': { group: 'seek', options: { remaining: [false, true] }, defaults: { remaining: false } },
+  play: { group: 'transport', options: { size: sizes, style: ['filled', 'tonal', 'outline', 'plain'] }, defaults: { size: 'xl', style: 'filled' } },
+  previous: { group: 'transport', options: { size: sizes }, defaults: { size: 'l' } },
+  next: { group: 'transport', options: { size: sizes }, defaults: { size: 'l' } },
+  stop: { group: 'transport', options: { size: sizes }, defaults: { size: 'm' } },
+  'seek-back': { group: 'transport', options: { size: sizes, seconds: [5, 10, 15, 30, 60] }, defaults: { size: 'm', seconds: 10 } },
+  'seek-forward': { group: 'transport', options: { size: sizes, seconds: [5, 10, 15, 30, 60] }, defaults: { size: 'm', seconds: 30 } },
+  shuffle: { group: 'mode', options: { size: sizes }, defaults: { size: 'm' } },
+  repeat: { group: 'mode', options: { size: sizes }, defaults: { size: 'm' } },
+  like: { group: 'mode', options: { size: sizes }, defaults: { size: 'm' } },
+  rating: { group: 'mode', options: { stars: [5, 10] }, defaults: { stars: 5 } },
+  speed: { group: 'tools', options: { size: sizes }, defaults: { size: 'm' } },
+  sleep: { group: 'tools', options: { size: sizes }, defaults: { size: 'm' } },
+  eq: { group: 'tools', options: { size: sizes }, defaults: { size: 'm' } },
+  ab: { group: 'tools', options: { size: sizes }, defaults: { size: 'm' } },
+  bookmark: { group: 'tools', options: { size: sizes }, defaults: { size: 'm' } },
+  'skip-marker': { group: 'tools', options: {}, defaults: {} },
+  subtitles: { group: 'tools', options: { size: sizes }, defaults: { size: 'm' } },
+  'audio-track': { group: 'tools', options: { size: sizes }, defaults: { size: 'm' } },
+  volume: { group: 'tools', options: { style: ['slider', 'button'] }, defaults: { style: 'slider' } },
+  lyrics: { group: 'panels', options: { size: sizes }, defaults: { size: 'm' } },
+  queue: { group: 'panels', options: { size: sizes }, defaults: { size: 'm' } },
+  mini: { group: 'window', options: { size: sizes }, defaults: { size: 'm' } },
+  theatre: { group: 'window', options: { size: sizes }, defaults: { size: 'm' } },
+  fullscreen: { group: 'window', options: { size: sizes }, defaults: { size: 'm' } },
+  more: { group: 'window', options: { size: sizes }, defaults: { size: 'm' } },
+  'lyrics-panel': { group: 'panels', options: { mode: ['karaoke', 'scroll', 'static'], lines: { min: 1, max: 12 } }, defaults: { mode: 'karaoke', lines: 5 } },
+  'queue-panel': { group: 'panels', options: { items: { min: 1, max: 30 } }, defaults: { items: 6 } },
+  visualizer: { group: 'display', options: { style: ['bars', 'wave', 'circle'], height: { min: 24, max: 240 } }, defaults: { style: 'bars', height: 64 } },
+  spacer: { group: 'layout', options: { grow: [true, false], width: { min: 0, max: 200 } }, defaults: { grow: true, width: 0 } },
+};
+
+export const GESTURES = ['swipeLeft', 'swipeRight', 'swipeUp', 'swipeDown', 'doubleTapLeft', 'doubleTapRight', 'doubleTap', 'longPress'];
+export const GESTURE_ACTIONS = ['none', 'next', 'previous', 'play-pause', 'seek-back', 'seek-forward', 'queue', 'lyrics', 'close', 'like', 'mini', 'theatre'];
+const ALIGN = ['start', 'center', 'end', 'between', 'around', 'evenly'];
+
+const c = (type, opts = {}) => ({ type, ...opts });
+const row = (id, align, controls, extra = {}) => ({ id, align, gap: 'm', wrap: false, controls, ...extra });
+const STD_GESTURES = { swipeLeft: 'next', swipeRight: 'previous', swipeUp: 'queue', swipeDown: 'close', doubleTapLeft: 'seek-back', doubleTapRight: 'seek-forward', doubleTap: 'like', longPress: 'none' };
+
+const RAW_LAYOUTS = [
+  { id: 'symphony', name: 'Symphony', builtin: true, for: 'audio', background: 'art', panels: { lyrics: 'tab', queue: 'tab' }, gestures: STD_GESTURES, mini: ['previous', 'play', 'next'],
+    rows: [row('art', 'center', [c('cover', { size: 'xl', shape: 'rounded' })]), row('info', 'between', [c('like'), c('title', { size: 'l', align: 'center' }), c('more')]), row('who', 'center', [c('artist'), c('album')], { wrap: true }),
+      row('seek', 'center', [c('seek', { style: 'wave', times: 'below' })]), row('transport', 'evenly', [c('shuffle'), c('previous'), c('play', { size: 'xl', style: 'filled' }), c('next'), c('repeat')]),
+      row('tools', 'between', [c('lyrics'), c('sleep'), c('speed'), c('eq'), c('queue')])] },
+  { id: 'classic', name: 'Classic', builtin: true, for: 'audio', background: 'skin', panels: { lyrics: 'side', queue: 'side' }, gestures: STD_GESTURES, mini: ['previous', 'play', 'stop', 'next'],
+    rows: [row('top', 'start', [c('cover', { size: 's', shape: 'square' }), c('title', { size: 'm', align: 'start', marquee: true }), c('spacer'), c('time-current'), c('time-total', { remaining: true })]),
+      row('seek', 'center', [c('seek', { style: 'thick', times: 'none' })]), row('buttons', 'start', [c('previous', { size: 's' }), c('play', { size: 'm', style: 'outline' }), c('stop', { size: 's' }), c('next', { size: 's' }), c('spacer'), c('shuffle', { size: 's' }), c('repeat', { size: 's' }), c('eq', { size: 's' }), c('volume')]),
+      row('panels', 'start', [c('visualizer', { style: 'bars', height: 48 })])] },
+  { id: 'minimal', name: 'Minimal', builtin: true, for: 'any', background: 'skin', panels: { lyrics: 'off', queue: 'off' }, gestures: STD_GESTURES, mini: ['play'],
+    rows: [row('art', 'center', [c('cover', { size: 'l', shape: 'square', glow: false })]), row('info', 'center', [c('title', { size: 'm' })]), row('seek', 'center', [c('seek', { style: 'line', times: 'sides' })]), row('play', 'center', [c('play', { size: 'l', style: 'plain' })])] },
+  { id: 'audiobook', name: 'Audiobook', builtin: true, for: 'audio', background: 'blur', panels: { lyrics: 'off', queue: 'tab' }, gestures: { ...STD_GESTURES, doubleTapLeft: 'seek-back', doubleTapRight: 'seek-forward' }, mini: ['seek-back', 'play', 'seek-forward'],
+    rows: [row('art', 'center', [c('cover', { size: 'l', shape: 'rounded' })]), row('info', 'center', [c('title', { size: 'm' }), c('chapter', { size: 'm' })], { wrap: true }), row('seek', 'center', [c('seek', { style: 'line', times: 'below' })]),
+      row('transport', 'evenly', [c('previous', { size: 'm' }), c('seek-back', { size: 'l', seconds: 30 }), c('play', { size: 'xl' }), c('seek-forward', { size: 'l', seconds: 30 }), c('next', { size: 'm' })]),
+      row('tools', 'between', [c('speed'), c('sleep'), c('bookmark'), c('queue')])] },
+  { id: 'theatre', name: 'Home theatre', builtin: true, for: 'any', background: 'art', panels: { lyrics: 'below', queue: 'off' }, gestures: STD_GESTURES, mini: ['previous', 'play', 'next'],
+    rows: [row('info', 'start', [c('cover', { size: 'm', shape: 'rounded' }), c('title', { size: 'xl', align: 'start' }), c('spacer'), c('presence')]), row('who', 'start', [c('artist', { size: 'l', align: 'start' }), c('album', { size: 'm', align: 'start' })]),
+      row('seek', 'center', [c('seek', { style: 'thick', times: 'sides' })]), row('transport', 'center', [c('previous', { size: 'xl' }), c('seek-back', { size: 'xl', seconds: 10 }), c('play', { size: 'xl' }), c('seek-forward', { size: 'xl', seconds: 30 }), c('next', { size: 'xl' })]),
+      row('tools', 'center', [c('skip-marker'), c('subtitles', { size: 'l' }), c('audio-track', { size: 'l' }), c('lyrics', { size: 'l' }), c('fullscreen', { size: 'l' })])] },
+  { id: 'video', name: 'Video', builtin: true, for: 'video', background: 'skin', panels: { lyrics: 'off', queue: 'side' }, gestures: { ...STD_GESTURES, swipeUp: 'none', swipeDown: 'close' }, mini: ['play'],
+    rows: [row('seek', 'center', [c('time-current'), c('seek', { style: 'line', times: 'none' }), c('time-total', { remaining: true })]),
+      row('buttons', 'between', [c('play', { size: 'm', style: 'plain' }), c('previous', { size: 's' }), c('next', { size: 's' }), c('volume'), c('title', { size: 's', align: 'start' }), c('spacer'), c('skip-marker'), c('speed', { size: 's' }), c('subtitles', { size: 's' }), c('audio-track', { size: 's' }), c('mini', { size: 's' }), c('fullscreen', { size: 's' })])] },
+  { id: 'karaoke', name: 'Karaoke', builtin: true, for: 'audio', background: 'blur', panels: { lyrics: 'off', queue: 'off' }, gestures: STD_GESTURES, mini: ['play'],
+    rows: [row('top', 'start', [c('cover', { size: 's' }), c('title', { size: 'm', align: 'start' }), c('artist', { size: 's', align: 'start' })]), row('lyrics', 'center', [c('lyrics-panel', { mode: 'karaoke', lines: 7 })]),
+      row('seek', 'center', [c('seek', { style: 'dots', times: 'sides' })]), row('transport', 'center', [c('previous'), c('play', { size: 'l' }), c('next'), c('ab')])] },
+];
+
+// Stored normalized, so every control carries all its options.
+export const BUILTIN_LAYOUTS = RAW_LAYOUTS.map((l) => ({ ...normLayout(l), builtin: true }));
+
+export const layoutById = (id, custom = []) => custom.find((l) => l.id === id) || BUILTIN_LAYOUTS.find((l) => l.id === id) || BUILTIN_LAYOUTS[0];
+
+// Unknown types are dropped and every option is clamped to its declared values / range: layouts are user files.
+function normControl(raw) {
+  if (!raw || typeof raw !== 'object' || !CONTROLS[raw.type]) return null;
+  const def = CONTROLS[raw.type];
+  const out = { type: raw.type };
+  for (const [name, spec] of Object.entries(def.options)) {
+    const v = raw[name];
+    if (Array.isArray(spec)) out[name] = spec.includes(v) ? v : def.defaults[name];
+    else { const n = Number(v); out[name] = Number.isFinite(n) ? Math.min(spec.max, Math.max(spec.min, Math.round(n))) : def.defaults[name]; }
+  }
+  return out;
+}
+
+export function normLayout(raw) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const id = typeof r.id === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(r.id) ? r.id : 'layout-' + Math.random().toString(36).slice(2, 8);
+  const rows = (Array.isArray(r.rows) ? r.rows : []).slice(0, 12).map((x, i) => ({
+    id: typeof x.id === 'string' && /^[\w-]{1,30}$/.test(x.id) ? x.id : 'r' + i,
+    align: ALIGN.includes(x.align) ? x.align : 'center', gap: ['s', 'm', 'l'].includes(x.gap) ? x.gap : 'm', wrap: !!x.wrap,
+    controls: (Array.isArray(x.controls) ? x.controls : []).slice(0, 16).map(normControl).filter(Boolean),
+  }));
+  const p = r.panels || {};
+  const g = r.gestures || {};
+  return {
+    id, name: typeof r.name === 'string' && r.name.trim() ? r.name.trim().slice(0, 80) : 'Layout',
+    for: ['audio', 'video', 'any'].includes(r.for) ? r.for : 'any', background: ['skin', 'art', 'blur'].includes(r.background) ? r.background : 'skin',
+    rows,
+    panels: { lyrics: ['off', 'side', 'below', 'tab'].includes(p.lyrics) ? p.lyrics : 'tab', queue: ['off', 'side', 'tab'].includes(p.queue) ? p.queue : 'tab' },
+    gestures: Object.fromEntries(GESTURES.map((k) => [k, GESTURE_ACTIONS.includes(g[k]) ? g[k] : STD_GESTURES[k]])),
+    mini: (Array.isArray(r.mini) ? r.mini : ['previous', 'play', 'next']).filter((t) => CONTROLS[t]).slice(0, 8),
+    ...(r.builtin && RAW_LAYOUTS.some((l) => l.id === id) ? { builtin: true } : {}),
+  };
+}
+
+export function layoutWarnings(layout) {
+  const out = [];
+  const types = layout.rows.flatMap((r) => r.controls.map((x) => x.type));
+  if (!types.length) out.push('empty');
+  if (!types.includes('play')) out.push('noPlay');
+  if (!types.includes('seek')) out.push('noSeek');
+  const seen = new Set();
+  for (const t of types) { if (seen.has(t) && t !== 'spacer') out.push('duplicate:' + t); seen.add(t); }
+  return [...new Set(out)];
+}
+
+// Editing operations deep-copy (layouts are plain JSON) and return a new layout: the editor keeps history by value.
+const copy = (l) => JSON.parse(JSON.stringify(l));
+export function addControl(layout, rowIndex, type, at = -1) {
+  const l = copy(layout);
+  const r = l.rows[rowIndex];
+  if (!r || !CONTROLS[type]) return l;
+  const ctl = normControl({ type, ...CONTROLS[type].defaults });
+  if (at < 0 || at > r.controls.length) r.controls.push(ctl); else r.controls.splice(at, 0, ctl);
+  return l;
+}
+export function removeControl(layout, rowIndex, i) { const l = copy(layout); if (l.rows[rowIndex]) l.rows[rowIndex].controls.splice(i, 1); return l; }
+// from / to: { row, index }; moving into another row is allowed.
+export function moveControl(layout, from, to) {
+  const l = copy(layout);
+  const src = l.rows[from.row], dst = l.rows[to.row];
+  if (!src || !dst || !src.controls[from.index]) return l;
+  const [x] = src.controls.splice(from.index, 1);
+  dst.controls.splice(Math.max(0, Math.min(dst.controls.length, to.index)), 0, x);
+  return l;
+}
+export function addRow(layout, at = -1) {
+  const l = copy(layout);
+  const r = { id: 'r' + Date.now().toString(36) + Math.floor(Math.random() * 100), align: 'center', gap: 'm', wrap: false, controls: [] };
+  if (at < 0 || at > l.rows.length) l.rows.push(r); else l.rows.splice(at, 0, r);
+  return l;
+}
+export function removeRow(layout, i) { const l = copy(layout); l.rows.splice(i, 1); return l; }
+export function moveRow(layout, from, to) { const l = copy(layout); const [r] = l.rows.splice(from, 1); if (r) l.rows.splice(Math.max(0, Math.min(l.rows.length, to)), 0, r); return l; }
+export function setOption(layout, rowIndex, i, name, value) {
+  const l = copy(layout);
+  const ctl = l.rows[rowIndex] && l.rows[rowIndex].controls[i];
+  if (!ctl) return l;
+  const n = normControl({ ...ctl, [name]: value });
+  if (n) l.rows[rowIndex].controls[i] = n;
+  return l;
+}
+export function setRowOption(layout, rowIndex, name, value) {
+  const l = copy(layout);
+  const r = l.rows[rowIndex];
+  if (!r) return l;
+  if (name === 'align' && ALIGN.includes(value)) r.align = value;
+  if (name === 'gap' && ['s', 'm', 'l'].includes(value)) r.gap = value;
+  if (name === 'wrap') r.wrap = !!value;
+  return l;
+}

@@ -1,0 +1,407 @@
+// landing-studio/templates-portal.js - template "portal": Kanoni Commons, an open legal-information portal and
+// professional-services marketplace (en default, ka, ru; theme preset 'counsel' with a green accent): a model tax code
+// with chapters, inserted and repealed articles, planned changes and cross-references; a glossary whose terms are
+// linked across the site; a directory of specialists, firms and a legal clinic; a requests board matched with the
+// directory; a compliance checklist; topic hubs; one search box over everything.
+// Built from the generic portal blocks (../portal/); every name, person, firm, act, figure and address is FICTIONAL.
+//
+// Contract of a template module: each exported template object carries an id, localized names and build(V, ...) ->
+// a fresh document; templates.js adds catalogue metadata (group, mode, modules) where the module does not declare it,
+// and studio/gallery.js shows the catalogue.
+// The viewer API arrives as the argument V instead of an import, so templates are pure document builders that tests
+// (test.js renders every template) and the gallery can run without the editor. Generated artwork and sample data are
+// derived from seeds (tplHash / tplRand where used), so a template builds the same document on every run.
+// Data file: names, texts, figures and art specs dominate; comments mark sections, not individual values.
+import { tplKit } from './templates-kit.js';
+import { TPL_ART_SVG, tplArtWordmark } from './templates-art.js';
+import { tplAgroPortrait } from './templates-agro.js';
+
+/** Mark of the portal: an open book under a balance beam (64×64). */
+function tplPortalMarkSVG() {
+  return TPL_ART_SVG + 'viewBox="0 0 64 64" width="64" height="64">'
+    + '<rect width="64" height="64" rx="12" fill="#1d4d3f"/>'
+    + '<path d="M12 44c7-3 13-3 20 1 7-4 13-4 20-1V22c-7-3-13-3-20 1-7-4-13-4-20-1z" fill="none" stroke="#e8d9b0" stroke-width="2.6" stroke-linejoin="round"/>'
+    + '<path d="M32 23v22M20 14h24M32 9v5" stroke="#e8d9b0" stroke-width="2.6" stroke-linecap="round"/></svg>';
+}
+
+/** Hero picture: stacks of documents and a scale on a desk, flat shapes (1200×800). */
+function tplPortalHeroSVG() {
+  const book = (x, y, w, h, c) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6" fill="${c}"/><rect x="${x + 10}" y="${y + 10}" width="${w - 20}" height="6" rx="3" fill="#ffffff" fill-opacity=".55"/>`;
+  return TPL_ART_SVG + 'viewBox="0 0 1200 800" width="1200" height="800"><defs>'
+    + '<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f4efe4"/><stop offset="1" stop-color="#e3eadf"/></linearGradient></defs>'
+    + '<rect width="1200" height="800" fill="url(#bg)"/>'
+    + '<circle cx="930" cy="230" r="150" fill="#1d4d3f" fill-opacity=".08"/><circle cx="260" cy="610" r="210" fill="#b08d57" fill-opacity=".08"/>'
+    + '<rect x="120" y="610" width="960" height="26" rx="10" fill="#7b5a3a"/>'
+    + book(200, 450, 320, 52, '#1d4d3f') + book(220, 398, 290, 52, '#2f6b58') + book(186, 346, 330, 52, '#b08d57') + book(236, 294, 260, 52, '#24433a')
+    + book(220, 502, 300, 52, '#3d5a7a') + book(196, 554, 340, 56, '#1d4d3f')
+    + '<path d="M820 610V300M720 300h200" stroke="#b08d57" stroke-width="12" stroke-linecap="round"/>'
+    + '<path d="M720 300l-50 120h100zM920 300l-50 120h100z" fill="none" stroke="#b08d57" stroke-width="8" stroke-linejoin="round"/>'
+    + '<path d="M660 420a60 22 0 0 0 120 0zM860 420a60 22 0 0 0 120 0z" fill="#d8bd86"/>'
+    + '<rect x="780" y="590" width="80" height="22" rx="6" fill="#8a6a3f"/>'
+    + '<g fill="#1d4d3f" fill-opacity=".85"><rect x="600" y="520" width="150" height="88" rx="8"/><rect x="612" y="534" width="126" height="8" rx="4" fill="#e8d9b0"/>'
+    + '<rect x="612" y="552" width="96" height="8" rx="4" fill="#e8d9b0"/><rect x="612" y="570" width="110" height="8" rx="4" fill="#e8d9b0"/></g></svg>';
+}
+
+function tplBuildPortal(V) {
+  const langs = ['en', 'ka', 'ru'];
+  const K = tplKit(V, langs);
+  const { B, L } = K;
+  const t = (en, ka, ru) => ({ en, ka, ru });
+  const p = (en, ka, ru) => t('<p>' + en + '</p>', '<p>' + ka + '</p>', '<p>' + ru + '</p>');
+  const img = (name, svg, title) => K.svg(name, svg, { title });
+  const portrait = (seed, o) => img('people-' + seed + '.svg', tplAgroPortrait({ seed, bg: ['#e8efe6', '#c9d8cc'], shirt: '#1f3b33', shirt2: '#152a24', collar: '#f6f3ec', ...o }), '');
+  const it = (o) => K.item(Object.fromEntries(Object.entries(o).map(([k, v]) => [k, v && typeof v === 'object' && !Array.isArray(v) && ('en' in v) ? L(v) : v])));
+
+  // ----- pictures and documents -----
+  const mark = img('kanoni-commons-mark.svg', tplPortalMarkSVG(), t('Kanoni Commons mark', 'კანონის საერთო სივრცის ნიშანი', 'Знак «Канони Коммонс»'));
+  const hero = img('kanoni-commons-desk.svg', tplPortalHeroSVG(), t('Codes, a balance and a case file on a desk', 'კოდექსები, სასწორი და საქმე მაგიდაზე', 'Кодексы, весы и дело на столе'));
+  const firmLogo = img('rioni-partners.svg', tplArtWordmark('arch', 'RIONI & PARTNERS', '#1d4d3f', { font: 'serif', weight: 600 }), 'Rioni & Partners');
+  const clinicLogo = img('mtkvari-clinic.svg', tplArtWordmark('leaf', 'MTKVARI CLINIC', '#2f6b58', { font: 'sans', weight: 700 }), 'Mtkvari Legal Clinic');
+  const codePDF = K.addAtt({
+    name: 'model-small-business-tax-code.pdf', mime: 'application/pdf',
+    data: K.files.makePDF('Model Small Business Tax Code', [
+      '> Kanoni Commons - consolidated text, version of 1 April 2026',
+      '',
+      '# Chapter I. General provisions',
+      '- Article 1. Scope',
+      '- Article 2. Terms',
+      '- Article 3. Registration',
+      '- Article 3-1. Online registration',
+      '# Chapter II. Rates and returns',
+      '- Article 4. Rate',
+      '- Article 5. Returns',
+      '- Article 6. (repealed)',
+      '- Article 7. Penalties',
+      '',
+      '> Sample document generated by the landing template. The act and all figures are fictional.',
+    ], { accent: '#1d4d3f', band: 'CODE' }),
+    title: t('Model Small Business Tax Code (PDF)', 'მცირე ბიზნესის სანიმუშო საგადასახადო კოდექსი (PDF)', 'Модельный налоговый кодекс малого бизнеса (PDF)'),
+  });
+
+  const reqPost = K.id();
+  const reqAsk = K.id();
+  const R = (id, name, url) => ({ id, name, method: 'POST', url, headers: [], credentials: 'omit', timeout: 8000, retries: 0, itemsPath: 'items' });
+  const d = K.doc({
+    name: 'Kanoni Commons — open law and legal services', preset: 'counsel', defaultLang: 'en',
+    author: 'Kanoni Commons', keywords: 'legal portal, tax code, glossary, lawyers directory, legal requests, compliance checklist',
+    title: t('Kanoni Commons — open law and legal services', 'კანონის საერთო სივრცე — ღია სამართალი და იურიდიული მომსახურება', 'Канони Коммонс — открытое право и юридические услуги'),
+    description: t('Read the model tax code article by article, look up terms, find a specialist, post a request and keep track of your obligations.',
+      'წაიკითხეთ სანიმუშო საგადასახადო კოდექსი მუხლობრივად, მოძებნეთ ტერმინები და სპეციალისტი, გამოაქვეყნეთ დავალება და აკონტროლეთ ვალდებულებები.',
+      'Читайте модельный налоговый кодекс по статьям, ищите термины и специалистов, публикуйте задачи и следите за обязанностями.'),
+    meta: { favicon: mark },
+    theme: { accent: '#1d4d3f', accent2: '#b08d57', scheme: 'auto' },
+    output: { autodetect: true, switcher: 'buttons', langLabels: 'code', themeToggle: true, toolbarPos: 'nav', motion: 'none', backToTop: true },
+    shop: { currency: 'GEL', mode: 'cart', checkout: { method: 'none' } },
+    requests: [R(reqPost, 'New requests (browser storage)', 'local:requests'), R(reqAsk, 'Questions to the clinic (browser storage)', 'local:questions')],
+  });
+
+  // ----- the act -----
+  const art = (num, title, body, o = {}) => it({ kind: 'article', num, title, body, status: o.status || 'valid', note: o.note || t('', '', ''), tags: o.tags || t('', '', '') });
+  const chapter = (num, title) => it({ kind: 'chapter', num, title, body: t('', '', ''), status: 'valid', note: t('', '', ''), tags: t('', '', '') });
+  const act = B('act', {
+    anchor: 'code',
+    title: L(t('Model Small Business Tax Code', 'მცირე ბიზნესის სანიმუშო საგადასახადო კოდექსი', 'Модельный налоговый кодекс малого бизнеса')),
+    actType: L(t('Code', 'კოდექსი', 'Кодекс')), number: 'MC-118', issuer: L(t('Kanoni Commons editorial board', 'კანონის საერთო სივრცის სარედაქციო საბჭო', 'Редакционный совет «Канони Коммонс»')),
+    adopted: '2019-03-12', effective: '2019-07-01', revised: '2026-04-01', status: 'amended', key: 'tax',
+    aliases: L(t('Small Business Tax Code, Tax Code, this Code', 'მცირე ბიზნესის საგადასახადო კოდექსი, საგადასახადო კოდექსი', 'Налоговый кодекс малого бизнеса, Налоговый кодекс')),
+    topics: L(t('Taxes', 'გადასახადები', 'Налоги')), file: codePDF,
+    summary: L(t('A short model code for small businesses: who counts as one, how to register, the rate on turnover, monthly returns and penalties. It is written for teaching and for testing tools — not a law of any country.',
+      'მოკლე სანიმუშო კოდექსი მცირე ბიზნესისთვის: ვინ ითვლება მცირე ბიზნესად, როგორ ხდება რეგისტრაცია, ბრუნვის განაკვეთი, ყოველთვიური დეკლარაციები და ჯარიმები. ის სასწავლოდ და ინსტრუმენტების გამოსაცდელადაა დაწერილი და არცერთი ქვეყნის კანონი არ არის.',
+      'Короткий модельный кодекс для малого бизнеса: кто считается малым бизнесом, как зарегистрироваться, ставка с оборота, ежемесячные декларации и штрафы. Он написан для обучения и проверки инструментов — это не закон какой-либо страны.')),
+    changes: L(t('2027-01-01: Article 4 — the higher rate falls from 3% to 2.5%\n2027-07-01: Article 5 — returns only online',
+      '2027-01-01: მე-4 მუხლი — მაღალი განაკვეთი 3%-დან 2,5%-მდე მცირდება\n2027-07-01: მე-5 მუხლი — დეკლარაციები მხოლოდ ელექტრონულად',
+      '2027-01-01: статья 4 — повышенная ставка снижается с 3% до 2,5%\n2027-07-01: статья 5 — декларации только онлайн')),
+    toc: 'side', find: true, xrefs: true, autolink: true,
+    items: [
+      chapter('I', t('General provisions', 'ზოგადი დებულებები', 'Общие положения')),
+      art('1', t('Scope', 'მოქმედების სფერო', 'Сфера действия'), t(
+        '1. This Code sets the taxes of a small business registered in the Commons.\n2. The terms used in this Code have the meaning given in Article 2.',
+        '1. ეს კოდექსი ადგენს საერთო სივრცეში რეგისტრირებული მცირე ბიზნესის გადასახადებს.\n2. ამ კოდექსში გამოყენებულ ტერმინებს აქვს მე-2 მუხლით განსაზღვრული მნიშვნელობა.',
+        '1. Настоящий Кодекс устанавливает налоги малого бизнеса, зарегистрированного в Коммонс.\n2. Термины настоящего Кодекса имеют значение, данное в статье 2.')),
+      art('2', t('Terms', 'ტერმინები', 'Термины'), t(
+        '1. For the purposes of this Code:\na) small business — a person whose turnover in a calendar year does not exceed 500 000 GEL;\nb) turnover — all income received in a calendar year;\nc) tax period — a calendar month;\nd) return — the statement of turnover filed for a tax period.',
+        '1. ამ კოდექსის მიზნებისთვის:\nა) მცირე ბიზნესი — პირი, რომლის ბრუნვა კალენდარულ წელიწადში 500 000 ლარს არ აღემატება;\nბ) ბრუნვა — კალენდარული წლის განმავლობაში მიღებული მთელი შემოსავალი;\nგ) საგადასახადო პერიოდი — კალენდარული თვე;\nდ) დეკლარაცია — საგადასახადო პერიოდისთვის წარდგენილი ბრუნვის ანგარიში.',
+        '1. Для целей настоящего Кодекса:\nа) малый бизнес — лицо, оборот которого за календарный год не превышает 500 000 лари;\nб) оборот — весь доход, полученный за календарный год;\nв) налоговый период — календарный месяц;\nг) декларация — отчёт об обороте, подаваемый за налоговый период.'),
+      { tags: t('Taxes', 'გადასახადები', 'Налоги') }),
+      art('3', t('Registration', 'რეგისტრაცია', 'Регистрация'), t(
+        '1. A small business registers with the revenue office within 10 days of its first income.\n2. The revenue office issues a registration certificate within 3 working days.\n3. Changes of the data under paragraph 1 are reported within 10 days.',
+        '1. მცირე ბიზნესი პირველი შემოსავლიდან 10 დღის ვადაში რეგისტრირდება შემოსავლების სამსახურში.\n2. შემოსავლების სამსახური რეგისტრაციის მოწმობას 3 სამუშაო დღეში გასცემს.\n3. პირველი პუნქტით გათვალისწინებული მონაცემების ცვლილება 10 დღის ვადაში ეცნობება.',
+        '1. Малый бизнес регистрируется в налоговой службе в течение 10 дней с первого дохода.\n2. Налоговая служба выдаёт свидетельство о регистрации в течение 3 рабочих дней.\n3. Об изменении сведений, указанных в пункте 1, сообщается в течение 10 дней.'),
+      { tags: t('Registration', 'რეგისტრაცია', 'Регистрация') }),
+      art('3^1', t('Online registration', 'ელექტრონული რეგისტრაცია', 'Регистрация онлайн'), t(
+        '1. The registration under Article 3 may be made online with an electronic signature.\n2. An online registration takes effect on the day it is confirmed.',
+        '1. მე-3 მუხლით გათვალისწინებული რეგისტრაცია შეიძლება ელექტრონულად, ელექტრონული ხელმოწერით განხორციელდეს.\n2. ელექტრონული რეგისტრაცია ძალაში შედის დადასტურების დღეს.',
+        '1. Регистрация по статье 3 может быть проведена онлайн с электронной подписью.\n2. Регистрация онлайн вступает в силу в день подтверждения.'),
+      { status: 'new', note: t('Inserted on 1 April 2026', 'ჩამატებულია 2026 წლის 1 აპრილს', 'Включена 1 апреля 2026 года'), tags: t('Registration', 'რეგისტრაცია', 'Регистрация') }),
+      chapter('II', t('Rates and returns', 'განაკვეთები და დეკლარაციები', 'Ставки и декларации')),
+      art('4', t('Rate', 'განაკვეთი', 'Ставка'), t(
+        '1. A small business pays 1% of its turnover.\n2. When the turnover exceeds the limit of subparagraph (a) of paragraph 1 of Article 2, the rate is 3% of the excess.',
+        '1. მცირე ბიზნესი იხდის ბრუნვის 1%-ს.\n2. როცა ბრუნვა აღემატება მე-2 მუხლის პირველი პუნქტის „ა“ ქვეპუნქტით დადგენილ ზღვარს, ზღვარს ზემოთ ნაწილზე განაკვეთი 3%-ია.',
+        '1. Малый бизнес уплачивает 1% оборота.\n2. При превышении предела подпункта «а» пункта 1 статьи 2 ставка с суммы превышения составляет 3%.'),
+      { status: 'amended', note: t('As amended on 1 April 2026', 'რედაქცია 2026 წლის 1 აპრილიდან', 'В редакции от 1 апреля 2026 года'), tags: t('Taxes', 'გადასახადები', 'Налоги') }),
+      art('5', t('Returns', 'დეკლარაციები', 'Декларации'), t(
+        '1. A return is filed by the 15th day of the month that follows the tax period.\n2. The tax under Article 4 is paid by the same day.\n3. A return filed late is subject to Article 7.',
+        '1. დეკლარაცია წარედგინება საგადასახადო პერიოდის მომდევნო თვის 15 რიცხვამდე.\n2. მე-4 მუხლით გათვალისწინებული გადასახადი იმავე დღემდე გადაიხდება.\n3. დაგვიანებით წარდგენილ დეკლარაციაზე ვრცელდება მე-7 მუხლი.',
+        '1. Декларация подаётся до 15-го числа месяца, следующего за налоговым периодом.\n2. Налог по статье 4 уплачивается до того же дня.\n3. К декларации, поданной с опозданием, применяется статья 7.'),
+      { tags: t('Returns', 'დეკლარაციები', 'Декларации') }),
+      art('6', t('', '', ''), t('', '', ''), { status: 'repealed', note: t('Repealed on 1 January 2026', 'ამოღებულია 2026 წლის 1 იანვრიდან', 'Утратила силу с 1 января 2026 года') }),
+      art('7', t('Penalties', 'ჯარიმები', 'Штрафы'), t(
+        '1. For each month of delay the penalty is 5% of the tax due, but not more than 30%.\n2. No penalty is charged when:\na) the delay is caused by a failure of the online service;\nb) the tax due is zero.',
+        '1. დაგვიანების ყოველ თვეზე ჯარიმა გადასახდელი გადასახადის 5%-ია, მაგრამ არაუმეტეს 30%-ისა.\n2. ჯარიმა არ ეკისრება, თუ:\nა) დაგვიანება ელექტრონული სერვისის გაუმართაობითაა გამოწვეული;\nბ) გადასახდელი გადასახადი ნულია.',
+        '1. За каждый месяц просрочки штраф составляет 5% подлежащего уплате налога, но не более 30%.\n2. Штраф не начисляется, если:\nа) просрочка вызвана сбоем онлайн-сервиса;\nб) налог к уплате равен нулю.'),
+      { tags: t('Penalties', 'ჯარიმები', 'Штрафы') }),
+    ],
+  });
+
+  // ----- glossary -----
+  const term = (o) => it({ alt: t('', '', ''), source: t('', '', ''), href: '', related: t('', '', ''), tags: t('', '', ''), ...o });
+  const terms = B('terms', {
+    anchor: 'terms', title: L(t('Glossary', 'გლოსარიუმი', 'Глоссарий')), layout: 'cards', alpha: true, caps: false, find: true, autolink: 'site',
+    items: [
+      term({ term: t('small business', 'მცირე ბიზნესი', 'малый бизнес'), def: t('A person whose turnover in a calendar year does not exceed 500 000 GEL.', 'პირი, რომლის ბრუნვა კალენდარულ წელიწადში 500 000 ლარს არ აღემატება.', 'Лицо, оборот которого за календарный год не превышает 500 000 лари.'),
+        source: t('Small Business Tax Code, Article 2', 'მცირე ბიზნესის საგადასახადო კოდექსის მე-2 მუხლი', 'Налоговый кодекс малого бизнеса, статья 2'), related: t('turnover', 'ბრუნვა', 'оборот'), tags: t('Taxes', 'გადასახადები', 'Налоги') }),
+      term({ term: t('turnover', 'ბრუნვა', 'оборот'), def: t('All income received in a calendar year, before any costs.', 'კალენდარული წლის განმავლობაში მიღებული მთელი შემოსავალი, ხარჯების გამოკლებამდე.', 'Весь доход за календарный год до вычета расходов.'),
+        source: t('Small Business Tax Code, Article 2', 'მცირე ბიზნესის საგადასახადო კოდექსის მე-2 მუხლი', 'Налоговый кодекс малого бизнеса, статья 2'), related: t('small business, return', 'მცირე ბიზნესი, დეკლარაცია', 'малый бизнес, декларация'), tags: t('Taxes', 'გადასახადები', 'Налоги') }),
+      term({ term: t('tax period', 'საგადასახადო პერიოდი', 'налоговый период'), def: t('The time for which a return is filed: one calendar month.', 'დრო, რომლისთვისაც დეკლარაცია წარედგინება: ერთი კალენდარული თვე.', 'Срок, за который подаётся декларация: один календарный месяц.'),
+        source: t('Small Business Tax Code, Article 2', 'მცირე ბიზნესის საგადასახადო კოდექსის მე-2 მუხლი', 'Налоговый кодекс малого бизнеса, статья 2'), related: t('return', 'დეკლარაცია', 'декларация'), tags: t('Taxes', 'გადასახადები', 'Налоги') }),
+      term({ term: t('return', 'დეკლარაცია', 'декларация'), alt: t('tax return', 'საგადასახადო დეკლარაცია', 'налоговая декларация'), def: t('The statement of turnover filed for a tax period by the 15th of the next month.', 'საგადასახადო პერიოდის ბრუნვის ანგარიში, რომელიც მომდევნო თვის 15 რიცხვამდე წარედგინება.', 'Отчёт об обороте за налоговый период, подаваемый до 15-го числа следующего месяца.'),
+        source: t('Small Business Tax Code, Article 5', 'მცირე ბიზნესის საგადასახადო კოდექსის მე-5 მუხლი', 'Налоговый кодекс малого бизнеса, статья 5'), tags: t('Returns', 'დეკლარაციები', 'Декларации') }),
+      term({ term: t('revenue office', 'შემოსავლების სამსახური', 'налоговая служба'), def: t('The public body that registers small businesses and receives their returns.', 'საჯარო უწყება, რომელიც მცირე ბიზნესს არეგისტრირებს და მის დეკლარაციებს იღებს.', 'Государственный орган, который регистрирует малый бизнес и принимает декларации.'),
+        source: t('Small Business Tax Code, Article 3', 'მცირე ბიზნესის საგადასახადო კოდექსის მე-3 მუხლი', 'Налоговый кодекс малого бизнеса, статья 3'), tags: t('Registration', 'რეგისტრაცია', 'Регистрация') }),
+      term({ term: t('registration certificate', 'რეგისტრაციის მოწმობა', 'свидетельство о регистрации'), def: t('The document that confirms the small business status.', 'დოკუმენტი, რომელიც მცირე ბიზნესის სტატუსს ადასტურებს.', 'Документ, подтверждающий статус малого бизнеса.'),
+        source: t('Small Business Tax Code, Article 3', 'მცირე ბიზნესის საგადასახადო კოდექსის მე-3 მუხლი', 'Налоговый кодекс малого бизнеса, статья 3'), tags: t('Registration', 'რეგისტრაცია', 'Регистрация') }),
+      term({ term: t('electronic signature', 'ელექტრონული ხელმოწერა', 'электронная подпись'), alt: t('e-signature', 'ელ. ხელმოწერა', 'ЭП'), def: t('Data that identifies the signer of an online document and binds them to it.', 'მონაცემები, რომლებიც ელექტრონული დოკუმენტის ხელმომწერს ადგენს და მას დოკუმენტთან აკავშირებს.', 'Данные, которые идентифицируют подписавшего электронный документ и связывают его с документом.'),
+        source: t('Small Business Tax Code, Article 3¹', 'მცირე ბიზნესის საგადასახადო კოდექსის მუხლი 3¹', 'Налоговый кодекс малого бизнеса, статья 3¹'), tags: t('Registration', 'რეგისტრაცია', 'Регистрация') }),
+      term({ term: t('penalty', 'ჯარიმა', 'штраф'), def: t('An amount charged for a late return: 5% of the tax due per month, at most 30%.', 'დაგვიანებული დეკლარაციისთვის დაკისრებული თანხა: გადასახდელის 5% თვეში, არაუმეტეს 30%-ისა.', 'Сумма за опоздание с декларацией: 5% налога в месяц, не более 30%.'),
+        source: t('Small Business Tax Code, Article 7', 'მცირე ბიზნესის საგადასახადო კოდექსის მე-7 მუხლი', 'Налоговый кодекс малого бизнеса, статья 7'), related: t('return', 'დეკლარაცია', 'декларация'), tags: t('Penalties', 'ჯარიმები', 'Штрафы') }),
+      term({ term: t('payment service provider', 'საგადახდო მომსახურების პროვაიდერი', 'поставщик платёжных услуг'), alt: t('PSP', 'პროვაიდერი', 'ППУ'), def: t('A company that lets a business accept card and online payments.', 'კომპანია, რომელიც ბიზნესს ბარათით და ონლაინ გადახდების მიღების საშუალებას აძლევს.', 'Компания, позволяющая бизнесу принимать оплату картами и онлайн.'),
+        tags: t('Payments', 'გადახდები', 'Платежи') }),
+    ],
+  });
+
+  // ----- directory -----
+  const who = (o) => it({ role: t('', '', ''), areas: t('', '', ''), city: t('', '', ''), langs: '', years: null, rating: null, reviews: null, price: null, priceKind: 'from', verified: false, isNew: false,
+    tier: t('', '', ''), badges: t('', '', ''), bio: t('', '', ''), phone: '', email: '', site: '', href: '', status: 'available', photo: null, ...o });
+  const people = [
+    portrait('lomidze', { skin: '#f0cdb4', skin2: '#e0b394', hair: '#3b2a22', style: 'long' }),
+    portrait('kvirkvelia', { skin: '#e9c3a6', skin2: '#d9a988', hair: '#2a2420', style: 'short', beard: true }),
+    portrait('sulaberidze', { skin: '#f1d0b8', skin2: '#e2b597', hair: '#8f8a84', style: 'bun', glasses: true }),
+    portrait('tsiklauri', { skin: '#efc6a8', skin2: '#dcab88', hair: '#4a3626', style: 'short', glasses: true }),
+    portrait('goguadze', { skin: '#f0cdb4', skin2: '#e0b394', hair: '#5a3a2a', style: 'long', shirt: '#2c4a5c', shirt2: '#1f3644' }),
+  ];
+  const directory = B('directory', {
+    anchor: 'people', title: L(t('Specialists and firms', 'სპეციალისტები და კომპანიები', 'Специалисты и компании')), variant: 'cards', columns: 3,
+    find: true, tabs: true, facetArea: true, facetCity: true, facetLang: true, sort: true, alpha: false, more: 6, currency: 'GEL', contacts: 'masked',
+    cta: L(t('Ask a question', 'კითხვის დასმა', 'Задать вопрос')),
+    items: [
+      who({ kind: 'person', name: t('Tamar Lomidze', 'თამარ ლომიძე', 'Тамар Ломидзе'), photo: people[0], role: t('Tax lawyer', 'საგადასახადო იურისტი', 'Налоговый юрист'),
+        areas: t('Taxes, Registration', 'გადასახადები, რეგისტრაცია', 'Налоги, Регистрация'), city: t('Tbilisi', 'თბილისი', 'Тбилиси'), langs: t('Georgian, English, Russian', 'ქართული, ინგლისური, რუსული', 'грузинский, английский, русский'),
+        years: 11, rating: 4.9, reviews: 38, price: 80, priceKind: 'from', verified: true, badges: t('Bar member, Mentor', 'ადვოკატთა ასოციაციის წევრი, მენტორი', 'Член коллегии, Наставник'),
+        bio: t('Helps small businesses register, file returns and appeal penalties.', 'ეხმარება მცირე ბიზნესს რეგისტრაციაში, დეკლარაციების წარდგენასა და ჯარიმების გასაჩივრებაში.', 'Помогает малому бизнесу с регистрацией, декларациями и обжалованием штрафов.'),
+        phone: '+995 555 01 02 03', email: 'tamar@kanoni-commons.example', href: '#ask' }),
+      who({ kind: 'person', name: t('Davit Kvirkvelia', 'დავით კვირკველია', 'Давит Квирквелия'), photo: people[1], role: t('Corporate lawyer', 'კორპორაციული იურისტი', 'Корпоративный юрист'),
+        areas: t('Corporate, Contracts', 'კორპორაციული სამართალი, ხელშეკრულებები', 'Корпоративное право, Договоры'), city: t('Batumi', 'ბათუმი', 'Батуми'), langs: t('Georgian, English', 'ქართული, ინგლისური', 'грузинский, английский'),
+        years: 7, rating: 4.6, reviews: 12, price: 120, priceKind: 'hour', verified: true, isNew: true,
+        bio: t('Company charters, shareholder agreements and contracts for founders.', 'წესდებები, პარტნიორთა შეთანხმებები და ხელშეკრულებები დამფუძნებლებისთვის.', 'Уставы, корпоративные договоры и контракты для основателей.'),
+        phone: '+995 555 04 05 06', email: 'davit@kanoni-commons.example', href: '#ask' }),
+      who({ kind: 'person', name: t('Mariam Sulaberidze', 'მარიამ სულაბერიძე', 'Мариам Сулаберидзе'), photo: people[2], role: t('Notary', 'ნოტარიუსი', 'Нотариус'),
+        areas: t('Real estate, Contracts', 'უძრავი ქონება, ხელშეკრულებები', 'Недвижимость, Договоры'), city: t('Kutaisi', 'ქუთაისი', 'Кутаиси'), langs: t('Georgian, Russian', 'ქართული, რუსული', 'грузинский, русский'),
+        years: 15, rating: 4.8, reviews: 54, price: 50, priceKind: 'fixed', verified: true, phone: '+995 555 07 08 09', href: '#ask' }),
+      who({ kind: 'person', name: t('Lasha Tsiklauri', 'ლაშა წიკლაური', 'Лаша Циклаури'), photo: people[3], role: t('Payments compliance advisor', 'საგადახდო შესაბამისობის მრჩეველი', 'Консультант по платёжному комплаенсу'),
+        areas: t('Payments, Taxes', 'გადახდები, გადასახადები', 'Платежи, Налоги'), city: t('Tbilisi', 'თბილისი', 'Тбилиси'), langs: t('Georgian, English', 'ქართული, ინგლისური', 'грузинский, английский'),
+        years: 9, rating: 4.7, reviews: 21, price: 100, priceKind: 'from', status: 'busy', href: '#ask' }),
+      who({ kind: 'person', name: t('Eka Goguadze', 'ეკა გოგუაძე', 'Эка Гогуадзе'), photo: people[4], role: t('Labour lawyer', 'შრომის სამართლის იურისტი', 'Юрист по трудовому праву'),
+        areas: t('Employment', 'შრომის სამართალი', 'Трудовое право'), city: t('Rustavi', 'რუსთავი', 'Рустави'), langs: t('Georgian', 'ქართული', 'грузинский'), years: 5, rating: 4.4, reviews: 7, priceKind: 'ask', status: 'away' }),
+      who({ kind: 'firm', name: t('Rioni & Partners', 'რიონი და პარტნიორები', '«Риони и партнёры»'), photo: firmLogo, role: t('Law firm', 'იურიდიული ფირმა', 'Юридическая фирма'),
+        areas: t('Corporate, Taxes, Disputes', 'კორპორაციული სამართალი, გადასახადები, დავები', 'Корпоративное право, Налоги, Споры'), city: t('Tbilisi', 'თბილისი', 'Тбилиси'), langs: t('Georgian, English, Russian', 'ქართული, ინგლისური, რუსული', 'грузинский, английский, русский'),
+        rating: 4.5, reviews: 29, priceKind: 'ask', verified: true, tier: t('Established', 'სანდო', 'Проверенная'), site: 'https://rioni-partners.example', href: '#ask' }),
+      who({ kind: 'org', name: t('Mtkvari Legal Clinic', 'მტკვრის იურიდიული კლინიკა', 'Юридическая клиника «Мтквари»'), photo: clinicLogo, role: t('Free legal clinic of law students', 'სამართლის სტუდენტების უფასო კლინიკა', 'Бесплатная клиника студентов-юристов'),
+        areas: t('Taxes, Employment, Registration', 'გადასახადები, შრომის სამართალი, რეგისტრაცია', 'Налоги, Трудовое право, Регистрация'), city: t('Tbilisi', 'თბილისი', 'Тбилиси'), langs: t('Georgian, English', 'ქართული, ინგლისური', 'грузинский, английский'),
+        priceKind: 'free', verified: true, email: 'clinic@kanoni-commons.example', href: '#ask' }),
+    ],
+  });
+
+  // ----- requests board -----
+  const req = (o) => it({ body: t('', '', ''), category: t('', '', ''), budgetKind: 'fixed', budget: null, budgetMax: null, city: t('', '', ''), remote: false, langs: '', posted: '', closes: '', status: 'open', responses: 0, author: t('', '', ''), href: '#post', ...o });
+  const board = B('board', {
+    anchor: 'requests', title: L(t('Open requests', 'ღია დავალებები', 'Открытые задачи')), variant: 'cards', find: true, facetCategory: true, facetCity: true, facetStatus: true, sort: true,
+    more: 6, currency: 'GEL', match: 3, cap: 5, cta: L(t('Post a request', 'დავალების გამოქვეყნება', 'Опубликовать задачу')), ctaHref: '#post',
+    items: [
+      req({ title: t('Register as a small business', 'მცირე ბიზნესად რეგისტრაცია', 'Регистрация малого бизнеса'), category: t('Registration', 'რეგისტრაცია', 'Регистрация'),
+        body: t('A bakery opening next month. Need help with the registration under Article 3 of the Small Business Tax Code and the first return.', 'მომავალ თვეს საცხობი იხსნება. საჭიროა დახმარება მცირე ბიზნესის საგადასახადო კოდექსის მე-3 მუხლით გათვალისწინებულ რეგისტრაციასა და პირველ დეკლარაციაში.', 'В следующем месяце открывается пекарня. Нужна помощь с регистрацией по статье 3 Налогового кодекса малого бизнеса и первой декларацией.'),
+        budgetKind: 'range', budget: 150, budgetMax: 300, city: t('Tbilisi', 'თბილისი', 'Тбилиси'), langs: t('English', 'ინგლისური', 'английский'), posted: '2026-10-12', closes: '2026-10-24', responses: 1, author: t('Private person', 'ფიზიკური პირი', 'Частное лицо') }),
+      req({ title: t('Review a shop lease', 'მაღაზიის იჯარის ხელშეკრულების შემოწმება', 'Проверка договора аренды магазина'), category: t('Contracts', 'ხელშეკრულებები', 'Договоры'),
+        body: t('Six-page lease for a corner shop; I want to know the risks before signing.', 'კუთხის მაღაზიის ექვსგვერდიანი იჯარის ხელშეკრულება; ხელმოწერამდე რისკების გაგება მინდა.', 'Шестистраничный договор аренды небольшого магазина; хочу понять риски до подписания.'),
+        budgetKind: 'fixed', budget: 200, city: t('Kutaisi', 'ქუთაისი', 'Кутаиси'), langs: t('Georgian', 'ქართული', 'грузинский'), posted: '2026-10-15', closes: '2026-10-29', responses: 0, author: t('Small business', 'მცირე ბიზნესი', 'Малый бизнес') }),
+      req({ title: t('Card payments for a café — what do I need?', 'ბარათით გადახდა კაფეში — რა მჭირდება?', 'Оплата картой в кафе — что нужно?'), category: t('Payments', 'გადახდები', 'Платежи'),
+        body: t('Choosing a payment service provider and the paperwork for a small café.', 'საგადახდო მომსახურების პროვაიდერის არჩევა და საჭირო საბუთები პატარა კაფესთვის.', 'Выбор поставщика платёжных услуг и документы для небольшого кафе.'),
+        budgetKind: 'unsure', remote: true, langs: t('English, Georgian', 'ინგლისური, ქართული', 'английский, грузинский'), posted: '2026-10-09', closes: '2026-10-20', responses: 3, author: t('Small business', 'მცირე ბიზნესი', 'Малый бизнес') }),
+      req({ title: t('Appeal a late-return penalty', 'დაგვიანებული დეკლარაციის ჯარიმის გასაჩივრება', 'Обжалование штрафа за опоздание с декларацией'), category: t('Taxes', 'გადასახადები', 'Налоги'),
+        body: t('The online service was down on the 15th; the penalty under Article 7 should not apply.', '15 რიცხვში ელექტრონული სერვისი არ მუშაობდა; მე-7 მუხლით გათვალისწინებული ჯარიმა არ უნდა დაეკისროს.', '15-го числа онлайн-сервис не работал; штраф по статье 7 не должен применяться.'),
+        budgetKind: 'range', budget: 400, budgetMax: 700, city: t('Batumi', 'ბათუმი', 'Батуми'), posted: '2026-10-03', closes: '2026-10-31', status: 'progress', responses: 4, author: t('Company', 'კომპანია', 'Компания') }),
+      req({ title: t('Charter for three founders', 'წესდება სამი დამფუძნებლისთვის', 'Устав для трёх основателей'), category: t('Corporate', 'კორპორაციული სამართალი', 'Корпоративное право'),
+        body: t('Done — thank you to everyone who answered.', 'დასრულდა — მადლობა ყველას, ვინც გამოეხმაურა.', 'Готово — спасибо всем, кто откликнулся.'), budgetKind: 'fixed', budget: 350, city: t('Tbilisi', 'თბილისი', 'Тбилиси'), posted: '2026-09-20', closes: '2026-10-05', status: 'closed', responses: 5, author: t('Start-up', 'სტარტაპი', 'Стартап') }),
+    ],
+  });
+  const field = (key, type, label, ph, o = {}) => K.item({ key, type, label: L(label), ph: L(ph || ''), options: L(o.options || ''), required: !!o.required, half: !!o.half });
+  const postForm = B('form', {
+    anchor: 'post', variant: 'card', req: reqPost, fallback: 'outbox', to: '',
+    title: L(t('Post a request', 'დავალების გამოქვეყნება', 'Опубликовать задачу')),
+    submit: L(t('Publish the request', 'გამოქვეყნება', 'Опубликовать')),
+    success: L(t('Thank you! Specialists who fit will see your request.', 'გმადლობთ! შესაფერისი სპეციალისტები თქვენს დავალებას ნახავენ.', 'Спасибо! Подходящие специалисты увидят вашу задачу.')),
+    consent: L(p('Requests are kept in this browser in this demo site.', 'ამ სადემონსტრაციო საიტზე დავალებები ამ ბრაუზერში ინახება.', 'На этом демонстрационном сайте задачи хранятся в этом браузере.')),
+    items: [
+      field('title', 'text', t('What do you need?', 'რა გჭირდებათ?', 'Что нужно?'), '', { required: true }),
+      field('category', 'select', t('Category', 'კატეგორია', 'Категория'), '', { half: true, options: t('Taxes\nRegistration\nContracts\nCorporate\nPayments\nEmployment', 'გადასახადები\nრეგისტრაცია\nხელშეკრულებები\nკორპორაციული სამართალი\nგადახდები\nშრომის სამართალი', 'Налоги\nРегистрация\nДоговоры\nКорпоративное право\nПлатежи\nТрудовое право') }),
+      field('budget', 'number', t('Budget, GEL', 'ბიუჯეტი, ლარი', 'Бюджет, лари'), '', { half: true }),
+      field('details', 'textarea', t('Details', 'დეტალები', 'Подробности'), ''),
+      field('email', 'email', t('E-mail', 'ელფოსტა', 'E-mail'), 'name@example.org', { required: true }),
+    ],
+  });
+  const askForm = B('form', {
+    anchor: 'ask', variant: 'card', req: reqAsk, fallback: 'outbox', to: '',
+    title: L(t('Ask the legal clinic', 'კითხვა იურიდიულ კლინიკას', 'Вопрос юридической клинике')),
+    submit: L(t('Send the question', 'კითხვის გაგზავნა', 'Отправить вопрос')),
+    success: L(t('Thank you! The clinic answers within a week.', 'გმადლობთ! კლინიკა ერთ კვირაში გიპასუხებთ.', 'Спасибо! Клиника ответит в течение недели.')),
+    consent: L(p('Questions are kept in this browser in this demo site.', 'ამ სადემონსტრაციო საიტზე კითხვები ამ ბრაუზერში ინახება.', 'На этом демонстрационном сайте вопросы хранятся в этом браузере.')),
+    items: [
+      field('name', 'text', t('Name', 'სახელი', 'Имя'), '', { required: true, half: true }),
+      field('email', 'email', t('E-mail', 'ელფოსტა', 'E-mail'), 'name@example.org', { required: true, half: true }),
+      field('question', 'textarea', t('Your question', 'თქვენი კითხვა', 'Ваш вопрос'), '', { required: true }),
+    ],
+  });
+
+  // ----- checklist, hubs, search -----
+  const ck = (o) => it({ body: t('', '', ''), due: t('', '', ''), ref: t('', '', ''), group: false, tags: t('', '', ''), ...o });
+  const checklist = B('checklist', {
+    anchor: 'obligations', title: L(t('Obligations of a small business', 'მცირე ბიზნესის ვალდებულებები', 'Обязанности малого бизнеса')),
+    lead: L(t('Tick what is done — your progress stays in this browser.', 'მონიშნეთ შესრულებული — პროგრესი ამ ბრაუზერში დარჩება.', 'Отмечайте выполненное — прогресс сохранится в этом браузере.')), persist: true, progress: true,
+    items: [
+      ck({ label: t('Every month', 'ყოველთვიურად', 'Каждый месяц'), group: true }),
+      ck({ label: t('File the return', 'დეკლარაციის წარდგენა', 'Подать декларацию'), body: t('For the previous tax period, online or at the revenue office.', 'წინა საგადასახადო პერიოდისთვის, ელექტრონულად ან შემოსავლების სამსახურში.', 'За предыдущий налоговый период, онлайн или в налоговой службе.'),
+        due: t('by the 15th', '15 რიცხვამდე', 'до 15-го числа'), ref: t('Small Business Tax Code, Article 5', 'მცირე ბიზნესის საგადასახადო კოდექსის მე-5 მუხლი', 'Налоговый кодекс малого бизнеса, статья 5'), tags: t('Taxes, Returns', 'გადასახადები, დეკლარაციები', 'Налоги, Декларации') }),
+      ck({ label: t('Pay the tax on turnover', 'ბრუნვის გადასახადის გადახდა', 'Уплатить налог с оборота'), due: t('by the 15th', '15 რიცხვამდე', 'до 15-го числа'),
+        ref: t('Small Business Tax Code, Article 4', 'მცირე ბიზნესის საგადასახადო კოდექსის მე-4 მუხლი', 'Налоговый кодекс малого бизнеса, статья 4'), tags: t('Taxes', 'გადასახადები', 'Налоги') }),
+      ck({ label: t('Every year', 'ყოველწლიურად', 'Каждый год'), group: true }),
+      ck({ label: t('Check the turnover limit', 'ბრუნვის ზღვრის შემოწმება', 'Проверить предел оборота'), body: t('Above 500 000 GEL the higher rate applies to the excess.', '500 000 ლარის ზემოთ ზღვარს ზემოთ ნაწილზე მაღალი განაკვეთი მოქმედებს.', 'Свыше 500 000 лари к превышению применяется повышенная ставка.'),
+        due: t('in December', 'დეკემბერში', 'в декабре'), ref: t('Small Business Tax Code, Article 2', 'მცირე ბიზნესის საგადასახადო კოდექსის მე-2 მუხლი', 'Налоговый кодекс малого бизнеса, статья 2'), tags: t('Taxes', 'გადასახადები', 'Налоги') }),
+      ck({ label: t('When something changes', 'ცვლილებისას', 'При изменениях'), group: true }),
+      ck({ label: t('Update the registration data', 'სარეგისტრაციო მონაცემების განახლება', 'Обновить регистрационные сведения'), due: t('within 10 days', '10 დღის ვადაში', 'в течение 10 дней'),
+        ref: t('Small Business Tax Code, Article 3', 'მცირე ბიზნესის საგადასახადო კოდექსის მე-3 მუხლი', 'Налоговый кодекс малого бизнеса, статья 3'), tags: t('Registration', 'რეგისტრაცია', 'Регистрация') }),
+    ],
+  });
+  const tile = (title, topic, text, href) => it({ title, topic, text, href });
+  const hubIndex = B('hub', {
+    anchor: 'topics', title: L(t('Topics', 'თემები', 'Темы')), topic: L(t('', '', '')), lead: L(t('', '', '')), stats: true, limit: 6,
+    items: [
+      tile(t('Taxes', 'გადასახადები', 'Налоги'), t('Taxes', 'გადასახადები', 'Налоги'), t('Rates, returns and the people who help with them', 'განაკვეთები, დეკლარაციები და ვინც ამაში გეხმარებათ', 'Ставки, декларации и те, кто с ними поможет'), '#/compliance'),
+      tile(t('Registration', 'რეგისტრაცია', 'Регистрация'), t('Registration', 'რეგისტრაცია', 'Регистрация'), t('Becoming a small business, online and in person', 'მცირე ბიზნესად გახდომა, ელექტრონულად და ადგილზე', 'Как стать малым бизнесом — онлайн и лично'), '#/law#tax-a3'),
+      tile(t('Payments', 'გადახდები', 'Платежи'), t('Payments', 'გადახდები', 'Платежи'), t('Accepting cards and online payments', 'ბარათებით და ონლაინ გადახდების მიღება', 'Приём карт и онлайн-платежей'), '#/specialists'),
+      tile(t('Contracts', 'ხელშეკრულებები', 'Договоры'), t('Contracts', 'ხელშეკრულებები', 'Договоры'), t('Leases, charters and agreements', 'იჯარა, წესდებები და შეთანხმებები', 'Аренда, уставы и соглашения'), '#/requests'),
+    ],
+  });
+  const hubTax = B('hub', { anchor: 'taxes', title: L(t('Everything on taxes', 'ყველაფერი გადასახადებზე', 'Всё о налогах')), topic: L(t('Taxes', 'გადასახადები', 'Налоги')), lead: L(t('', '', '')), stats: true, limit: 5, items: [] });
+  const finder = B('finder', {
+    anchor: 'search', title: L(t('Search the portal', 'ძიება პორტალზე', 'Поиск по порталу')),
+    placeholder: L(t('A word, a term or an article number', 'სიტყვა, ტერმინი ან მუხლის ნომერი', 'Слово, термин или номер статьи')),
+    suggest: L(t('turnover, penalty, registration', 'ბრუნვა, ჯარიმა, რეგისტრაცია', 'оборот, штраф, регистрация')), tabs: true, limit: 20,
+  });
+
+  // ----- pages -----
+  const section = (o, blocks) => K.sec({ pad: 'm', width: 'wide', ...o }, blocks);
+  const pageHero = (eyebrow, title, text) => B('hero', { layout: 'left', height: 'auto', eyebrow: L(eyebrow), title: L(title), text: L(text), items: [] });
+  d.regions.header = [
+    B('nav', {
+      brand: L(t('Kanoni Commons', 'კანონის საერთო სივრცე', 'Канони Коммонс')), logo: mark, logoH: 36, sticky: true, variant: 'bar', pages: true, items: [],
+      ctaLabel: L(t('Post a request', 'დავალება', 'Задача')), ctaHref: '#/requests#post',
+    }),
+  ];
+  d.regions.main = [
+    B('page', {
+      slug: 'home', title: L(t('Home', 'მთავარი', 'Главная')), navLabel: L(t('Home', 'მთავარი', 'Главная')), nav: true,
+      blocks: [
+        B('hero', {
+          layout: 'split', media: hero, height: 'auto',
+          eyebrow: L(t('Open law · specialists · requests', 'ღია სამართალი · სპეციალისტები · დავალებები', 'Открытое право · специалисты · задачи')),
+          title: L(t('The law you can read, and people who apply it', 'კანონი, რომლის წაკითხვაც შეგიძლიათ, და ადამიანები, ვინც მას იყენებენ', 'Закон, который можно прочитать, и люди, которые его применяют')),
+          text: L(p('Read the model tax code article by article, look up a term, find a specialist and post your request — all in one place.',
+            'წაიკითხეთ სანიმუშო საგადასახადო კოდექსი მუხლობრივად, მოძებნეთ ტერმინი, იპოვეთ სპეციალისტი და გამოაქვეყნეთ დავალება — ყველაფერი ერთ ადგილას.',
+            'Читайте модельный налоговый кодекс по статьям, ищите термины и специалистов, публикуйте задачи — всё в одном месте.')),
+          items: [K.btn(t('Read the code', 'კოდექსის წაკითხვა', 'Читать кодекс'), '#/law', 'primary'), K.btn(t('Find a specialist', 'სპეციალისტის პოვნა', 'Найти специалиста'), '#/specialists', 'secondary')],
+        }),
+        section({ anchor: 'find' }, [finder]),
+        section({ tone: 'muted' }, [hubIndex]),
+        B('cta', {
+          variant: 'banner', title: L(t('Need help with an obligation?', 'დახმარება გჭირდებათ ვალდებულებასთან?', 'Нужна помощь с обязанностью?')),
+          html: L(p('Post a request — the specialists who fit will answer.', 'გამოაქვეყნეთ დავალება — შესაფერისი სპეციალისტები გიპასუხებენ.', 'Опубликуйте задачу — ответят подходящие специалисты.')),
+          items: [K.btn(t('Post a request', 'დავალების გამოქვეყნება', 'Опубликовать задачу'), '#/requests#post', 'primary')],
+        }),
+      ],
+    }),
+    B('page', {
+      slug: 'law', title: L(t('Law', 'კანონმდებლობა', 'Законодательство')), nav: true,
+      metaDesc: L(t('The model small business tax code with its chapters, articles and planned changes.', 'მცირე ბიზნესის სანიმუშო საგადასახადო კოდექსი თავებით, მუხლებითა და დაგეგმილი ცვლილებებით.', 'Модельный налоговый кодекс малого бизнеса: главы, статьи и предстоящие изменения.')),
+      blocks: [section({}, [act])],
+    }),
+    B('page', {
+      slug: 'glossary', title: L(t('Glossary', 'გლოსარიუმი', 'Глоссарий')), nav: true,
+      blocks: [section({}, [terms])],
+    }),
+    B('page', {
+      slug: 'specialists', title: L(t('Specialists', 'სპეციალისტები', 'Специалисты')), nav: true,
+      blocks: [pageHero(t('Directory', 'კატალოგი', 'Каталог'), t('Lawyers, notaries, firms and a free clinic', 'იურისტები, ნოტარიუსები, კომპანიები და უფასო კლინიკა', 'Юристы, нотариусы, компании и бесплатная клиника'),
+        p('Filter by practice area, city and language; verified profiles carry a green mark.', 'გაფილტრეთ სფეროს, ქალაქისა და ენის მიხედვით; გადამოწმებულ პროფილებს მწვანე ნიშანი აქვს.', 'Фильтруйте по направлению, городу и языку; у проверенных профилей зелёная отметка.')),
+      section({}, [directory]), section({ tone: 'muted', width: 'narrow' }, [askForm])],
+    }),
+    B('page', {
+      slug: 'requests', title: L(t('Requests', 'დავალებები', 'Задачи')), nav: true,
+      blocks: [section({}, [board]), section({ tone: 'muted', width: 'narrow' }, [postForm])],
+    }),
+    B('page', {
+      slug: 'compliance', title: L(t('Compliance', 'შესაბამისობა', 'Соответствие')), nav: true,
+      blocks: [section({ width: 'narrow' }, [checklist]), section({ tone: 'muted' }, [hubTax])],
+    }),
+    V.notFoundPage ? V.notFoundPage(d, langs) : null,
+  ].filter(Boolean);
+  const links = (rows) => '<ul>' + rows.map(([h, x]) => '<li><a href="' + h + '">' + x + '</a></li>').join('') + '</ul>';
+  d.regions.footer = [
+    B('footer', {
+      variant: 'columns', tone: 'dark', logo: mark, logoH: 40,
+      brand: L(t('Kanoni Commons', 'კანონის საერთო სივრცე', 'Канони Коммонс')),
+      text: L(p('A fictional demo portal: the acts, people and firms on it do not exist.', 'გამოგონილი სადემონსტრაციო პორტალი: აქ მოცემული აქტები, ადამიანები და კომპანიები არ არსებობს.', 'Вымышленный демонстрационный портал: акты, люди и компании на нём не существуют.')),
+      items: [
+        K.item({ title: L(t('Read', 'კითხვა', 'Читать')), html: L(t(links([['#/law', 'Tax code'], ['#/glossary', 'Glossary'], ['#/compliance', 'Obligations']]),
+          links([['#/law', 'საგადასახადო კოდექსი'], ['#/glossary', 'გლოსარიუმი'], ['#/compliance', 'ვალდებულებები']]),
+          links([['#/law', 'Налоговый кодекс'], ['#/glossary', 'Глоссарий'], ['#/compliance', 'Обязанности']]))) }),
+        K.item({ title: L(t('Find help', 'დახმარება', 'Помощь')), html: L(t(links([['#/specialists', 'Specialists'], ['#/requests', 'Requests'], ['#/requests#post', 'Post a request']]),
+          links([['#/specialists', 'სპეციალისტები'], ['#/requests', 'დავალებები'], ['#/requests#post', 'დავალების გამოქვეყნება']]),
+          links([['#/specialists', 'Специалисты'], ['#/requests', 'Задачи'], ['#/requests#post', 'Опубликовать задачу']]))) }),
+      ],
+      copy: L(t('© 2026 Kanoni Commons · fictional demo content', '© 2026 კანონის საერთო სივრცე · გამოგონილი შინაარსი', '© 2026 Канони Коммонс · вымышленное содержимое')),
+    }),
+  ];
+  return V.normalizeDoc(d);
+}
+
+const TPL_PORTAL = {
+  id: 'portal',
+  name: { en: 'Legal portal', ru: 'Правовой портал', uk: 'Правовий портал', de: 'Rechtsportal', fr: 'Portail juridique', es: 'Portal jurídico', ka: 'სამართლებრივი პორტალი' },
+  desc: {
+    en: 'Open law and legal services: a code with chapters, articles, cross-references and planned changes; a glossary linked across the site; specialists and firms with filters; a requests board matched with the directory; a compliance checklist; topic hubs and one search box.',
+    ru: 'Открытое право и юридические услуги: кодекс с главами, статьями, перекрёстными ссылками и предстоящими изменениями; глоссарий со ссылками по всему сайту; специалисты и компании с фильтрами; доска задач с подбором специалистов; чек-лист обязанностей; тематические разделы и общий поиск.',
+    uk: 'Відкрите право та юридичні послуги: кодекс із главами, статтями, перехресними посиланнями та запланованими змінами; глосарій із посиланнями на всьому сайті; фахівці й компанії з фільтрами; дошка завдань із добором фахівців; чек-лист обов’язків; тематичні розділи й загальний пошук.',
+    de: 'Offenes Recht und Rechtsdienste: ein Kodex mit Kapiteln, Artikeln, Querverweisen und geplanten Änderungen; ein auf der ganzen Website verlinktes Glossar; Fachleute und Kanzleien mit Filtern; Anfragen mit passenden Fachleuten; eine Pflichten-Checkliste; Themenseiten und eine Gesamtsuche.',
+    fr: 'Droit ouvert et services juridiques : un code avec chapitres, articles, renvois et modifications prévues ; un glossaire lié sur tout le site ; spécialistes et cabinets avec filtres ; un tableau de demandes relié à l’annuaire ; une liste d’obligations ; des pages thématiques et une recherche globale.',
+    es: 'Derecho abierto y servicios jurídicos: un código con capítulos, artículos, remisiones y cambios previstos; un glosario enlazado en todo el sitio; especialistas y despachos con filtros; un tablón de solicitudes con especialistas adecuados; una lista de obligaciones; páginas temáticas y un buscador general.',
+    ka: 'ღია სამართალი და იურიდიული მომსახურება: კოდექსი თავებით, მუხლებით, ჯვარედინი მითითებებითა და დაგეგმილი ცვლილებებით; მთელ საიტზე დაკავშირებული გლოსარიუმი; სპეციალისტები და კომპანიები ფილტრებით; დავალებების დაფა შესაფერისი სპეციალისტებით; ვალდებულებების სია; თემატური გვერდები და საერთო ძიება.',
+  },
+  langs: ['en', 'ka', 'ru'],
+  build: tplBuildPortal,
+};
+
+export {
+  TPL_PORTAL,
+  tplBuildPortal,
+  tplPortalHeroSVG,
+  tplPortalMarkSVG
+};

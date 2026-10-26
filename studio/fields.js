@@ -1,0 +1,712 @@
+// studio/fields.js - schema-driven field controls of the inspector and the settings panels: select, number, range,
+// checkbox, color, text, i18n, rich preview, file, icon, date / day / time, languages, plus product field types.
+//
+// Approach: the UI is generated from registry schemas (arrays of Field descriptors), never hand-built per block type.
+// One renderer for dozens of block types and every settings panel means one place for a11y, validation and the
+// typing / commit protocol below; a product adds a type through ED.fieldControls instead of forking the inspector.
+// Change protocol: onChange(value, typing). typing = true on 'input' (coalesced into one history entry by the
+// caller's commit key), false on 'change' (closes the burst). Controls that cannot produce a meaningful partial value
+// (selects, pickers) always send false.
+// Controls are uncontrolled after creation: they read the value once and own their DOM state; the panel is rebuilt
+// (ctx.rerender) only when a field that others depend on changes, never per keystroke (that would kill focus).
+import { safeColor } from '../color/color.js';
+import { langDir } from '../i18n/lang.js';
+import { own } from '../util/value.js';
+import { ICONS } from '../doc/product.js';
+import { $$, appendKids, clamp, esc, h, htmlText, isObj, setCaret } from '../ui/dom.js';
+import { fmtBytes, guessMime, isImageMime, pickFiles } from '../ui/files.js';
+import { langLabel, monthShort, pad2 } from '../ui/lang.js';
+import { icon, iconEl } from '../ui/icons.js';
+import { t } from '../ui/i18n.js';
+import { openMenu, openPopover, toast } from '../ui/overlays.js';
+import { S } from './state.js';
+import { attList, blockAnchors, emptyText, optionLabel, pickT, richKind, viewerIcon } from './doc.js';
+import { ED } from './config.js';
+import { addFiles, attURL } from './attach.js';
+import { blockEl, fieldEl } from './canvas.js';
+import { select } from './select.js';
+import { closeDrawers } from './shell.js';
+
+// ===========================================================================
+// 15. Schema-driven field controls
+// ===========================================================================
+// Field = { key, type, label? | labelText?, options?, min?, max?, step?, unit?, accept?, when?, show(obj)?, deps?,
+//   hint? | hintText?, check(value, obj) → message?, allowPresent?, nullable?, multiline?, kind?, suggest? }
+
+// Monotonic ids for label/for and aria-* wiring. Never reused within a session, so a stale reference can never
+// point at a different control after a re-render.
+let fieldSeq = 0;
+const fid = () => 'ed-f' + (++fieldSeq);
+
+// when: { key: value | [values] } (declarative, so dependencies are discoverable for renderFields); show(obj) is the
+// escape hatch for conditions a map cannot express (its dependencies must then be listed in f.deps).
+function whenOK(when, obj) {
+  if (!when) return true;
+  return Object.entries(when).every(([k, v]) => (Array.isArray(v) ? v.includes(obj?.[k]) : obj?.[k] === v));
+}
+const fieldShown = (f, obj) => whenOK(f.when, obj) && (typeof f.show !== 'function' || !!f.show(obj || {}));
+
+// Render `fields` into box. get() returns the (fresh) object; set(key, value, typing) applies a change.
+// Fields listed in another field's `when` / `deps` re-render the box when they change.
+function renderFields(box, fields, get, set, ctx = {}) {
+  const obj = get() || {};
+  const list = (fields || []).filter(Boolean);
+  const deps = new Set();
+  for (const f of list) {
+    if (f.when) for (const k of Object.keys(f.when)) deps.add(k);
+    if (Array.isArray(f.deps)) for (const k of f.deps) deps.add(k);
+  }
+  for (const f of list) {
+    if (!fieldShown(f, obj)) continue;
+    const row = fieldRow(f, () => (get() || {})[f.key], (v, typing) => {
+      set(f.key, v, !!typing);
+      if (deps.has(f.key) && !typing) ctx.rerender?.();
+    }, { ...ctx, getObj: get });
+    if (row) box.append(row);
+  }
+}
+
+// --- keyboard models for composite controls -----------------------------------
+
+// Radio group of buttons (role=radio): one Tab stop (the checked button); arrows / Home / End move and select
+// (WAI-ARIA radio group: selection follows focus). Works when the click handler re-renders the panel.
+function radioRoving(g) {
+  const radios = () => $$('[role=radio]', g).filter((b) => !b.disabled);
+  const sync = () => {
+    const rs = radios();
+    const on = rs.find((b) => b.getAttribute('aria-checked') === 'true') || rs[0];
+    for (const b of rs) b.tabIndex = b === on ? 0 : -1;
+  };
+  g.addEventListener('keydown', (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const rs = radios();
+    const i = rs.indexOf(e.target);
+    if (i < 0) return;
+    const rtl = getComputedStyle(g).direction === 'rtl';
+    let j;
+    switch (e.key) {
+      case 'ArrowDown': j = i + 1; break;
+      case 'ArrowUp': j = i - 1; break;
+      case 'ArrowRight': j = rtl ? i - 1 : i + 1; break;
+      case 'ArrowLeft': j = rtl ? i + 1 : i - 1; break;
+      case 'Home': j = 0; break;
+      case 'End': j = rs.length - 1; break;
+      default: return;
+    }
+    e.preventDefault();
+    rovingActivate(rs[(j + rs.length) % rs.length]);
+  });
+  g.addEventListener('click', () => queueMicrotask(sync));
+  sync();
+  return g;
+}
+// Focus + click a radio; when the click re-rendered its panel, focus the radio at the same place in the new one.
+function rovingActivate(el) {
+  const root = el.closest('#ed-right, #ed-left, .ed-dialog, .ed-popover, .ed-preview') || document.body;
+  const idx = $$('[role=radio]', root).indexOf(el);
+  const rootId = root.id;
+  try { el.focus({ preventScroll: true }); } catch { /* ignore */ }
+  el.click();
+  const back = () => {
+    if (el.isConnected || (document.activeElement && document.activeElement !== document.body)) return;
+    const r2 = rootId ? document.getElementById(rootId) : root.isConnected ? root : null;
+    const n = r2 && $$('[role=radio]', r2)[idx];
+    if (n) { try { n.focus({ preventScroll: true }); } catch { /* ignore */ } }
+  };
+  back();
+  setTimeout(back, 0); // panels refreshed in a microtask
+}
+// Picker grid (icons, colours, characters): one Tab stop; arrows move by cell / row (columns measured from the
+// layout), Home / End; Enter / Space activate the focused button natively. Returns a re-sync function for refills.
+// Column count is measured (items sharing the first item's offsetTop), not configured: the grid is CSS auto-fill,
+// so the count changes with panel width; measuring at keydown time is always right.
+function gridRoving(grid, itemSel, isCurrent = () => false) {
+  const items = () => [...grid.querySelectorAll(itemSel)].filter((x) => !x.disabled && !x.hidden);
+  const set = (el) => { for (const x of items()) x.tabIndex = x === el ? 0 : -1; };
+  const cols = (its) => {
+    const top = its[0].offsetTop;
+    let n = 0;
+    while (n < its.length && Math.abs(its[n].offsetTop - top) < 2) n++;
+    return Math.max(1, n);
+  };
+  grid.addEventListener('keydown', (e) => {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    const its = items();
+    const i = its.indexOf(e.target);
+    if (i < 0) return;
+    const c = cols(its);
+    const rtl = getComputedStyle(grid).direction === 'rtl';
+    let j;
+    switch (e.key) {
+      case 'ArrowRight': j = rtl ? i - 1 : i + 1; break;
+      case 'ArrowLeft': j = rtl ? i + 1 : i - 1; break;
+      case 'ArrowDown': j = i + c < its.length ? i + c : i; break;
+      case 'ArrowUp': j = i - c >= 0 ? i - c : i; break;
+      case 'Home': j = 0; break;
+      case 'End': j = its.length - 1; break;
+      default: return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    const to = its[clamp(j, 0, its.length - 1)];
+    set(to);
+    try { to.focus(); } catch { /* ignore */ }
+  });
+  grid.addEventListener('focusin', (e) => { const it = e.target.closest?.(itemSel); if (it && grid.contains(it)) set(it); });
+  const sync = () => { const its = items(); set(its.find(isCurrent) || its[0]); };
+  sync();
+  return sync;
+}
+
+function fieldRow(f, get, onChange, ctx = {}) {
+  const id = fid();
+  const label = f.labelText || t(f.label || 'f.' + f.key);
+  const ctrl = fieldControl(f, get, onChange, id, ctx);
+  if (!ctrl) return null;
+  const inline = f.type === 'checkbox';
+  const row = h('div', { class: 'ed-field' + (inline ? ' ed-field-check' : '') + (f.wide ? ' ed-field-wide' : ''), dataset: { key: f.key } });
+  // <label for> only names labelable elements: a radio group / chip group / rich preview gets aria-labelledby.
+  const target = ctrl.id === id ? ctrl : ctrl.querySelector('#' + id);
+  const labelable = !target || /^(INPUT|SELECT|TEXTAREA|BUTTON|METER|OUTPUT|PROGRESS)$/.test(target.tagName);
+  if (inline) {
+    row.append(ctrl, h('label', { for: id, class: 'ed-label' }, label));
+  } else {
+    const lab = labelable ? h('label', { for: id, class: 'ed-label' }, label) : h('span', { id: id + 'l', class: 'ed-label' }, label);
+    if (!labelable) target.setAttribute('aria-labelledby', id + 'l');
+    if (f.type === 'i18n') lab.append(h('span', { class: 'ed-lang-badge', title: t('fld.editingLang', { lang: langLabel(S.lang) }) }, S.lang));
+    row.append(lab, ctrl);
+  }
+  if (f.hint || f.hintText) row.append(h('div', { class: 'ed-hint', id: id + 'h' }, f.hintText || t(f.hint)));
+  if (typeof f.check === 'function') {
+    // Live validation message under the field (anchors, SKUs, currency, URLs…): check(value, obj) → message | ''.
+    const warn = h('div', { class: 'ed-hint ed-hint-warn', role: 'status', id: id + 'w', hidden: true });
+    // queueMicrotask: the control's own input handler (which commits the value) runs first, so check() sees the new
+    // value via ctx.getObj. A throwing check counts as valid: a product bug must not block editing.
+    const paint = () => {
+      let msg = '';
+      try { msg = f.check(get(), ctx.getObj ? ctx.getObj() || {} : {}) || ''; } catch { msg = ''; }
+      warn.hidden = !msg;
+      warn.textContent = msg;
+      const el = row.querySelector('#' + id) || row.querySelector('input, select, textarea');
+      if (el) { if (msg) { el.setAttribute('aria-invalid', 'true'); el.setAttribute('aria-describedby', warn.id); } else { el.removeAttribute('aria-invalid'); el.removeAttribute('aria-describedby'); } }
+    };
+    row.append(warn);
+    row.addEventListener('input', () => queueMicrotask(paint));
+    row.addEventListener('change', () => queueMicrotask(paint));
+    paint();
+  }
+  return row;
+}
+
+// Built-in types first, then ED.fieldControls; an unknown type degrades to a plain text input (data stays editable).
+// own() lookup: a type named like an Object.prototype member ('constructor') must not resolve to it.
+function fieldControl(f, get, onChange, id, ctx) {
+  const v = get();
+  switch (f.type) {
+    case 'select': return selectControl(f, v, onChange, id);
+    case 'number': return numberControl(f, v, onChange, id);
+    case 'range': return rangeControl(f, v, onChange, id);
+    case 'checkbox': return h('input', { type: 'checkbox', id, class: 'ed-switch', role: 'switch', checked: !!v, onchange: (e) => onChange(e.target.checked) });
+    case 'color': return colorControl(f, v, onChange, id);
+    case 'text': return textControl(f, v, onChange, id);
+    case 'textarea': return f.code ? codeArea(f, v, onChange, id) : h('textarea', { id, class: 'ed-input ed-textarea', dir: 'auto', rows: f.rows || 3, value: v ?? '', oninput: (e) => onChange(e.target.value, true), onchange: (e) => onChange(e.target.value, false) });
+    case 'i18n': return i18nControl(f, get, onChange, id, ctx);
+    case 'att': return attControl(f, v, onChange, id, ctx);
+    case 'icon': return iconControl(f, v, onChange, id);
+    case 'date': return dateControl(f, v, onChange, id, ctx);
+    case 'day': return dayControl(f, v, onChange, id);
+    case 'time': return timeControl(f, v, onChange, id);
+    case 'langs': return langsControl(f, v, onChange, id);
+    default:
+      if (own(ED.fieldControls, f.type)) return ED.fieldControls[f.type](f, v, onChange, id, ctx);
+      return h('input', { type: 'text', id, class: 'ed-input', dir: 'auto', value: v == null ? '' : String(v), oninput: (e) => onChange(e.target.value, true) });
+  }
+}
+
+// Source code textarea (schema field { type: 'textarea', code: true }): monospace, no wrapping or spell checking; Tab
+// indents by two spaces (Escape first, then Tab, moves focus on as usual).
+function codeArea(f, v, onChange, id) {
+  let tabOut = false;
+  const ta = h('textarea', {
+    id, class: 'ed-input ed-textarea ed-code', dir: 'ltr', rows: f.rows || 8, spellcheck: false, wrap: 'off',
+    autocapitalize: 'off', autocomplete: 'off', value: v ?? '',
+    oninput: (e) => onChange(e.target.value, true), onchange: (e) => onChange(e.target.value, false),
+    onkeydown: (e) => {
+      if (e.key === 'Escape') { tabOut = true; return; }
+      if (e.key !== 'Tab' || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey || tabOut) { tabOut = false; return; }
+      e.preventDefault();
+      ta.setRangeText('  ', ta.selectionStart, ta.selectionEnd, 'end');
+      onChange(ta.value, true);
+    },
+    onblur: () => { tabOut = false; },
+  });
+  return ta;
+}
+// Plain text field; f.suggest === 'anchors': a datalist of the page's link targets (blocks, product extras);
+// f.suggestList: fixed suggestions (currencies, endpoint examples). <datalist> gives native autocomplete for free
+// but cannot show groups and is barely discoverable, hence the extra link-picker menu button.
+// The value is trimmed on change only: trimming on input would eat the space the user is about to type.
+function textControl(f, v, onChange, id) {
+  const inp = h('input', {
+    type: f.inputType || 'text', id, class: 'ed-input', dir: 'auto', value: v ?? '', spellcheck: 'false', autocomplete: 'off',
+    placeholder: f.placeholderText || (f.placeholder ? t(f.placeholder) : ''),
+    oninput: (e) => onChange(e.target.value, true), onchange: (e) => onChange(e.target.value.trim(), false),
+  });
+  const links = f.suggest === 'anchors' ? linkSuggestions() : null;
+  const list = links ? links.map((x) => ({ value: x.href, label: x.group ? `${x.group} · ${x.label}` : x.label }))
+    : Array.isArray(f.suggestList) ? f.suggestList.map((x) => ({ value: String(x) })) : null;
+  if (!list) return inp;
+  const dl = h('datalist', { id: id + 'd' }, list.map((x) => h('option', { value: x.value, label: x.label || null })));
+  inp.setAttribute('list', dl.id);
+  if (!inp.placeholder && f.suggest === 'anchors') inp.placeholder = '#…  https://…';
+  const box = h('div', { class: 'ed-suggest' }, inp, dl);
+  if (links && links.length) {
+    // Link picker: the document's link targets (pages, sections, special targets) in a menu, grouped by `group`.
+    const pick = h('button', {
+      type: 'button', class: 'ed-iconbtn ed-sm ed-suggest-pick', title: t('fld.pickLink'), 'aria-label': t('fld.pickLink'), 'aria-haspopup': 'menu', html: icon('link'),
+      onclick: (e) => {
+        const items = [];
+        let g = null;
+        for (const x of linkSuggestions()) {
+          if ((x.group || null) !== g) { g = x.group || null; if (g) items.push({ header: true, label: g }); }
+          items.push({ label: x.label, checked: inp.value.trim() === x.href, action: () => { inp.value = x.href; onChange(x.href, false); inp.dispatchEvent(new Event('change', { bubbles: true })); } });
+        }
+        openMenu(e.currentTarget, items, { className: 'ed-menu-links' });
+      },
+    });
+    box.classList.add('ed-suggest-has-pick');
+    box.append(pick);
+  }
+  return box;
+}
+
+// In-page link targets for href fields: blocks with anchors, the product's page targets (ED.linkExtras: top of the
+// page, cart, language switches…), then the other link targets. ED.linkTargets replaces the whole list (pages and the
+// sections on them, grouped).
+function linkSuggestions() {
+  if (ED.linkTargets) {
+    const r = ED.linkTargets(S.doc, blockAnchors());
+    if (Array.isArray(r)) return r.filter((x) => x && typeof x.href === 'string' && x.href);
+  }
+  const out = [];
+  const seen = new Set();
+  const add = (href, label) => { if (!seen.has(href)) { seen.add(href); out.push({ href, label }); } };
+  const targets = blockAnchors();
+  for (const a of targets) if (a.anchor) add(a.href, a.label);
+  for (const x of ED.linkExtras ? ED.linkExtras(S.doc) : []) add(x.href, x.label);
+  for (const a of targets) if (!a.anchor) add(a.href, a.label);
+  return out;
+}
+
+// Calendar day 'YYYY-MM-DD' ('' = none).
+function dayControl(f, v, onChange, id) {
+  const val = /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '';
+  const inp = h('input', { type: 'date', id, class: 'ed-input ed-day', value: val, min: '1900-01-01', max: '2200-12-31' });
+  inp.addEventListener('change', () => { const x = inp.value; if (!x || /^\d{4}-\d{2}-\d{2}$/.test(x)) onChange(x, false); });
+  return inp;
+}
+
+// Time of day 'HH:MM' ('' = none).
+function timeControl(f, v, onChange, id) {
+  const val = /^\d{2}:\d{2}$/.test(String(v || '')) ? String(v) : '';
+  const inp = h('input', { type: 'time', id, class: 'ed-input ed-time', value: val, step: 60 });
+  inp.addEventListener('change', () => { const x = inp.value.slice(0, 5); if (!x || /^\d{2}:\d{2}$/.test(x)) onChange(x, false); });
+  return inp;
+}
+
+function selectControl(f, v, onChange, id) {
+  const opts = f.options || [];
+  // Few, short options -> segmented control (all choices visible, one click); otherwise a native <select>.
+  // The 9-character limit keeps the segment row from overflowing the narrow inspector in any UI language.
+  const short = opts.length > 1 && opts.length <= 4 && opts.every((o) => optionLabel(o).length <= 9) && !f.noSeg;
+  if (short) {
+    // Segmented control (radio group)
+    const g = h('div', { class: 'ed-seg', role: 'radiogroup', id });
+    for (const o of opts) {
+      const on = String(o.v) === String(v ?? '');
+      g.append(h('button', {
+        type: 'button', class: 'ed-seg-btn' + (on ? ' ed-on' : ''), role: 'radio', 'aria-checked': String(on),
+        onclick: () => {
+          for (const b of g.children) { b.classList.remove('ed-on'); b.setAttribute('aria-checked', 'false'); }
+          const me = g.children[opts.indexOf(o)];
+          me.classList.add('ed-on'); me.setAttribute('aria-checked', 'true');
+          onChange(o.v);
+        },
+      }, optionLabel(o)));
+    }
+    return radioRoving(g);
+  }
+  const sel = h('select', { id, class: 'ed-input ed-select' });
+  for (const o of opts) sel.append(h('option', { value: String(o.v) }, optionLabel(o)));
+  // A stored value not among the options (older document, removed option) is shown as-is instead of silently
+  // displaying the first option, which would misreport the data and overwrite it on the next change.
+  if (v != null && !opts.some((o) => String(o.v) === String(v))) sel.append(h('option', { value: String(v) }, String(v)));
+  sel.value = String(v ?? '');
+  sel.addEventListener('change', () => {
+    const o = opts.find((x) => String(x.v) === sel.value);
+    onChange(o ? o.v : sel.value);
+  });
+  return sel;
+}
+
+// While typing only valid in-range numbers are sent (intermediate states like '-' or '1e' are ignored);
+// on change the value is clamped and written back, an empty non-nullable field reverts to the stored value.
+function numberControl(f, v, onChange, id) {
+  const min = f.min ?? -Infinity, max = f.max ?? Infinity;
+  const inp = h('input', {
+    type: 'number', id, class: 'ed-input ed-num', value: v == null ? '' : String(v), min: Number.isFinite(min) ? min : null,
+    max: Number.isFinite(max) ? max : null, step: f.step ?? 1, inputmode: 'decimal', placeholder: f.nullable ? t('fld.auto') : '',
+  });
+  inp.addEventListener('input', () => {
+    if (inp.value === '') { if (f.nullable) onChange(null, true); return; }
+    const n = parseFloat(inp.value);
+    if (Number.isFinite(n) && n >= min && n <= max) onChange(n, true);
+  });
+  inp.addEventListener('change', () => {
+    if (inp.value === '') { if (f.nullable) onChange(null, false); else inp.value = v == null ? '' : String(v); return; }
+    let n = parseFloat(inp.value);
+    if (!Number.isFinite(n)) n = Number.isFinite(min) ? min : 0;
+    n = clamp(n, min, max);
+    inp.value = String(n);
+    onChange(n, false);
+  });
+  return h('div', { class: 'ed-num-wrap' }, inp, f.unit ? h('span', { class: 'ed-unit' }, f.unit) : null);
+}
+
+function rangeControl(f, v, onChange, id) {
+  const min = f.min ?? 0, max = f.max ?? 100, step = f.step ?? 1;
+  const out = h('output', { class: 'ed-range-val', for: id }, fmtNum(v ?? min) + (f.unit || ''));
+  const inp = h('input', { type: 'range', id, class: 'ed-range', min, max, step, value: String(v ?? min) });
+  inp.addEventListener('input', () => { const n = parseFloat(inp.value); out.textContent = fmtNum(n) + (f.unit || ''); onChange(n, true); });
+  inp.addEventListener('change', () => onChange(parseFloat(inp.value), false));
+  return h('div', { class: 'ed-range-wrap' }, inp, out);
+}
+const fmtNum = (n) => (Number.isInteger(+n) ? String(+n) : (+n).toFixed(2).replace(/0+$/, '').replace(/\.$/, ''));
+
+// Colour allowlist of the exported page (viewer safeColor; local copy until the viewer exports it).
+const edSafeColor = typeof safeColor === 'function' ? safeColor : (c) => {
+  c = String(c ?? '').trim();
+  if (!c) return '';
+  if (/^#[0-9a-f]{3,8}$/i.test(c) || /^[a-z]{3,24}$/i.test(c)) return c;
+  if (/^(rgb|hsl)a?\((?:[\d\s.,%/+-]|deg|turn|g?rad)+\)$/i.test(c)) return c;
+  return '';
+};
+
+// Normalize CSS colors to #rrggbb for <input type=color> (empty → '').
+// Canvas 2D fillStyle as a colour parser: assigning any CSS colour and reading it back yields #rrggbb for opaque
+// colours (no hand-written parser for named / rgb / hsl). Translucent colours read back as rgba(...), which fails the
+// test and returns '' (the picker then shows black; the text field keeps the exact value).
+function toHex(c) {
+  if (!c) return '';
+  if (/^#[0-9a-f]{6}$/i.test(c)) return c.toLowerCase();
+  if (/^#[0-9a-f]{3}$/i.test(c)) return '#' + c.slice(1).split('').map((x) => x + x).join('').toLowerCase();
+  try {
+    const cv = document.createElement('canvas').getContext('2d');
+    cv.fillStyle = '#000';
+    cv.fillStyle = c;
+    const r = cv.fillStyle;
+    return /^#[0-9a-f]{6}$/i.test(r) ? r : '';
+  } catch { return ''; }
+}
+
+// f.clearValue: what an emptied field stores ('' = theme default; sideBg stores 'transparent', because normalizeDoc
+// restores the preset colour for '' and the sidebar box would come back after a reload).
+function colorControl(f, v, onChange, id) {
+  const cleared = f.clearValue ?? '';
+  const empty = !v || v === cleared;
+  const hex = empty ? '' : toHex(v);
+  const pick = h('input', { type: 'color', id, class: 'ed-color', value: hex || '#000000', 'aria-label': t(f.label || 'f.' + f.key) });
+  const txt = h('input', {
+    type: 'text', class: 'ed-input ed-color-txt', value: empty ? '' : v, spellcheck: 'false', 'aria-label': t(f.label || 'f.' + f.key),
+    placeholder: f.placeholder ? t(f.placeholder) : t(f.clearValue ? 'fld.none' : 'fld.default'),
+  });
+  const wrap = h('div', { class: 'ed-color-wrap' + (empty ? ' ed-color-empty' : '') });
+  const clear = () => { txt.value = ''; txt.removeAttribute('aria-invalid'); wrap.classList.add('ed-color-empty'); onChange(cleared, false); };
+  pick.addEventListener('input', () => { txt.value = pick.value; txt.removeAttribute('aria-invalid'); wrap.classList.remove('ed-color-empty'); onChange(pick.value, true); });
+  pick.addEventListener('change', () => onChange(pick.value, false));
+  txt.addEventListener('change', () => {
+    const s = txt.value.trim();
+    if (!s) { clear(); return; }
+    // Only what the viewer's colour allowlist keeps (oklch(), color-mix(), var() would be dropped from the page).
+    if (!edSafeColor(s) || (window.CSS && CSS.supports && !CSS.supports('color', s))) {
+      toast(t('fld.invalidColor'), 'warn');
+      txt.setAttribute('aria-invalid', 'true');
+      txt.value = empty ? '' : v || '';
+      return;
+    }
+    txt.removeAttribute('aria-invalid');
+    const hx = toHex(s);
+    if (hx) pick.value = hx;
+    wrap.classList.remove('ed-color-empty');
+    onChange(s, false);
+  });
+  const clr = f.noClear ? null : h('button', {
+    type: 'button', class: 'ed-iconbtn ed-sm', title: t('fld.clear'), 'aria-label': t('fld.clear'), html: icon('close'), onclick: clear,
+  });
+  appendKids(wrap, [pick, txt, clr]);
+  return wrap;
+}
+
+// Plain I18n text for the current content language. Rich / inline-rich fields (formatted text) are not
+// edited here — a plain-text box would drop their formatting — but previewed, with a jump to the page field.
+// Missing translation: the fallback text is shown as placeholder (ed-missing styles it), so the translator sees
+// the source text in place. lang + dir on the input give correct spell checking and RTL caret behaviour.
+// emit() copies the object: mutating the stored I18n in place would bypass history snapshots.
+function i18nControl(f, get, onChange, id, ctx) {
+  const cur = get() || {};
+  const path = (ctx.pathPrefix || '') + f.key;
+  const kind = f.kind || (ctx.blockType ? richKind(ctx.blockType, path) : null);
+  const raw = isObj(cur) ? cur[S.lang] || '' : String(cur || '');
+  let ph = '';
+  if (emptyText(raw)) {
+    const fb = isObj(cur) ? pickT(cur) : '';
+    if (fb) ph = (kind ? htmlText(fb) : fb).slice(0, 120);
+  }
+  if (kind === 'rich' || kind === 'inline') return richPreview(raw, ph, id, ctx.bid, path);
+  const attrs = { id, class: 'ed-input' + (ph ? ' ed-missing' : ''), value: raw, placeholder: ph || (f.placeholder ? t(f.placeholder) : ''), lang: S.lang, dir: langDir(S.lang) === 'rtl' ? 'rtl' : 'auto', spellcheck: 'true' };
+  const el = f.multiline ? h('textarea', { ...attrs, rows: f.rows || 3, class: attrs.class + ' ed-textarea' }) : h('input', { ...attrs, type: 'text' });
+  if (ph) el.title = t('fld.missing', { lang: '…' });
+  const emit = (typing) => {
+    const o = { ...(isObj(get()) ? get() : {}) };
+    o[S.lang] = el.value;
+    el.classList.remove('ed-missing');
+    onChange(o, typing);
+  };
+  el.addEventListener('input', () => emit(true));
+  el.addEventListener('change', () => emit(false)); // closes the typing burst (no-op commits add no undo step)
+  return el;
+}
+
+// Read-only preview of a formatted field + "Edit on page" (selects the block / item, focuses the field).
+function richPreview(raw, ph, id, bid, path) {
+  const txt = htmlText(raw);
+  const box = h('div', {
+    id, class: 'ed-input ed-rich-prev' + (txt ? '' : ' ed-missing'), role: 'textbox', 'aria-readonly': 'true',
+    lang: S.lang, tabindex: '0', 'aria-describedby': id + 'h',
+  }, txt || ph || '');
+  const go = () => {
+    if (!bid) return;
+    const m = /^items\.(\d+)\./.exec(path);
+    select(bid, m ? +m[1] : null, { tab: false });
+    if (S.narrow) closeDrawers(); // the drawer would cover the page
+    const el = fieldEl(bid, path);
+    if (!el) { blockEl(bid)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); return; }
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    try { el.focus({ preventScroll: true }); setCaret(el, (el.textContent || '').length); } catch { /* ignore */ }
+  };
+  box.addEventListener('dblclick', go);
+  box.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
+  const btn = bid ? h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: go }, iconEl('edit'), t('ins.editOnPage')) : null;
+  return h('div', { class: 'ed-rich-ctl' }, box,
+    h('div', { class: 'ed-rich-foot' }, h('span', { class: 'ed-hint', id: id + 'h' }, t('ins.inlineHint')), btn));
+}
+
+// File-picker accept value of an att field ('image/' → 'image/*'; several prefixes comma-separated).
+// The registry declares MIME prefixes ('image/'); the file picker wants 'image/*'. Both helpers derive from the
+// same string so the picker filter and the post-pick check cannot disagree. The check matters: accept is only a hint,
+// users can pick "All files".
+const acceptOf = (f) => String(f?.accept || '').split(',').map((x) => x.trim()).filter(Boolean)
+  .map((p) => (p.endsWith('/') ? p + '*' : p)).join(',');
+const acceptOK = (f, mime) => {
+  const pre = String(f?.accept || '').split(',').map((x) => x.trim().replace(/\*$/, '')).filter(Boolean);
+  return !pre.length || pre.some((p) => String(mime || '').startsWith(p));
+};
+// addFiles options of a file picked for a field (ED.fieldUploadOpts; default: an asset of that field, not a
+// block of its own).
+const fieldUploadOpts = (f, ctx = {}) => (ED.fieldUploadOpts ? ED.fieldUploadOpts(f, ctx) : { asset: true });
+
+// f.accept: MIME prefix(es), e.g. 'image/' or 'audio/,video/'; none = any file.
+function attControl(f, v, onChange, id, ctx) {
+  const list = attList().filter((a) => acceptOK(f, a.mime));
+  const sel = h('select', { id, class: 'ed-input ed-select' }, h('option', { value: '' }, '— ' + t('fld.none') + ' —'),
+    list.map((a) => h('option', { value: a.id }, a.title + (a.title !== a.name ? ` (${a.name})` : ''))));
+  sel.value = v && own(S.doc.attachments, v) ? v : '';
+  sel.addEventListener('change', () => { onChange(sel.value || null, false); ctx.rerender?.(); });
+  const up = h('button', {
+    type: 'button', class: 'ed-btn ed-sm', html: icon('upload') + `<span>${esc(t('fld.upload'))}</span>`,
+    onclick: async () => {
+      const files = await pickFiles({ accept: acceptOf(f) });
+      if (!files.length) return;
+      if (!acceptOK(f, guessMime(files[0].name, files[0].type))) { toast(t('fld.wrongType', { name: files[0].name }), 'warn'); return; }
+      const ids = await addFiles(files.slice(0, 1), { quiet: true, ...fieldUploadOpts(f, ctx) });
+      if (ids.length) { onChange(ids[0], false); ctx.rerender?.(); }
+    },
+  });
+  const wrap = h('div', { class: 'ed-att-ctl' }, h('div', { class: 'ed-row' }, sel, up));
+  const a = v && own(S.doc.attachments, v);
+  if (a) {
+    const u = isImageMime(a.mime) ? attURL(v) : '';
+    wrap.append(h('div', { class: 'ed-att-prev' },
+      u ? h('img', { src: u, alt: '' }) : iconEl(/^(audio|video)\//.test(a.mime || '') ? 'play' : 'file'),
+      h('span', { class: 'ed-att-meta' }, a.name, h('small', {}, fmtBytes(a.size)))));
+  }
+  return wrap;
+}
+
+function iconControl(f, v, onChange, id) {
+  const btn = h('button', { type: 'button', id, class: 'ed-btn ed-icon-pick', 'aria-haspopup': 'dialog' });
+  const paint = (val) => {
+    btn.innerHTML = '';
+    btn.append(h('span', { class: 'ed-ic ed-vicon', html: val ? viewerIcon(val) : '' }), h('span', {}, val || t('fld.noIcon')), iconEl('chevDown'));
+  };
+  paint(v);
+  btn.addEventListener('click', () => openIconPicker(btn, v, (nv) => { v = nv; paint(nv); onChange(nv, false); }));
+  return btn;
+}
+
+// listbox/option roles with roving tabindex: the grid is one Tab stop, arrows move (gridRoving). The filter is a
+// substring match on icon keys; the 'none' cell stays first so clearing is always one step away.
+function openIconPicker(anchor, cur, cb) {
+  const keys = Object.keys(ICONS || {});
+  const search = h('input', { type: 'search', class: 'ed-input', placeholder: t('fld.searchIcons'), 'aria-label': t('fld.searchIcons') });
+  const grid = h('div', { class: 'ed-icon-grid', role: 'listbox', 'aria-label': t('fld.chooseIcon') });
+  const none = h('p', { class: 'ed-muted', role: 'status', hidden: true }, t('fld.noIcons'));
+  const opt = (k, label, html) => h('button', {
+    type: 'button', role: 'option', class: 'ed-icon-cell' + ((k || '') === (cur || '') ? ' ed-on' : ''), 'aria-selected': String((k || '') === (cur || '')),
+    title: label, 'aria-label': label, html, onclick: () => { pop.close(); cb(k); },
+  });
+  let resync = () => {};
+  const fill = () => {
+    const q = search.value.trim().toLowerCase();
+    grid.textContent = '';
+    grid.append(opt('', t('fld.noIcon'), icon('close')));
+    let hits = 0;
+    for (const k of keys) {
+      if (q && !k.toLowerCase().includes(q)) continue;
+      hits++;
+      grid.append(opt(k, k, viewerIcon(k)));
+    }
+    none.hidden = !(q && !hits);
+    resync();
+  };
+  search.addEventListener('input', fill);
+  // ↓ from the search box enters the grid (on the current icon).
+  search.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowDown') return;
+    const f = grid.querySelector('[tabindex="0"]');
+    if (f) { e.preventDefault(); f.focus(); }
+  });
+  fill();
+  resync = gridRoving(grid, '.ed-icon-cell', (b) => b.classList.contains('ed-on'));
+  const pop = openPopover(anchor, h('div', { class: 'ed-icon-picker' }, search, grid, none), { className: 'ed-pop-icons', restoreFocus: true });
+  requestAnimationFrame(() => search.focus());
+}
+
+// Date 'YYYY-MM' | 'YYYY' | '' | 'present'
+// '2020-05' / '2020' → comparable [year, month|null]; null for '', 'present' or junk.
+function dateParts(v) {
+  const m = /^(\d{4})(?:-(\d{2}))?$/.exec(String(v || ''));
+  return m ? [+m[1], m[2] ? +m[2] : null] : null;
+}
+// End before start (same item)? Months are compared only when both dates have one.
+function dateOrderBad(start, end) {
+  const a = dateParts(start), b = dateParts(end);
+  if (!a || !b) return false;
+  if (b[0] !== a[0]) return b[0] < a[0];
+  return a[1] != null && b[1] != null && b[1] < a[1];
+}
+// Year + optional month as two controls, not <input type=month>: month inputs are missing or inconsistent in
+// Safari/Firefox desktop, and résumé-style data needs year-only and 'present' values a native control cannot hold.
+function dateControl(f, v, onChange, id, ctx = {}) {
+  const val = String(v || '');
+  const present = val === 'present';
+  const m = /^(\d{4})(?:-(\d{2}))?$/.exec(val);
+  const year = h('input', { type: 'number', id, class: 'ed-input ed-year', min: 1900, max: 2100, step: 1, placeholder: t('fld.year'), value: m ? m[1] : '', disabled: present, 'aria-label': t('fld.year') });
+  const mon = h('select', { class: 'ed-input ed-select ed-month', disabled: present, 'aria-label': t('fld.month') }, h('option', { value: '' }, '—'));
+  for (let i = 1; i <= 12; i++) mon.append(h('option', { value: pad2(i) }, monthShort(i)));
+  mon.value = m && m[2] ? m[2] : '';
+  // Start / end of the same item: a hint under 'end' when it lies before 'start' (both controls re-check).
+  const warn = h('div', { class: 'ed-hint ed-hint-warn', id: id + 'w', role: 'status', hidden: true }, t('fld.endBeforeStart'));
+  const outer = h('div', { class: 'ed-date-ctl' });
+  const recheckAll = () => {
+    const box = outer.closest('.ed-fields') || outer.parentElement;
+    for (const d of box ? box.querySelectorAll('.ed-date-ctl') : [outer]) d.edCheck?.();
+  };
+  outer.edCheck = () => {
+    if (f.key !== 'end' || !ctx.getObj) return;
+    const o = ctx.getObj() || {};
+    const bad = dateOrderBad(o.start, o.end);
+    warn.hidden = !bad;
+    if (bad) year.setAttribute('aria-describedby', warn.id); else year.removeAttribute('aria-describedby');
+  };
+  const emit = (typing) => {
+    const y = year.value.trim();
+    if (!/^\d{4}$/.test(y)) { if (!y) onChange('', typing); recheckAll(); return; }
+    onChange(mon.value ? `${y}-${mon.value}` : y, typing);
+    recheckAll();
+  };
+  year.addEventListener('input', () => emit(true));
+  year.addEventListener('change', () => {
+    // Out-of-range years (0999, 20255…) are pulled into 1900–2100 when the field is left.
+    const y = year.value.trim();
+    if (/^\d+$/.test(y)) { const c = String(clamp(+y, 1900, 2100)); if (c !== y) year.value = c; }
+    emit(false);
+  });
+  mon.addEventListener('change', () => emit(false));
+  const wrap = h('div', { class: 'ed-date' }, year, mon);
+  if (f.allowPresent || f.key === 'end') {
+    const cb = h('input', { type: 'checkbox', checked: present, id: id + 'p' });
+    cb.addEventListener('change', () => {
+      year.disabled = mon.disabled = cb.checked;
+      if (cb.checked) { onChange('present', false); recheckAll(); } else emit(false);
+    });
+    wrap.append(h('label', { class: 'ed-check-inline', for: id + 'p' }, cb, t('fld.present')));
+  }
+  outer.append(wrap, warn);
+  outer.edCheck();
+  return outer;
+}
+
+// Content languages restriction: null = all.
+// Toggle chips (aria-pressed buttons). At least one language must remain; selecting all stores null so a language
+// added to the document later is included automatically.
+function langsControl(f, v, onChange, id) {
+  const all = S.doc.langs;
+  const cur = Array.isArray(v) ? v.filter((l) => all.includes(l)) : all.slice();
+  let state = cur.slice();
+  const g = h('div', { class: 'ed-chips', id, role: 'group' });
+  for (const l of all) {
+    const on = cur.includes(l);
+    g.append(h('button', {
+      type: 'button', class: 'ed-chip' + (on ? ' ed-on' : ''), 'aria-pressed': String(on), title: langLabel(l),
+      onclick: (e) => {
+        const set = new Set(state);
+        if (set.has(l)) { if (set.size <= 1) { toast(t('fld.oneLang'), 'warn'); return; } set.delete(l); } else set.add(l);
+        const arr = all.filter((x) => set.has(x));
+        state = arr;
+        e.currentTarget.classList.toggle('ed-on', set.has(l));
+        e.currentTarget.setAttribute('aria-pressed', String(set.has(l)));
+        onChange(arr.length === all.length ? null : arr, false);
+      },
+    }, l.toUpperCase()));
+  }
+  return g;
+}
+
+// Collapsible section for inspector / settings panels (open state remembered).
+// <details>/<summary>: native disclosure semantics and keyboard support. State lives in S.openSecs (memory only),
+// so it survives panel rebuilds within the session.
+function section(id, title, content, open = true, extra = null) {
+  const st = S.openSecs[id];
+  const d = h('details', { class: 'ed-sec', open: st === undefined ? open : st, dataset: { sec: id } },
+    h('summary', { class: 'ed-sec-h' }, iconEl('chevRight', 'ed-sec-caret'), h('span', {}, title), extra));
+  d.addEventListener('toggle', () => { S.openSecs[id] = d.open; });
+  d.append(h('div', { class: 'ed-sec-b' }, content));
+  return d;
+}
+
+export {
+  acceptOK,
+  acceptOf,
+  fid,
+  fieldRow,
+  fieldShown,
+  fieldUploadOpts,
+  fmtNum,
+  gridRoving,
+  linkSuggestions,
+  radioRoving,
+  renderFields,
+  section,
+  textControl
+};

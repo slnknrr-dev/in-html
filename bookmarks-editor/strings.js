@@ -1,0 +1,198 @@
+// bookmarks-editor/strings.js - UI strings of Bookmarks in the 7 UI languages of the repository (en is the reference;
+// the other languages are in strings-i18n.js).
+//
+// Structure: one flat object per language, keys namespaced by area (bm.side.*, bm.list.*, bm.f.* fields, bm.act.*
+// actions). Plural entries are objects keyed by Intl.PluralRules categories, resolved by ui/i18n.js t(). Flat keys,
+// not nested objects: a key is greppable as one string from the call site to every translation.
+import { addDicts } from '../ui/i18n.js';
+import { I18N } from './strings-i18n.js';
+
+export const en = {
+  'bm.name': 'Bookmarks',
+  'bm.add': 'Add', 'bm.add.title': 'Add bookmark', 'bm.edit.title': 'Edit bookmark', 'bm.tools': 'More tools', 'bm.select': 'Select',
+  'bm.import.fromBrowser': 'Import from a browser',
+
+  // sidebar
+  'bm.side.library': 'Library', 'bm.side.all': 'All bookmarks', 'bm.side.unread': 'Read later', 'bm.side.fav': 'Favourites',
+  'bm.side.untagged': 'Untagged', 'bm.side.archive': 'Archive', 'bm.side.unfiled': 'No folder', 'bm.side.folders': 'Folders', 'bm.side.tags': 'Tags',
+  'bm.side.noFolders': 'No folders yet.', 'bm.side.noTags': 'No tags yet.', 'bm.side.filterTags': 'Filter tags', 'bm.side.open': 'Open the sidebar',
+  'bm.side.expand': 'Expand', 'bm.side.collapse': 'Collapse',
+
+  // list
+  'bm.list.label': 'Bookmarks', 'bm.list.count': { one: '{n} bookmark', other: '{n} bookmarks' }, 'bm.list.found': { one: '{n} found', other: '{n} found' },
+  'bm.list.more': { one: 'Show {n} more', other: 'Show {n} more' },
+  'bm.item.unread': 'Unread', 'bm.item.public': 'Public', 'bm.item.archived': 'Archived', 'bm.item.script': 'Bookmarklet (script)',
+  'bm.item.noLink': 'This is not a web address; it is never opened from here. Copy it instead.',
+  'bm.empty.title': 'Your bookmarks live here', 'bm.empty.text': 'Add a page, paste a link anywhere on this page, or bring your bookmarks over from a browser or another service.',
+  'bm.empty.none': 'Nothing here', 'bm.empty.howto': 'How do I export bookmarks from my browser?',
+  'bm.howto.chrome.name': 'Chrome', 'bm.howto.chrome': 'Bookmarks manager (Ctrl+Shift+O) → ⋮ → Export bookmarks.',
+  'bm.howto.firefox.name': 'Firefox', 'bm.howto.firefox': 'Library (Ctrl+Shift+O) → Import and Backup → Export Bookmarks to HTML.',
+  'bm.howto.safari.name': 'Safari', 'bm.howto.safari': 'File → Export → Bookmarks.',
+  'bm.howto.edge.name': 'Edge', 'bm.howto.edge': 'Favourites (Ctrl+Shift+O) → ⋯ → Export favourites.',
+  'bm.sort.label': 'Sort', 'bm.sort.new': 'Newest first', 'bm.sort.old': 'Oldest first', 'bm.sort.title': 'Title A–Z', 'bm.sort.host': 'Site',
+  'bm.sort.visited': 'Recently opened', 'bm.sort.modified': 'Recently changed',
+  'bm.layout.label': 'Layout', 'bm.layout.list': 'List', 'bm.layout.cards': 'Cards', 'bm.layout.compact': 'Compact',
+
+  // search
+  'bm.search.ph': 'Search: words, "phrases", #tag, site:, folder:, is:unread…', 'bm.search.label': 'Search bookmarks', 'bm.search.sugg': 'Suggestions',
+  'bm.search.clear': 'Clear the search',
+  'bm.sugg.tag': 'tag', 'bm.sugg.site': 'site', 'bm.sugg.folder': 'folder', 'bm.sugg.is': 'state', 'bm.sugg.has': 'has', 'bm.sugg.date': 'date', 'bm.sugg.op': 'filter',
+
+  // selection
+  'bm.sel.count': { one: '{n} selected', other: '{n} selected' }, 'bm.sel.tap': 'Tap bookmarks to select them', 'bm.sel.all': 'Select all',
+  'bm.sel.clear': 'Clear the selection', 'bm.sel.bar': 'Selected bookmarks',
+
+  // actions
+  'bm.act.open': 'Open', 'bm.act.openAll': { one: 'Open {n} link', other: 'Open {n} links' }, 'bm.act.copyUrl': 'Copy link', 'bm.act.copyUrls': 'Copy links',
+  'bm.act.copyTitle': 'Copy title', 'bm.act.copyMd': 'Copy as Markdown link', 'bm.act.edit': 'Edit…', 'bm.act.tags': 'Tags…', 'bm.act.move': 'Move to…',
+  'bm.act.markRead': 'Mark as read', 'bm.act.markUnread': 'Read later', 'bm.act.fav': 'Add to favourites', 'bm.act.unfav': 'Remove from favourites',
+  'bm.act.public': 'Make public', 'bm.act.private': 'Make private', 'bm.act.archive': 'Archive', 'bm.act.unarchive': 'Move out of the archive',
+  'bm.act.select': 'Select', 'bm.act.deselect': 'Deselect', 'bm.act.delete': 'Delete', 'bm.act.deleteN': { one: 'Delete {n} bookmark', other: 'Delete {n} bookmarks' },
+  'bm.act.more': 'More actions', 'bm.act.deleteConfirm': { one: 'Delete {n} bookmark?', other: 'Delete {n} bookmarks?' },
+  'bm.act.deleted': { one: '{n} bookmark deleted', other: '{n} bookmarks deleted' }, 'bm.act.added': 'Bookmark added', 'bm.act.saved': 'Bookmark saved',
+  'bm.act.moved': { one: '{n} bookmark moved to {folder}', other: '{n} bookmarks moved to {folder}' },
+  'bm.act.tagged': { one: 'Tagged {n} bookmark with “{tag}”', other: 'Tagged {n} bookmarks with “{tag}”' },
+  'bm.act.tagsChanged': { one: 'Tags of {n} bookmark changed', other: 'Tags of {n} bookmarks changed' },
+  'bm.act.unread.on': { one: '{n} bookmark to read later', other: '{n} bookmarks to read later' }, 'bm.act.unread.off': { one: '{n} bookmark marked as read', other: '{n} bookmarks marked as read' },
+  'bm.act.fav.on': { one: '{n} bookmark added to favourites', other: '{n} bookmarks added to favourites' }, 'bm.act.fav.off': { one: '{n} bookmark removed from favourites', other: '{n} bookmarks removed from favourites' },
+  'bm.act.public.on': { one: '{n} bookmark made public', other: '{n} bookmarks made public' }, 'bm.act.public.off': { one: '{n} bookmark made private', other: '{n} bookmarks made private' },
+  'bm.act.archived.on': { one: '{n} bookmark archived', other: '{n} bookmarks archived' }, 'bm.act.archived.off': { one: '{n} bookmark moved out of the archive', other: '{n} bookmarks moved out of the archive' },
+  'bm.copied.url': 'Link copied', 'bm.copied.title': 'Title copied', 'bm.copied.md': 'Markdown link copied', 'bm.copied.n': { one: '{n} line copied', other: '{n} lines copied' },
+  'bm.undo.done': 'Undone: {what}', 'bm.undo.none': 'Nothing to undo',
+
+  // editor
+  'bm.f.url': 'Address', 'bm.f.title': 'Title', 'bm.f.titlePh': 'Taken from the address when empty', 'bm.f.notes': 'Notes', 'bm.f.tags': 'Tags',
+  'bm.f.tagsPh': 'Add a tag…', 'bm.f.tagsHint': 'Enter or a comma adds a tag.', 'bm.f.removeTag': 'Remove tag {tag}', 'bm.f.folder': 'Folder',
+  'bm.f.unread': 'Read later', 'bm.f.fav': 'Favourite', 'bm.f.public': 'Public (on your public page and feed)', 'bm.f.archived': 'Archived',
+  'bm.f.paste': 'Paste a link from the clipboard', 'bm.f.pasteDenied': 'The browser did not allow reading the clipboard. Paste with Ctrl+V instead.',
+  'bm.f.noUrl': 'The clipboard holds no link.', 'bm.f.badUrl': 'This does not look like a web address.',
+  'bm.f.dup': 'Already saved on {date} in {folder}.', 'bm.f.editThat': 'Edit that one', 'bm.f.fetch': 'Fetch', 'bm.f.fetchHint': 'Get the title, description and icon from the page (via your server)',
+  'bm.f.fetchFail': 'Could not read the page: {msg}', 'bm.f.blocked': 'the server does not fetch private or local addresses',
+  'bm.f.dates': 'Added {created} · changed {modified}', 'bm.f.visited': 'opened {date}',
+
+  // folders
+  'bm.folder.new': 'New folder', 'bm.folder.sub': 'New subfolder', 'bm.folder.name': 'Folder name', 'bm.folder.open': 'Open',
+  'bm.folder.rename': 'Rename…', 'bm.folder.move': 'Move to…', 'bm.folder.export': 'Export…', 'bm.folder.delete': 'Delete folder',
+  'bm.folder.actions': 'Folder actions', 'bm.folder.top': 'Top level', 'bm.folder.moveTitle': 'Move “{name}” into', 'bm.folder.newInside': 'New folder inside the chosen one',
+  'bm.folder.deleteText': 'Delete “{name}” with {n} bookmarks and {subs} subfolders inside? You can undo it.',
+  'bm.folder.created': 'Folder “{name}” created', 'bm.folder.renamed': 'Folder renamed', 'bm.folder.moved': 'Folder moved', 'bm.folder.deleted': 'Folder “{name}” deleted',
+  'bm.folder.cannotMove': 'A folder cannot move into itself or its own subfolders.',
+  'bm.move.title': { one: 'Move {n} bookmark to', other: 'Move {n} bookmarks to' }, 'bm.move.here': 'Move here',
+
+  // tags
+  'bm.tags.manage': 'Manage tags', 'bm.tag.count': { one: '{n} bookmark', other: '{n} bookmarks' }, 'bm.tag.show': 'Show bookmarks',
+  'bm.tag.rename': 'Rename tag…', 'bm.tag.merge': 'Merge into…', 'bm.tag.delete': 'Delete tag', 'bm.tag.newName': 'New name',
+  'bm.tag.mergeInto': 'Merge {tags} into the tag', 'bm.tag.deleteText': { one: 'Remove {tags} from {n} bookmark? The bookmark stays.', other: 'Remove {tags} from {n} bookmarks? The bookmarks stay.' },
+  'bm.tag.renamed': { one: '“{from}” is now “{to}” on {n} bookmark', other: '“{from}” is now “{to}” on {n} bookmarks' },
+  'bm.tag.merged': { one: 'Merged into “{to}” on {n} bookmark', other: 'Merged into “{to}” on {n} bookmarks' },
+  'bm.tag.deleted': { one: 'Tag removed from {n} bookmark', other: 'Tag removed from {n} bookmarks' },
+  'bm.tagman.selected': { one: '{n} tag selected', other: '{n} tags selected' },
+  'bm.tagsDlg.title': 'Tags', 'bm.tagsDlg.current': 'Current tags', 'bm.tagsDlg.add': 'Add tags', 'bm.tagsDlg.none': 'No tags yet.', 'bm.tagsDlg.keep': 'Keep tag {tag}',
+
+  // duplicates
+  'bm.dupes.title': 'Find duplicates', 'bm.dupes.scheme': 'http and https are the same', 'bm.dupes.www': 'With and without “www.” are the same',
+  'bm.dupes.found': { one: '{n} page saved more than once ({m} extra copies)', other: '{n} pages saved more than once ({m} extra copies)' },
+  'bm.dupes.none': 'No duplicates. Addresses are compared without tracking parameters, fragments and trailing slashes.',
+  'bm.dupes.merge': 'Merge', 'bm.dupes.mergeAll': 'Merge all', 'bm.dupes.merged': { one: '{n} group merged', other: '{n} groups merged' },
+
+  // import / export
+  'bm.tr.title': 'Import and export', 'bm.tr.import': 'Import', 'bm.tr.export': 'Export',
+  'bm.imp.lead': 'Bookmark files of Chrome, Firefox, Edge, Safari, Pinboard, Pocket, Raindrop, Instapaper, linkding, Shaarli; Chrome “Bookmarks” and Firefox JSON backups; CSV; Markdown; lists of links.',
+  'bm.imp.drop': 'Drop a bookmark file here, paste it, or click to choose', 'bm.imp.paste': 'Or paste text', 'bm.imp.pastePh': 'Links, Markdown, CSV or HTML…',
+  'bm.imp.pasted': 'Pasted text', 'bm.imp.format': 'Format', 'bm.imp.auto': 'Detected: {f}', 'bm.imp.nothing': 'No bookmarks found in this input.',
+  'bm.imp.skipped': { one: '{n} entry skipped (not a page: smart folders, empty links)', other: '{n} entries skipped (not pages: smart folders, empty links)' },
+  'bm.imp.error': 'This input could not be read: {msg}',
+  'bm.imp.st.total': { one: 'bookmark in the file', other: 'bookmarks in the file' }, 'bm.imp.st.new': { one: 'new', other: 'new' },
+  'bm.imp.st.dupes': { one: 'already saved', other: 'already saved' }, 'bm.imp.st.inFile': { one: 'repeated in the file', other: 'repeated in the file' },
+  'bm.imp.st.folders': { one: 'folder', other: 'folders' }, 'bm.imp.st.tags': { one: 'tag', other: 'tags' },
+  'bm.imp.into': 'Put into', 'bm.imp.intoNew': 'New folder “{name}”', 'bm.imp.intoRoot': 'Top level (keep the file’s folders)', 'bm.imp.folderName': 'Imported {date}',
+  'bm.imp.dupes': 'Duplicates', 'bm.imp.dup.skip': 'Skip', 'bm.imp.dup.merge': 'Merge', 'bm.imp.dup.keep': 'Keep both',
+  'bm.imp.dup.skip.hint': 'Pages you already have are left out', 'bm.imp.dup.merge.hint': 'Pages you already have get missing titles, notes and the new tags',
+  'bm.imp.dup.keep.hint': 'Every entry becomes a bookmark', 'bm.imp.preview': 'Preview', 'bm.imp.andMore': { one: '…and {n} more', other: '…and {n} more' },
+  'bm.imp.report': { one: 'Duplicates report ({n})', other: 'Duplicates report ({n})' }, 'bm.imp.dupOf': 'already saved as “{title}” in {folder}', 'bm.imp.dupInFile': 'appears earlier in this file',
+  'bm.imp.go': { one: 'Import {n} bookmark', other: 'Import {n} bookmarks' }, 'bm.imp.done': 'Imported {added}, merged {merged}, skipped {skipped}',
+  'bm.imp.backup': { one: 'A backup of this application with {n} bookmark (made {date}). Restoring keeps the ids: existing bookmarks get the backup’s values.', other: 'A backup of this application with {n} bookmarks (made {date}). Restoring keeps the ids: existing bookmarks get the backup’s values.' },
+  'bm.imp.restore': 'Restore the backup', 'bm.imp.restored': { one: '{n} record restored', other: '{n} records restored' },
+  'bm.fmt.netscape': 'Bookmark file (HTML)', 'bm.fmt.chrome': 'Chrome / Edge profile (JSON)', 'bm.fmt.firefox': 'Firefox backup (JSON)', 'bm.fmt.pinboard': 'Pinboard (JSON)',
+  'bm.fmt.own': 'Backup of this application (JSON)', 'bm.fmt.json': 'JSON list', 'bm.fmt.csv': 'CSV', 'bm.fmt.markdown': 'Markdown', 'bm.fmt.urls': 'List of links',
+  'bm.map.columns': 'Columns', 'bm.map.none': '—', 'bm.map.url': 'Address', 'bm.map.title': 'Title', 'bm.map.notes': 'Notes', 'bm.map.tags': 'Tags', 'bm.map.folder': 'Folder',
+  'bm.map.created': 'Added', 'bm.map.modified': 'Changed', 'bm.map.unread': 'Unread / status', 'bm.map.fav': 'Favourite', 'bm.map.public': 'Public',
+  'bm.map.private': 'Private', 'bm.map.archived': 'Archived',
+  'bm.exp.format': 'Format', 'bm.exp.html': 'Bookmark file (HTML)', 'bm.exp.html.hint': 'Every browser and most services import it: folders, tags, read later, private, notes.',
+  'bm.exp.json': 'Backup (JSON)', 'bm.exp.json.hint': 'Everything, with ids: restore it here without losing anything.',
+  'bm.exp.csv': 'Spreadsheet (CSV)', 'bm.exp.csv.hint': 'One row per bookmark for spreadsheets and scripts.',
+  'bm.exp.md': 'Markdown', 'bm.exp.md.hint': 'Readable lists under folder headings, for notes and wikis.',
+  'bm.exp.scope': 'What to export', 'bm.exp.scope.all': { one: 'Everything ({n} bookmark)', other: 'Everything ({n} bookmarks)' },
+  'bm.exp.scope.view': { one: 'This view ({n})', other: 'This view ({n})' }, 'bm.exp.scope.selection': { one: 'The selection ({n})', other: 'The selection ({n})' },
+  'bm.exp.scope.folder': { one: 'Folder {folder} ({n})', other: 'Folder {folder} ({n})' },
+  'bm.exp.done': { one: '{n} bookmark exported', other: '{n} bookmarks exported' },
+
+  // settings
+  'bm.set.general': 'General', 'bm.set.strip': 'Remove tracking parameters (utm_*, fbclid, gclid…) from addresses',
+  'bm.set.stripHint': 'Applies to new bookmarks and imports; duplicates are always found without them.', 'bm.set.markRead': 'Opening a bookmark marks it as read',
+  'bm.set.confirmDelete': 'Ask before deleting (deleting can always be undone)', 'bm.set.data': 'Data',
+  'bm.set.storage': 'Stored in this browser: {where}.', 'bm.set.counts': '{n} bookmarks, {f} folders, {tags} tags.',
+  'bm.set.backup': 'Export a backup', 'bm.set.wipe': 'Delete everything',
+  'bm.set.wipeText': { one: 'Delete {n} bookmark and every folder? You can still undo it until you close this page.', other: 'Delete {n} bookmarks and every folder? You can still undo it until you close this page.' },
+  'bm.set.wipeSynced': { one: 'Delete {n} bookmark and every folder, here and on the server?', other: 'Delete {n} bookmarks and every folder, here and on the server?' },
+  'bm.set.wiped': 'Everything deleted',
+  'bm.storage.indexeddb': 'IndexedDB', 'bm.storage.localstorage': 'localStorage (IndexedDB is not available here; about 5 MB at most)',
+  'bm.storage.memory': 'This browser does not let the page store data here (for example some file:// pages or private windows). Changes last until the tab closes: export a backup, or open the page from a web server.',
+  'bm.storage.memoryShort': 'Not saved: storage is unavailable here', 'bm.storage.writeFail': 'Could not save: {msg}',
+
+  // help
+  'bm.help.title': 'Keys and search', 'bm.help.keys': 'Keys', 'bm.help.syntax': 'Search language',
+  'bm.help.search': 'Search', 'bm.help.add': 'Add a bookmark', 'bm.help.move': 'Move between bookmarks', 'bm.help.extend': 'Extend the selection',
+  'bm.help.select': 'Select / deselect', 'bm.help.selectAll': 'Select all', 'bm.help.open': 'Open', 'bm.help.edit': 'Edit', 'bm.help.tags': 'Tags',
+  'bm.help.moveTo': 'Move to a folder', 'bm.help.fav': 'Favourite', 'bm.help.read': 'Read / read later', 'bm.help.copy': 'Copy the link', 'bm.help.delete': 'Delete',
+  'bm.help.undo': 'Undo', 'bm.help.menu': 'Context menu (also right click or a long press)', 'bm.help.esc': 'Clear the selection', 'bm.help.help': 'This help',
+  'bm.q.words': 'every word must occur (title, tags, site, address, notes, folder)', 'bm.q.phrase': 'exact phrase', 'bm.q.exclude': 'must not occur (also -tag:x, -is:fav…)',
+  'bm.q.tag': 'tagged (tag:x* for a prefix)', 'bm.q.site': 'that site and its subdomains', 'bm.q.folder': 'folders with that name or path (anywhere in the tree) and their subfolders; folder:/ = not in a folder',
+  'bm.q.is': 'states', 'bm.q.has': 'with notes, an icon or tags', 'bm.q.dates': 'added on or after / before: YYYY, YYYY-MM, YYYY-MM-DD, today, 7d, 3m, 1y',
+  'bm.q.fields': 'only in that field',
+
+  // accounts and sync
+  'bm.auth.setup.title': 'Set up your bookmark server', 'bm.auth.setup.lead': 'Create the owner account of {server}. You can invite other people later.', 'bm.auth.setup.go': 'Create account',
+  'bm.auth.login.title': 'Sign in', 'bm.auth.login.lead': 'Your bookmarks on {server}.', 'bm.auth.login.go': 'Sign in',
+  'bm.auth.register.title': 'You are invited', 'bm.auth.register.lead': 'Create your account on {server}.', 'bm.auth.register.go': 'Create account',
+  'bm.auth.name': 'User name', 'bm.auth.password': 'Password', 'bm.auth.password2': 'Repeat the password', 'bm.auth.mismatch': 'The passwords differ.',
+  'bm.auth.rules': 'User names: a–z, 0–9, “_ . -”, up to 32 characters. Passwords: at least 8 characters.',
+  'bm.auth.inviteNote': 'No account? Ask the owner of this server for an invitation link.', 'bm.auth.unreachable': 'The server does not answer', 'bm.auth.retry': 'Try again',
+  'bm.auth.tokenLabel': 'Standalone page',
+  'bm.err.generic': 'Something went wrong: {msg}', 'bm.err.wrong_login': 'Wrong user name or password.', 'bm.err.rate': 'Too many attempts. Try again in {s} s.',
+  'bm.err.bad_name': 'User names: 1–32 characters a–z, 0–9, “_ . -”.', 'bm.err.bad_password': 'Passwords need 8 to 1024 characters.',
+  'bm.err.setup_done': 'This server already has an owner. Sign in instead.', 'bm.err.bad_invite': 'This invitation is not valid any more.',
+  'bm.err.name_taken': 'This user name is taken.', 'bm.err.auth': 'Signed out: sign in again.', 'bm.err.network': 'The server cannot be reached.',
+  'bm.err.wrong_password': 'The current password is wrong.', 'bm.err.forbidden': 'Only the owner can do this.', 'bm.err.meta_disabled': 'Fetching pages is turned off on the server.',
+  'bm.err.blocked_address': 'The server does not fetch private or local addresses.', 'bm.err.fetch_failed': 'The page could not be fetched.', 'bm.err.too_large': 'Too much data at once.',
+  'bm.err.bad_origin': 'Not a valid origin (scheme://host[:port], null or *).', 'bm.err.bad_url': 'Not a web address.',
+  'bm.sync.ok': 'Synced', 'bm.sync.idle': 'Connected', 'bm.sync.syncing': 'Syncing…', 'bm.sync.offline': { one: 'Offline · {n} change waiting', other: 'Offline · {n} changes waiting' },
+  'bm.sync.error': 'Sync error', 'bm.sync.auth': 'Signed out', 'bm.sync.none': 'Not connected', 'bm.sync.pending': { one: '{n} change waiting', other: '{n} changes waiting' },
+  'bm.sync.now': 'Sync now', 'bm.sync.last': 'last sync {when}',
+  'bm.acc.title': 'Account and sync', 'bm.acc.signedIn': '{user} on {server}', 'bm.acc.logout': 'Sign out', 'bm.acc.disconnect': 'Disconnect',
+  'bm.acc.logoutText': 'Sign out of {server}? The copy in this browser stays for when you sign in again.',
+  'bm.acc.disconnectText': 'Stop syncing with {server}? Your bookmarks stay in this file’s storage; the server keeps its copy.',
+  'bm.acc.wipeLocal': 'Also remove the bookmarks stored in this browser', 'bm.acc.pendingText': { one: '{n} change has not reached the server yet and will be lost. Continue?', other: '{n} changes have not reached the server yet and will be lost. Continue?' },
+  'bm.acc.password': 'Change password', 'bm.acc.oldPassword': 'Current password', 'bm.acc.newPassword': 'New password (at least 8 characters)', 'bm.acc.passwordChanged': 'Password changed. Other sessions were signed out.',
+  'bm.acc.public': 'Public page', 'bm.acc.publicHint': 'Bookmarks marked public are listed here and in the Atom feed.',
+  'bm.acc.bookmarklet': 'Bookmarklet', 'bm.acc.bookmarkletName': 'Save to Bookmarks', 'bm.acc.bookmarkletHint': 'Drag the button to your bookmarks bar. On any page, click it to save that page (the selected text becomes a quote in the notes).',
+  'bm.acc.bookmarkletDrag': 'Drag it to the bookmarks bar instead of clicking it here.', 'bm.acc.copyCode': 'Copy the code',
+  'bm.acc.tokens': 'Sessions and API tokens', 'bm.acc.tokensHint': 'Browsers signed in with a cookie and tokens of scripts or standalone pages (Authorization: Bearer …).',
+  'bm.acc.token': 'API token', 'bm.acc.browser': 'Browser', 'bm.acc.created': 'created {date}', 'bm.acc.used': 'used {when}', 'bm.acc.current': 'this one',
+  'bm.acc.revoke': 'Revoke', 'bm.acc.newToken': 'New API token', 'bm.acc.tokenName': 'What is it for?', 'bm.acc.tokenOnce': 'Copy the token now: it is shown only once.',
+  'bm.acc.connect': 'Connect', 'bm.acc.connectHint': 'Sync this file with your own bookmark server (the backend version of this application). The token stays in this browser; your password is not stored.',
+  'bm.acc.server': 'Server address', 'bm.acc.badServer': 'Enter the address of the server, for example https://bookmarks.example.org.',
+  'bm.acc.insecure': 'This server does not use HTTPS: the password and the token would travel unencrypted.',
+  'bm.acc.noServer': 'No answer from this address: {msg}', 'bm.acc.notOurs': 'This address does not run the bookmark service.',
+  'bm.acc.mergeLocal': { one: 'The {n} bookmark of this file will be added to your account on {server}. Continue?', other: 'The {n} bookmarks of this file will be added to your account on {server}. Continue?' },
+  'bm.own.users': 'Users', 'bm.own.role.owner': 'owner', 'bm.own.role.user': 'user', 'bm.own.count': { one: '{n} bookmark', other: '{n} bookmarks' },
+  'bm.own.delete': 'Delete user', 'bm.own.deleteText': { one: 'Delete {name} and their {n} bookmark from the server?', other: 'Delete {name} and their {n} bookmarks from the server?' },
+  'bm.own.invites': 'Invitations', 'bm.own.invitesHint': 'An invitation link lets one person create an account. It works once and expires in a week.',
+  'bm.own.invite': 'Invitation', 'bm.own.expires': 'expires {date}', 'bm.own.newInvite': 'New invitation link', 'bm.own.inviteOnce': 'Send this link to the person you invite. It expires {date} and is shown only now.',
+  'bm.own.server': 'Server', 'bm.own.fetchMeta': 'Fetch page titles and icons', 'bm.own.fetchMetaHint': 'The server reads public web pages for titles, descriptions and favicons (never private or local addresses).',
+  'bm.own.publicPages': 'Public pages and feeds', 'bm.own.publicPagesHint': 'Each user’s public bookmarks at /u/<name> and /u/<name>/feed.',
+  'bm.own.cors': 'Origins allowed to call the API', 'bm.own.corsHint': 'One per line. “null” lets standalone files opened from disk connect; they always need a token, never a cookie.',
+  'bm.own.locked': '(set by the server’s environment)', 'bm.own.saved': 'Server settings saved',
+};
+
+addDicts({ en, ...I18N });

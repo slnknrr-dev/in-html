@@ -1,0 +1,198 @@
+// mediatags/oggmeta.js - Ogg metadata from a random-access source: the pages from the start until every logical
+// stream has its header packets (identification + comments; Ogg FLAC metadata blocks), then the last pages for the
+// final granule positions (duration). Codecs: Opus, Vorbis, FLAC, Speex, Theora (video); a Skeleton stream is
+// listed as data.
+//
+//   oggFlow(size, { cover = true, maxHeader = 16 MB }) -> reader flow (source.js) giving the raw result read.js
+//     assembles: { container: 'ogg', duration, audio, video, streams, pairs, pictures, pictureCount, chapters: [],
+//     warnings, mime }
+//   Durations: Opus (granule - pre-skip) / 48000, Vorbis / FLAC / Speex granule / rate, Theora frames x FRD / FRN.
+//   Comment pictures: METADATA_BLOCK_PICTURE (ogg/vorbis.js), the legacy COVERART / COVERARTMIME pair and Ogg FLAC
+//   PICTURE blocks.
+
+//
+// Ogg in one paragraph: pages ('OggS', version, flags, 64-bit granule, serial, seq, CRC, segment count, lacing table)
+// carry packets of several interleaved logical streams. A packet is split into 255-byte lacing segments; a segment
+// < 255 ends the packet, so a packet can span pages (flag 1 = continued). Flag 2 marks beginning-of-stream (BOS)
+// pages, which all come first. Granule position meaning is codec-specific.
+// Strategy: read pages from the front until every stream has its header packets (usually a few KB), then read the
+// tail backwards for the last granule of each stream. Never the middle of the file: duration comes from granules,
+// not from scanning, so a 1 GB Ogg costs two small reads plus the header pages.
+import { b64decode } from '../codec/base64.js';
+import { parseOpusHead } from '../ogg/opus.js';
+import { parseFlacPicture, parseVorbisComment, parseVorbisId } from '../ogg/vorbis.js';
+import { parseStreamInfo } from './flac.js';
+import { imageMime } from './id3frames.js';
+
+const ascii = (b, o, n) => { let s = ''; for (let i = 0; i < n && o + i < b.length; i++) s += String.fromCharCode(b[o + i]); return s; };
+const le32 = (b, p) => (b[p] | (b[p + 1] << 8) | (b[p + 2] << 16) | (b[p + 3] << 24)) >>> 0;
+const u32 = (b, p) => ((b[p] << 24) | (b[p + 1] << 16) | (b[p + 2] << 8) | b[p + 3]) >>> 0;
+// -1 (all ones) is the spec's 'no packet ends on this page' marker, not a position.
+const granuleAt = (b, p) => { const lo = le32(b, p + 6), hi = le32(b, p + 10); return lo === 0xffffffff && hi === 0xffffffff ? -1 : hi * 4294967296 + lo; };
+
+function concat(parts) {
+  if (parts.length === 1) return parts[0];
+  const out = new Uint8Array(parts.reduce((n, x) => n + x.length, 0));
+  let o = 0;
+  for (const x of parts) { out.set(x, o); o += x.length; }
+  return out;
+}
+
+// Ogg FLAC: byte 7..8 hold the count of header packets after the first; 0 means unknown, so collect up to 65 and stop
+// at the first audio frame (0xff sync byte) instead.
+// First packet -> { codec, need (header packets to collect) }.
+function identify(pk) {
+  const sig = ascii(pk, 0, 8);
+  if (sig === 'OpusHead') return { codec: 'opus', need: 2 };
+  if (sig.startsWith('\x01vorbis')) return { codec: 'vorbis', need: 2 };
+  if (sig.startsWith('\x7fFLAC')) { const n = (pk[7] << 8) | pk[8]; return { codec: 'flac', need: n ? 1 + n : 65 }; }
+  if (sig.startsWith('\x80theora')) return { codec: 'theora', need: 2 };
+  if (sig === 'Speex   ') return { codec: 'speex', need: 2 };
+  if (sig === 'fishead\0') return { codec: 'skeleton', need: 1 };
+  return { codec: 'unknown', need: 1 };
+}
+
+/** Reader flow over an Ogg file (see the header). */
+export function* oggFlow(size, { cover = true, maxHeader = 16 << 20 } = {}) {
+  const out = { container: 'ogg', duration: null, audio: null, video: null, streams: [], pairs: [], pictures: [], pictureCount: 0, chapters: [], warnings: [], mime: null };
+  // Bounds: maxHeader bytes of header pages (a stream whose comment packet claims gigabytes) and 200000 pages.
+  const streams = new Map();
+  let p = 0, read = 0, bosOver = false;
+  for (let n = 0; p + 27 <= size && n < 200000; n++) {
+    if (read > maxHeader) { out.warnings.push('Ogg header packets too large'); break; }
+    const h = yield [p, 27 + 255];
+    // Resync: a corrupt page (or garbage between pages) is skipped by searching the capture pattern in what we read;
+    // a page header is at most 27 + 255 bytes, so one read suffices.
+    if (ascii(h, 0, 4) !== 'OggS') {
+      let k = -1;
+      for (let i = 1; i + 4 <= h.length; i++) if (h[i] === 0x4f && ascii(h, i, 4) === 'OggS') { k = i; break; }
+      if (k < 0) { out.warnings.push('Ogg capture pattern lost'); break; }
+      p += k;
+      continue;
+    }
+    const nseg = h[26];
+    if (h.length < 27 + nseg) break;
+    const lacing = h.subarray(27, 27 + nseg);
+    let len = 0;
+    for (const x of lacing) len += x;
+    const flags = h[5], serial = le32(h, 14);
+    const body = yield [p + 27 + nseg, len];
+    read += 27 + nseg + len;
+    p += 27 + nseg + len;
+    // Streams are registered only from BOS pages; a page of an unknown serial (chained Ogg, a later link) is ignored.
+    // Once a non-BOS page has been seen and every stream is complete, header collection is done.
+    if (flags & 2) { if (!streams.has(serial)) streams.set(serial, { serial, codec: null, need: 1, packets: [], partial: [], last: -1 }); }
+    else bosOver = true;
+    const s = streams.get(serial);
+    if (!s || s.packets.length >= s.need) { if (bosOver && [...streams.values()].every((x) => x.packets.length >= x.need)) break; continue; }
+    // Not a continuation: any partial packet from the previous page is orphaned (lost page) and discarded.
+    if (!(flags & 1)) s.partial = [];
+    let off = 0;
+    for (const x of lacing) {
+      s.partial.push(body.subarray(off, off + x));
+      off += x;
+      if (x < 255) {
+        const pk = concat(s.partial);
+        s.partial = [];
+        if (s.packets.length < s.need) {
+          if (!s.packets.length) Object.assign(s, identify(pk));
+          if (s.codec === 'flac' && s.packets.length && pk[0] === 0xff) { s.need = s.packets.length; break; }
+          s.packets.push(pk);
+        }
+      }
+    }
+    if (bosOver && [...streams.values()].every((x) => x.packets.length >= x.need)) break;
+  }
+  // Scan the last 64 KB backwards for the last page of each stream; widen to 1 MB if a stream was not found (video
+  // streams can be sparse at the end). The pattern check includes version byte 0, cutting false matches in data.
+  // final granule positions
+  const last = new Map();
+  for (const len of [65536, 1 << 20]) {
+    const start = Math.max(0, size - len);
+    const t = yield [start, size - start];
+    for (let i = t.length - 27; i >= 0; i--) {
+      if (t[i] !== 0x4f || t[i + 1] !== 0x67 || t[i + 2] !== 0x67 || t[i + 3] !== 0x53 || t[i + 4] !== 0) continue;
+      const serial = le32(t, i + 14), g = granuleAt(t, i);
+      if (streams.has(serial) && g >= 0 && !last.has(serial)) last.set(serial, g);
+    }
+    if ([...streams.values()].every((s) => s.codec === 'skeleton' || last.has(s.serial)) || start === 0) break;
+  }
+  // Per codec: header parsing and granule -> seconds. Opus granules run at 48 kHz regardless of the input rate and
+  // include pre-skip samples that are decoded and discarded. Theora granules are (keyframe << shift) | frames since
+  // keyframe, so the frame count is (g >> shift) + (g & mask). A codec failure is a warning on that stream only.
+  let index = 0, duration = 0;
+  const pics = [];
+  for (const s of streams.values()) {
+    const st = { index: index++, type: 'data', codec: s.codec, lang: null, title: null, default: true, forced: false };
+    const g = last.get(s.serial);
+    let dur = null, comment = null;
+    try {
+      const [p0, p1] = s.packets;
+      if (s.codec === 'opus') {
+        const hd = parseOpusHead(p0);
+        Object.assign(st, { type: 'audio', channels: hd.channels });
+        s.info = { codec: 'opus', sampleRate: 48000, channels: hd.channels, bitsPerSample: null };
+        if (g != null) dur = Math.max(0, g - hd.preSkip) / 48000;
+        if (p1 && ascii(p1, 0, 8) === 'OpusTags') comment = parseVorbisComment(p1, 8);
+      } else if (s.codec === 'vorbis') {
+        const id = parseVorbisId(p0);
+        Object.assign(st, { type: 'audio', channels: id.channels });
+        s.info = { codec: 'vorbis', sampleRate: id.sampleRate, channels: id.channels, bitsPerSample: null };
+        if (g != null && id.sampleRate) dur = g / id.sampleRate;
+        if (p1 && ascii(p1, 0, 7) === '\x03vorbis') comment = parseVorbisComment(p1, 7);
+      } else if (s.codec === 'flac') {
+        const si = parseStreamInfo(p0.subarray(17));
+        Object.assign(st, { type: 'audio', channels: si.channels });
+        s.info = { codec: 'flac', sampleRate: si.sampleRate, channels: si.channels, bitsPerSample: si.bitsPerSample };
+        if (g != null && si.sampleRate) dur = g / si.sampleRate;
+        for (const pk of s.packets.slice(1)) {
+          const type = pk[0] & 0x7f;
+          if (type === 4 && !comment) comment = parseVorbisComment(pk, 4);
+          else if (type === 6) { out.pictureCount++; if (cover) { try { pics.push(parseFlacPicture(pk.subarray(4))); } catch { /* malformed */ } } }
+        }
+      } else if (s.codec === 'speex') {
+        const rate = le32(p0, 36), ch = le32(p0, 48);
+        Object.assign(st, { type: 'audio', channels: ch });
+        s.info = { codec: 'speex', sampleRate: rate, channels: ch, bitsPerSample: null };
+        if (g != null && rate) dur = g / rate;
+        if (p1) comment = parseVorbisComment(p1, 0);
+      } else if (s.codec === 'theora') {
+        const w = (p0[14] << 16) | (p0[15] << 8) | p0[16], hh = (p0[17] << 16) | (p0[18] << 8) | p0[19];
+        const frn = u32(p0, 22), frd = u32(p0, 26);
+        const shift = ((p0[40] & 0x03) << 3) | (p0[41] >> 5);
+        const fps = frn && frd ? Math.round((frn / frd) * 1000) / 1000 : null;
+        Object.assign(st, { type: 'video', width: w, height: hh });
+        s.vinfo = { codec: 'theora', width: w, height: hh, fps };
+        if (g != null && frn) { const m = 2 ** shift; dur = ((Math.floor(g / m) + (g % m)) * frd) / frn; }
+        if (p1 && ascii(p1, 0, 7) === '\x81theora') comment = parseVorbisComment(p1, 7);
+      }
+    } catch (e) { out.warnings.push(`Ogg ${s.codec} header: ${e.message || e}`); }
+    // Pictures are lifted out of the comments (they are binary blobs in base64, not tags). The legacy COVERART pair
+    // has no picture type; it is treated as a front cover with the MIME sniffed when COVERARTMIME is missing.
+    if (comment) {
+      let artMime = null, art = null;
+      for (const [k, v] of comment.comments) {
+        if (k === 'METADATA_BLOCK_PICTURE') continue;
+        if (k === 'COVERART') { art = v; continue; }
+        if (k === 'COVERARTMIME') { artMime = v; continue; }
+        if (k === 'LANGUAGE' && !st.lang) st.lang = v;
+        out.pairs.push([k, v]);
+      }
+      out.pictureCount += comment.pictures.length + (art ? 1 : 0);
+      if (cover) {
+        pics.push(...comment.pictures);
+        if (art) { try { const data = b64decode(art); pics.push({ type: 3, mime: artMime || imageMime(data) || 'image/jpeg', description: '', data }); } catch { /* bad base64 */ } }
+      }
+    }
+    // Longest stream wins: audio and video tails can end at slightly different times.
+    if (dur != null) duration = Math.max(duration, dur);
+    if (s.info && !out.audio) out.audio = s.info;
+    if (s.vinfo && !out.video) out.video = s.vinfo;
+    out.streams.push(st);
+  }
+  out.pictures = pics.map((x) => ({ mime: x.mime, data: x.data, description: x.description || '', type: x.type }));
+  out.duration = duration || null;
+  out.mime = out.video ? 'video/ogg' : 'audio/ogg';
+  if (!streams.size) out.warnings.push('no Ogg streams');
+  return out;
+}

@@ -1,0 +1,11 @@
+import{zlibSync}from"../codec/zlib.js";import{decodePNG}from"../png/decode.js";import{isJPEG,readSegments,isSOF,parseSOF}from"../jpg/segments.js";function imageKind(b){if(!(b instanceof Uint8Array)||b.length<8)return null;if(isJPEG(b))return'jpeg';if(b[0]===0x89&&b[1]===0x50&&b[2]===0x4e&&b[3]===0x47)return'png';return null;}
+function jpegInfo(bytes){const segs=readSegments(bytes);const sof=segs.find((s)=>isSOF(s.marker));if(!sof)throw new Error('JPEG: no frame header');const f=parseSOF(sof.data,sof.marker);const adobe=segs.some((s)=>s.marker===0xee&&s.data.length>=5&&String.fromCharCode(...s.data.subarray(0,5))==='Adobe');return{width:f.width,height:f.height,components:f.components.length,adobe,progressive:f.progressive,precision:f.precision};}
+function fromRGBA(width,height,rgba,{grayHint=true}={}){const n=width*height;let alpha=false,gray=grayHint;for(let i=0;i<n;i++){const p=i*4;if(rgba[p+3]!==255)alpha=true;if(gray&&(rgba[p]!==rgba[p+1]||rgba[p]!==rgba[p+2]))gray=false;if(alpha&&!gray)break;}
+const ch=gray?1:3;const px=new Uint8Array(n*ch);for(let i=0;i<n;i++){if(gray)px[i]=rgba[i*4];else{px[i*3]=rgba[i*4];px[i*3+1]=rgba[i*4+1];px[i*3+2]=rgba[i*4+2];}}
+let smask=null;if(alpha){const a=new Uint8Array(n);for(let i=0;i<n;i++)a[i]=rgba[i*4+3];smask={width,height,colorSpace:'DeviceGray',bpc:8,filter:'FlateDecode',data:zlibSync(a,{level:6})};}
+return{width,height,colorSpace:gray?'DeviceGray':'DeviceRGB',bpc:8,filter:'FlateDecode',data:zlibSync(px,{level:6}),smask};}
+function prepareImage(src){if(src instanceof Uint8Array||src instanceof ArrayBuffer){const b=src instanceof Uint8Array?src:new Uint8Array(src);const kind=imageKind(b);if(kind==='jpeg'){const j=jpegInfo(b);const cs=j.components===1?'DeviceGray':j.components===4?'DeviceCMYK':'DeviceRGB';return{width:j.width,height:j.height,colorSpace:cs,bpc:8,filter:'DCTDecode',decode:j.components===4&&j.adobe?[1,0,1,0,1,0,1,0]:null,data:b,smask:null};}
+if(kind==='png'){const img=decodePNG(b);return fromRGBA(img.width,img.height,img.data);}
+throw new Error('PDF image: only JPEG, PNG or { width, height, data } pixels are supported');}
+if(src&&src.width>0&&src.height>0&&src.data&&src.data.length>=src.width*src.height*4)return fromRGBA(src.width,src.height,src.data);throw new Error('PDF image: bad pixel source');}
+export{prepareImage};

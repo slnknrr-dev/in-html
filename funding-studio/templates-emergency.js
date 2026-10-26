@@ -1,0 +1,119 @@
+// funding-studio/templates-emergency.js - emergency appeal template: flood relief in the fictional Velmora valley by
+// the fictional Velmora Relief Network (urgent cover, matching, hourly updates, impact, spending); theme 'alert';
+// en, uk, de.
+import { tplKit } from './templates-kit.js';
+
+// Structure: T = { <lang>: { key: text } } (HTML allowed in rich keys like 'story', 'lead'); the build function makes
+// the document through tplKit (t(key) -> { lang: text } with English fallback, B(type, props) -> block, page(kind,
+// slug, props, blocks), scene(name, kind, hue) -> generated SVG attachment), then normalizeDoc - so a template is
+// exactly as valid as any opened file. Figures (raised, donors), dates and names are invented sample data; emails
+// and websites use the reserved .example TLD so they can never reach anyone.
+const T = {
+  en: {
+    brand: 'Velmora Relief Network', navNews: 'Latest updates', navMoney: 'Spending', cta: 'Donate now',
+    title: 'Flood relief for the Velmora valley', desc: 'Emergency appeal: clean water, shelter and repairs for families hit by the floods.',
+    c1: 'Velmora flood appeal', c1d: 'Clean water, shelter and repairs for 1,200 families.',
+    eyebrow: 'Emergency appeal', h1: 'The river rose in one night. Help Velmora recover.',
+    lead: '<p>Heavy rain flooded eleven villages in the Velmora valley. 1,200 families lost heating, drinking water or their homes. Our teams are on the ground today.</p>',
+    heroCta: 'Donate now', heroCta2: 'Latest updates',
+    impT: 'Your gift right now', imp1: 'clean drinking water for a family for a week', imp2: 'a hygiene and warmth kit', imp3: 'a dehumidifier for a flooded home', imp4: 'emergency shelter for a family for a month',
+    matchT: 'Doubled for the next 7 days', sponsor: 'Aldwin Foundation', matchText: '<p>The Aldwin Foundation matches every donation to this appeal, up to €20,000.</p>',
+    donT: 'Donate to the flood appeal', donLead: 'Every euro goes to families in the valley. Bank transfer and crypto work too.', donBtn: 'Donate',
+    donNote: '<p>Velmora Relief Network is a fictional organisation used as an example.</p>',
+    progT: 'Appeal total', updT: 'Latest updates', u1t: 'Day 3: water filters delivered', u1: '<p>420 families in the lower villages now have safe drinking water.</p>', u2t: 'Day 2: shelters open', u2: '<p>Two school gyms became shelters for 180 people.</p>', u3t: 'Day 1: teams on the ground', u3: '<p>Our first trucks reached the valley at dawn.</p>',
+    moneyT: 'Where the money goes', moneyLead: 'Updated every week while the appeal runs.', sp1: 'Water and hygiene', sp2: 'Shelter and heating', sp3: 'Home repairs', sp4: 'Logistics',
+    faqT: 'Questions', q1: 'Is it better to give money or goods?', a1: '<p>Money: we buy what is needed locally, fast, and support local shops.</p>', q2: 'What if you raise more than the goal?', a2: '<p>The extra goes to long-term repairs in the same valley.</p>',
+    shareT: 'Share the appeal', shareText: 'Floods hit the Velmora valley — donations are doubled for 7 days.',
+    copy: '© Velmora Relief Network (example)', footText: '<p>This appeal is an example template with fictional places and figures.</p>',
+    thxT: 'Thank you — help is on its way', thx: '<p>Your donation reaches the valley this week. We post updates every day on this page.</p>', thxBack: 'Back to the appeal',
+    org: 'Velmora Relief Network', addr: 'Station Road 4, Velmora', note: 'Example organisation for the template — replace with your own details.', purpose: 'Flood appeal Velmora',
+  },
+  uk: {
+    brand: 'Velmora Relief Network', navNews: 'Останні новини', navMoney: 'Витрати', cta: 'Пожертвувати',
+    title: 'Допомога долині Вельмора після повені', desc: 'Термінова допомога: чиста вода, прихисток і ремонт для родин, що постраждали від повені.',
+    c1: 'Збір після повені у Вельморі', c1d: 'Чиста вода, прихисток і ремонт для 1 200 родин.',
+    eyebrow: 'Терміновий збір', h1: 'Річка піднялася за одну ніч. Допоможіть Вельморі відновитися.',
+    lead: '<p>Сильні дощі затопили одинадцять сіл у долині Вельмора. 1 200 родин втратили опалення, питну воду або домівки. Наші команди вже на місці.</p>',
+    heroCta: 'Пожертвувати', heroCta2: 'Останні новини',
+    impT: 'Ваша пожертва зараз', imp1: 'чиста питна вода для родини на тиждень', imp2: 'гігієнічний і зігрівальний набір', imp3: 'осушувач для затопленого будинку', imp4: 'тимчасовий прихисток для родини на місяць',
+    matchT: 'Подвоєння ще 7 днів', sponsor: 'Aldwin Foundation', matchText: '<p>Фонд Aldwin подвоює кожну пожертву цьому збору — до 20 000 €.</p>',
+    donT: 'Пожертвувати постраждалим', donLead: 'Кожне євро йде родинам у долині. Можна також переказом або криптовалютою.', donBtn: 'Пожертвувати',
+    donNote: '<p>Velmora Relief Network — вигадана організація для прикладу.</p>',
+    progT: 'Зібрано', updT: 'Останні новини', u1t: 'День 3: доставили фільтри для води', u1: '<p>420 родин у нижніх селах тепер мають безпечну питну воду.</p>', u2t: 'День 2: відкрили прихистки', u2: '<p>Два шкільні спортзали стали прихистком для 180 людей.</p>', u3t: 'День 1: команди на місці', u3: '<p>Перші вантажівки дісталися долини на світанку.</p>',
+    moneyT: 'Куди йдуть гроші', moneyLead: 'Оновлюємо щотижня, поки триває збір.', sp1: 'Вода й гігієна', sp2: 'Прихисток і опалення', sp3: 'Ремонт будинків', sp4: 'Логістика',
+    faqT: 'Питання', q1: 'Краще давати гроші чи речі?', a1: '<p>Гроші: ми швидко купуємо потрібне на місці й підтримуємо місцеві крамниці.</p>', q2: 'Що, як зберемо більше за мету?', a2: '<p>Надлишок піде на довгостроковий ремонт у тій самій долині.</p>',
+    shareT: 'Поширте збір', shareText: 'Повінь у долині Вельмора — пожертви подвоюються ще 7 днів.',
+    copy: '© Velmora Relief Network (приклад)', footText: '<p>Цей збір — шаблон для прикладу з вигаданими місцями й цифрами.</p>',
+    thxT: 'Дякуємо — допомога вже в дорозі', thx: '<p>Ваша пожертва дістанеться долини цього тижня. Ми щодня публікуємо новини на цій сторінці.</p>', thxBack: 'Повернутися до збору',
+    org: 'Velmora Relief Network', addr: 'Вокзальна вулиця, 4, Вельмора', note: 'Організація для прикладу — замініть своїми даними.', purpose: 'Збір після повені Вельмора',
+  },
+  de: {
+    brand: 'Velmora Relief Network', navNews: 'Aktuelles', navMoney: 'Ausgaben', cta: 'Jetzt spenden',
+    title: 'Fluthilfe für das Velmora-Tal', desc: 'Nothilfe: sauberes Wasser, Unterkunft und Reparaturen für Familien, die von der Flut getroffen wurden.',
+    c1: 'Fluthilfe Velmora', c1d: 'Sauberes Wasser, Unterkunft und Reparaturen für 1.200 Familien.',
+    eyebrow: 'Nothilfe-Aufruf', h1: 'Der Fluss stieg in einer Nacht. Helfen Sie Velmora beim Wiederaufbau.',
+    lead: '<p>Starkregen hat elf Dörfer im Velmora-Tal überflutet. 1.200 Familien haben Heizung, Trinkwasser oder ihr Zuhause verloren. Unsere Teams sind heute vor Ort.</p>',
+    heroCta: 'Jetzt spenden', heroCta2: 'Aktuelles',
+    impT: 'Ihre Spende jetzt', imp1: 'eine Woche sauberes Trinkwasser für eine Familie', imp2: 'ein Hygiene- und Wärmeset', imp3: 'ein Luftentfeuchter für ein überflutetes Haus', imp4: 'ein Monat Notunterkunft für eine Familie',
+    matchT: 'Verdoppelt für die nächsten 7 Tage', sponsor: 'Aldwin Foundation', matchText: '<p>Die Aldwin Foundation verdoppelt jede Spende für diesen Aufruf, bis zu 20.000 €.</p>',
+    donT: 'Für die Fluthilfe spenden', donLead: 'Jeder Euro geht an Familien im Tal. Überweisung und Krypto funktionieren auch.', donBtn: 'Spenden',
+    donNote: '<p>Velmora Relief Network ist eine erfundene Beispielorganisation.</p>',
+    progT: 'Bisher gesammelt', updT: 'Aktuelles', u1t: 'Tag 3: Wasserfilter verteilt', u1: '<p>420 Familien in den unteren Dörfern haben wieder sicheres Trinkwasser.</p>', u2t: 'Tag 2: Notunterkünfte offen', u2: '<p>Zwei Schulturnhallen sind Unterkünfte für 180 Menschen.</p>', u3t: 'Tag 1: Teams vor Ort', u3: '<p>Die ersten Lkw erreichten das Tal im Morgengrauen.</p>',
+    moneyT: 'Wohin das Geld geht', moneyLead: 'Wöchentlich aktualisiert, solange der Aufruf läuft.', sp1: 'Wasser und Hygiene', sp2: 'Unterkunft und Heizung', sp3: 'Reparaturen', sp4: 'Logistik',
+    faqT: 'Fragen', q1: 'Lieber Geld oder Sachspenden?', a1: '<p>Geld: Wir kaufen das Nötige schnell vor Ort und stützen lokale Geschäfte.</p>', q2: 'Was, wenn mehr als das Ziel zusammenkommt?', a2: '<p>Der Überschuss fließt in langfristige Reparaturen im selben Tal.</p>',
+    shareT: 'Aufruf teilen', shareText: 'Flut im Velmora-Tal — Spenden werden 7 Tage lang verdoppelt.',
+    copy: '© Velmora Relief Network (Beispiel)', footText: '<p>Dieser Aufruf ist eine Beispielvorlage mit erfundenen Orten und Zahlen.</p>',
+    thxT: 'Danke — die Hilfe ist unterwegs', thx: '<p>Ihre Spende erreicht das Tal diese Woche. Wir berichten täglich auf dieser Seite.</p>', thxBack: 'Zurück zum Aufruf',
+    org: 'Velmora Relief Network', addr: 'Bahnhofstraße 4, Velmora', note: 'Beispielorganisation der Vorlage — ersetzen Sie die Angaben durch Ihre eigenen.', purpose: 'Fluthilfe Velmora',
+  },
+};
+
+function tplBuildEmergency(V) {
+  const langs = ['en', 'uk', 'de'];
+  const K = tplKit(V, langs, T);
+  const { t, B, item, page } = K;
+  const d = K.doc({
+    name: 'Velmora flood appeal', preset: 'alert', title: t('title'), description: t('desc'),
+    org: { name: t('org'), email: 'appeal@velmora-relief.example', website: 'https://velmora-relief.example', address: t('addr'), regNo: 'VRN-552', note: t('note') },
+  });
+  d.pay.bank.purpose = t('purpose');
+  d.pay.eth.chains = [1, 8453, 137];
+  d.pay.eth.tokens = ['ETH', 'USDC', 'USDT'];
+  const flood = K.scene('flood', 'flood', 210);
+  d.regions.header = [B('nav', { brand: t('brand'), cta: t('cta'), ctaHref: '#donate', sticky: true, items: [item({ label: t('navNews'), href: '#news' }), item({ label: t('navMoney'), href: '#money' })] })];
+  const c1 = page('campaign', 'flood-appeal', {
+    title: t('c1'), metaDesc: t('c1d'), image: flood, currency: 'EUR', currencies: ['USD', 'UAH'], goal: 60000, raised: 27860, donors: 905,
+    end: '2027-01-31', tz: 1, methods: ['stripe', 'paypal', 'bank', 'btc', 'eth'],
+  }, [
+    B('hero', { layout: 'cover', eyebrow: t('eyebrow'), title: t('h1'), lead: t('lead'), image: flood, progress: true, cta: t('heroCta'), ctaHref: '#donate', cta2: t('heroCta2'), cta2Href: '#news' }),
+    B('matching', { title: t('matchT'), sponsor: t('sponsor'), text: t('matchText'), ratio: 1, cap: 20000, until: '2026-11-30' }),
+    B('impact', { title: t('impT'), items: [item({ amount: 15, text: t('imp1'), icon: 'drop' }), item({ amount: 40, text: t('imp2'), icon: 'gift' }), item({ amount: 120, text: t('imp3'), icon: 'home' }), item({ amount: 300, text: t('imp4'), icon: 'shield' })] }),
+    B('donate', { anchor: 'donate', title: t('donT'), lead: t('donLead'), button: t('donBtn'), note: t('donNote'), amounts: [15, 40, 120, 300], defAmount: 40, intervals: 'both', defInterval: 'once' }),
+    B('updates', { anchor: 'news', title: t('updT'), items: [item({ date: '2026-10-15', title: t('u1t'), html: t('u1') }), item({ date: '2026-10-14', title: t('u2t'), html: t('u2') }), item({ date: '2026-10-13', title: t('u3t'), html: t('u3') })] }),
+    B('section', { anchor: 'money', tone: 'muted', blocks: [B('transparency', { title: t('moneyT'), lead: t('moneyLead'), updated: '2026-10-15', items: [
+      item({ label: t('sp1'), planned: 18000, spent: 9400 }), item({ label: t('sp2'), planned: 22000, spent: 8100 }), item({ label: t('sp3'), planned: 15000, spent: 600 }), item({ label: t('sp4'), planned: 5000, spent: 2300 }),
+    ] })] }),
+    B('faq', { title: t('faqT'), items: [item({ q: t('q1'), a: t('a1') }), item({ q: t('q2'), a: t('a2') })] }),
+    B('share', { title: t('shareT'), text: t('shareText'), nets: ['native', 'copy', 'x', 'facebook', 'telegram', 'whatsapp', 'email', 'qr'] }),
+  ]);
+  const thanks = page('thanks', 'thanks', { title: t('thxT') }, [B('thanks', { title: t('thxT'), text: t('thx'), back: t('thxBack'), summary: true }), B('share', { title: t('shareT'), text: t('shareText') })]);
+  d.regions.main = [c1, thanks];
+  d.regions.footer = [B('footer', { showOrg: true, text: t('footText'), copy: t('copy') })];
+  return V.normalizeDoc(d);
+}
+
+export const TPL_EMERGENCY = {
+  id: 'emergency',
+  name: { en: 'Emergency appeal', ru: 'Срочный сбор', uk: 'Терміновий збір', de: 'Nothilfe-Aufruf', fr: 'Appel d’urgence', es: 'Llamamiento de emergencia', ka: 'სასწრაფო მოწოდება' },
+  desc: {
+    en: 'Flood relief: urgent cover picture, matching for 7 days, impact lines, daily updates, spending, every payment method.',
+    ru: 'Помощь после наводнения: срочная обложка, удвоение на 7 дней, «что даёт сумма», ежедневные новости, расходы, все способы оплаты.',
+    uk: 'Допомога після повені: термінова обкладинка, подвоєння на 7 днів, «що дає сума», щоденні новини, витрати, усі способи оплати.',
+    de: 'Fluthilfe: dringendes Titelbild, 7 Tage Verdopplung, Wirkungszeilen, tägliche Updates, Ausgaben, alle Zahlungsarten.',
+    fr: 'Aide aux sinistrés : couverture urgente, doublement pendant 7 jours, impact par montant, nouvelles quotidiennes, dépenses, tous les moyens de paiement.',
+    es: 'Ayuda por inundaciones: portada urgente, donaciones duplicadas 7 días, impacto por importe, novedades diarias, gastos, todos los métodos de pago.',
+    ka: 'წყალდიდობის დახმარება: სასწრაფო ყდა, 7-დღიანი გაორმაგება, თანხის გავლენა, ყოველდღიური სიახლეები, ხარჯები, ყველა გადახდის საშუალება.',
+  },
+  langs: ['en', 'uk', 'de'],
+  build: tplBuildEmergency,
+};

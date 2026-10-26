@@ -1,0 +1,108 @@
+// sample/png.js - sample PNG generator (uncompressed deflate, no canvas).
+import { tplHash, tplHslToRgb, tplRand } from './bytes.js';
+import { b64encode } from '../codec/base64.js';
+import { adler32, crc32 } from '../codec/crc32.js';
+
+/** Encode an RGB image → base64 PNG. `px(x, y)` returns [r, g, b] (0..255). */
+// Minimal PNG: signature, IHDR, one IDAT and IEND. The zlib stream uses stored (uncompressed) deflate blocks, so no
+// compressor is needed and the code stays synchronous; images are small (192 x 128), so size does not matter.
+// Each scanline is prefixed with filter type 0 (None).
+function tplMakePNG(w, h, px) {
+  const stride = w * 3 + 1;
+  const raw = new Uint8Array(stride * h);
+  for (let y = 0; y < h; y++) {
+    raw[y * stride] = 0; // filter: None
+    for (let x = 0; x < w; x++) {
+      const [r, g, b] = px(x, y);
+      const o = y * stride + 1 + x * 3;
+      raw[o] = r; raw[o + 1] = g; raw[o + 2] = b;
+    }
+  }
+  // zlib stream with stored (uncompressed) deflate blocks.
+  const nBlocks = Math.max(1, Math.ceil(raw.length / 65535));
+  const z = new Uint8Array(2 + raw.length + nBlocks * 5 + 4);
+  let p = 0;
+  // zlib header: CM = 8 (deflate), 32K window, no dictionary; 0x7801 is divisible by 31, as FCHECK requires.
+  z[p++] = 0x78; z[p++] = 0x01;
+  for (let b = 0; b < nBlocks; b++) {
+    const start = b * 65535, len = Math.min(65535, raw.length - start);
+    z[p++] = b === nBlocks - 1 ? 1 : 0;
+    z[p++] = len & 255; z[p++] = len >> 8;
+    // Stored block header: LEN and its one's complement NLEN, little-endian; a stored block holds at most 65535 bytes.
+    z[p++] = ~len & 255; z[p++] = (~len >> 8) & 255;
+    z.set(raw.subarray(start, start + len), p);
+    p += len;
+  }
+  const adler = adler32(raw);
+  z[p++] = adler >>> 24; z[p++] = (adler >>> 16) & 255; z[p++] = (adler >>> 8) & 255; z[p++] = adler & 255;
+  const chunk = (type, data) => {
+    const c = new Uint8Array(12 + data.length);
+    const dv = new DataView(c.buffer);
+    dv.setUint32(0, data.length);
+    for (let i = 0; i < 4; i++) c[4 + i] = type.charCodeAt(i);
+    c.set(data, 8);
+    // PNG chunk CRC covers type + data, not the length field.
+    dv.setUint32(8 + data.length, crc32(c, 4, 8 + data.length));
+    return c;
+  };
+  const ihdr = new Uint8Array(13);
+  const dv = new DataView(ihdr.buffer);
+  dv.setUint32(0, w); dv.setUint32(4, h);
+  ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0; // 8-bit RGB
+  const parts = [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', ihdr), chunk('IDAT', z), chunk('IEND', new Uint8Array(0))];
+  const total = parts.reduce((a, b) => a + b.length, 0);
+  const png = new Uint8Array(total);
+  let o = 0;
+  for (const part of parts) { png.set(part, o); o += part.length; }
+  return b64encode(png);
+}
+
+/**
+ * Landscape "poster" bitmap → base64 PNG (default 192×128): gradient sky, glow, striped retro sun,
+ * two mountain ridges and a winding river. All edges are anti-aliased so it scales smoothly.
+ */
+function tplImagePNG(hue = 20, w = 192, h = 128) {
+  const rnd = tplRand(tplHash('png:' + hue));
+  const mix = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+  // Analytic anti-aliasing: a signed distance in pixels maps to coverage over a one-pixel ramp, so edges are smooth
+  // without supersampling.
+  const cov = (dist) => Math.max(0, Math.min(1, 0.5 - dist)); // signed distance (px) → coverage
+  const skyTop = tplHslToRgb(hue + 220, 55, 30), skyMid = tplHslToRgb(hue + 340, 70, 62), skyLow = tplHslToRgb(hue + 20, 90, 72);
+  const sunA = tplHslToRgb(hue + 45, 95, 68), sunB = tplHslToRgb(hue + 5, 90, 58);
+  const far = tplHslToRgb(hue + 250, 35, 42), near = tplHslToRgb(hue + 230, 40, 24);
+  const river = tplHslToRgb(hue + 190, 70, 72);
+  const sun = { x: w * (0.58 + rnd() * 0.12), y: h * 0.5, r: h * 0.27 };
+  const p1 = rnd() * 6, p2 = rnd() * 6;
+  const ridgeFar = (x) => h * 0.56 + Math.sin(x / w * 7 + p1) * h * 0.07 + Math.sin(x / w * 17 + p2) * h * 0.025;
+  const ridgeNear = (x) => h * 0.72 + Math.sin(x / w * 5 + p2) * h * 0.06 + Math.abs(Math.sin(x / w * 11 + p1)) * -h * 0.05;
+  return tplMakePNG(w, h, (x, y) => {
+    const px = x + 0.5, py = y + 0.5, t = py / h;
+    let c = t < 0.5 ? mix(skyTop, skyMid, t / 0.5) : mix(skyMid, skyLow, (t - 0.5) / 0.5);
+    // Glow around the sun.
+    const ds = Math.hypot(px - sun.x, py - sun.y);
+    c = mix(c, sunA, 0.35 * Math.exp(-((ds / (sun.r * 2.2)) ** 2)));
+    // Striped retro sun (stripes get thicker towards the bottom).
+    let sc = cov(ds - sun.r);
+    const rel = (py - sun.y) / sun.r;
+    if (rel > 0) {
+      const period = 7, band = (py - sun.y) % period, gap = 1 + rel * 3;
+      sc *= cov(gap - band) > 0.5 ? 0 : 1;
+    }
+    c = mix(c, mix(sunA, sunB, Math.max(0, Math.min(1, (rel + 1) / 2))), sc);
+    // Mountain ridges.
+    c = mix(c, far, cov(ridgeFar(px) - py));
+    c = mix(c, near, cov(ridgeNear(px) - py));
+    // Winding river in the foreground.
+    if (py > h * 0.74) {
+      const k = (py - h * 0.74) / (h * 0.26);
+      const cx = w * 0.45 + Math.sin(k * 3.2 + p1) * w * 0.12;
+      const half = 1 + k * w * 0.09;
+      c = mix(c, river, 0.85 * cov(Math.abs(px - cx) - half));
+    }
+    return c.map((v) => Math.max(0, Math.min(255, Math.round(v))));
+  });
+}
+
+export {
+  tplImagePNG
+};

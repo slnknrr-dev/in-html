@@ -1,0 +1,252 @@
+/* price-tags/app.css - Price Tags: products page (table, tag preview, promotions, markdown rules, import mapping) and
+   designer page (template picker, controls, true-size stage, tag list, A4 sheet preview and print). Tags are white
+   paper in both colour schemes. Needs ui/base.css + ui/app.css (loaded in that order, this file last).
+
+   CONTRACT
+   - Namespace: every class starts with `pt-`. Shared primitives are `ed-` (ui/base.css), shell is `ap-` (ui/app.css).
+     The prefix is ownership: nothing here restyles another app, and grep `pt-x` finds every user.
+   - Specificity budget: one class (0,1,0); two for state or context (`.pt-row.pt-on`, `.pt-acts .ed-iconbtn`). The one
+     id (#pt-print) appears only inside :not() in print, where its weight is the point (see print section).
+   - Colours via --ed-* tokens (per theme in ui/base.css), with two deliberate exceptions:
+     1. The tag artwork itself (SVG, white paper) and the A4 sheets: printed paper is white regardless of screen theme,
+        so #fff is correct and a token would invert it in dark mode.
+     2. Brand signal colours of the printed tags (promo red #d61f26, markdown orange #ea580c) reused on chips so the
+        UI badge matches the colour the shopper will see on the shelf. Where red text sits on the themed panel, a
+        lighter dark-mode variant is provided (.pt-promo-val).
+   - !important only in @media print, to beat inline/primitive display values while printing. Every use is commented.
+
+   LAYOUT PRIMITIVES
+   - grid for column templates, flex for one axis. min-width:0 on grid/flex children and minmax(0,1fr) instead of 1fr:
+     the default min-width:auto (= min-content) would let a long product name or barcode force horizontal overflow.
+   - Physical units (mm) only for the paper model (A4 = 210mm x 297mm); everything on screen is px. CSS mm is 96dpi
+     based, so on screen it is nominal, but in print it maps to real millimetres, which is what the sheet layout needs. */
+
+/* Page containers. 1440px: products table has many columns; wider than unit-converter's 1320px on purpose. */
+.pt-products, .pt-design { max-width: 1440px; }
+.pt-mono { font-family: var(--ed-mono); font-size: 12px; }
+/* Equal-width digits keep price columns aligned vertically. */
+.pt-num { font-variant-numeric: tabular-nums; }
+/* Two names, one look: semantic class at the call site (error vs warning) lets them diverge later without a JS edit. */
+.pt-bad, .pt-warn { color: var(--ed-danger); }
+/* Visually hidden but read by screen readers. Not display:none / visibility:hidden — both remove the node from the
+   accessibility tree. clip:rect is the legacy-safe form; nowrap stops the 1px box wrapping text into a tall column
+   that some readers then announce word by word. */
+.pt-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* An <a> styled as a button (download/export links). (0,1,1) beats the global `a` colour/underline; .ed-btn itself
+   sets no colour, so without this the link would render blue and underlined inside a button frame. */
+a.ed-btn { color: inherit; text-decoration: none; }
+/* Vertical stack: gap, not margins (no collapsing, no :last-child fixups). min-width:0 - see CONTRACT. */
+.pt-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* Three equal fields; collapse to one column on phones where 3 inputs of ~190px no longer fit. */
+.pt-grid3 { display: grid; gap: 10px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 620px) { .pt-grid3 { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------------------------------------------------------------- products */
+/* Table (fluid) + side column (preview, promotions). Mirror of the designer layout: here the table is primary, so it
+   goes first in DOM and takes the fluid track. align-items:start keeps the side column at its own height (sticky). */
+.pt-work { display: grid; gap: 18px; align-items: start; grid-template-columns: minmax(0, 1fr) minmax(300px, 380px); }
+/* 1060px: below it the nowrap table plus a 300px side column overflows; stack instead (table first, DOM order). */
+@media (max-width: 1060px) { .pt-work { grid-template-columns: minmax(0, 1fr); } }
+/* Sticky side column only when the viewport is tall enough; it gets its own scroller capped at viewport height
+   (100vh - 88px = header 72px + bottom breathing room 16px) so a long promotion list is still reachable.
+   padding-right:2px keeps focus rings of inner controls from being clipped by overflow:auto. */
+@media (min-width: 1061px) and (min-height: 700px) { .pt-sidecol { position: sticky; top: 72px; max-height: calc(100vh - 88px); overflow: auto; padding-right: 2px; } }
+.pt-tools { flex-wrap: wrap; margin-bottom: 10px; }
+.pt-searchrow { margin-bottom: 10px; }
+/* Grows from 220px, but capped: a search field across 1000px is harder to scan than to use. */
+.pt-search { flex: 1 1 220px; max-width: 360px; }
+.pt-summary { font-size: 12.5px; color: var(--ed-muted); }
+/* Combined with .ap-table-wrap (ui/app.css: scrolling wrapper, sticky thead th). Replaces its 70vh cap with one
+   relative to the chrome above: 230px = shell header + toolbar + search row. Same specificity (0,1,0), wins by load
+   order. min-height keeps a usable area on very short screens. */
+.pt-table-wrap { max-height: calc(100vh - 230px); min-height: 160px; }
+.pt-table td { vertical-align: middle; }
+/* nowrap: prices, codes and dates must not break mid-value; the wrap scrolls horizontally instead. */
+.pt-table td, .pt-table th { white-space: nowrap; }
+/* The one wrapping column: names are long prose. (0,2,1) beats the nowrap rule above (0,1,1). Bounded width so a
+   single long name neither squeezes nor dominates the table. */
+.pt-table td.pt-namecell { white-space: normal; min-width: 180px; max-width: 280px; }
+.pt-nm { font-weight: 600; }
+/* Whole row is the click/keyboard target (selects the product for preview). */
+.pt-row { cursor: pointer; }
+/* Negative offset draws the ring inside the row: an outer ring would be clipped by the table wrap's overflow. */
+.pt-row:focus-visible { outline: 2px solid var(--ed-accent); outline-offset: -2px; }
+/* Background on td, not tr: row backgrounds are painted under cell backgrounds, and base.css may tint cells. */
+.pt-row.pt-on td { background: var(--ed-accent-weak); }
+/* end, not right: logical alignment follows dir=rtl if a translation ever needs it. */
+.pt-acts { text-align: end; }
+/* Smaller icon buttons than the 32px primitive: keeps row height compact in a dense table. */
+.pt-acts .ed-iconbtn { width: 30px; height: 30px; }
+/* Current price + struck old price; baseline alignment keeps different font sizes on one text line. */
+.pt-now { display: inline-flex; align-items: baseline; gap: 4px; flex-wrap: wrap; }
+/* Old price: rendered as <s> (main.js), so line-through comes from the UA; here only its colour and weight, red so
+   the strike reads as "cancelled price". */
+.pt-was { color: var(--ed-muted); text-decoration-color: var(--ed-danger); text-decoration-thickness: 1.5px; }
+.pt-best { color: var(--ed-danger); }
+/* Status pill. 999px radius = full capsule at any height. Neutral by default; variants below. */
+.pt-chip { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); color: var(--ed-muted); white-space: nowrap; }
+/* Raw brand colours on purpose (see CONTRACT 2): white on #d61f26 / #ea580c has enough contrast in either theme. */
+.pt-chip-promo { color: #fff; background: #d61f26; border-color: #d61f26; }
+.pt-chip-md { color: #fff; background: #ea580c; border-color: #ea580c; }
+/* Tinted pills from tokens: color-mix keeps them theme-correct without extra dark-mode rules. */
+.pt-chip-active { color: var(--ed-ok); border-color: color-mix(in srgb, var(--ed-ok) 45%, transparent); background: color-mix(in srgb, var(--ed-ok) 12%, transparent); }
+.pt-chip-planned { color: var(--ed-accent); border-color: color-mix(in srgb, var(--ed-accent) 40%, transparent); }
+.pt-more { padding: 8px 10px; }
+.pt-empty { padding: 28px 12px; }
+
+/* Tag preview on a dotted "cutting mat": the dot grid is drawn from the text token, so it stays faint in both themes
+   while the tag itself stays white. Two stops (1px dot, transparent from 1.3px) give a soft anti-aliased dot. */
+.pt-preview {
+  padding: 14px; border-radius: 12px; display: flex; justify-content: center;
+  background-image: radial-gradient(color-mix(in srgb, var(--ed-text) 9%, transparent) 1px, transparent 1.3px); background-size: 14px 14px;
+}
+/* --ar is set by JS to the tag's "w / h": aspect-ratio reserves the box before the SVG lays out (no jump) and keeps
+   proportions when max-height caps it. Shadow in raw rgba: the paper casts a shadow on any theme. */
+.pt-preview svg { display: block; width: 100%; max-width: 340px; height: auto; max-height: 360px; aspect-ratio: var(--ar, auto); box-shadow: 0 1px 2px rgba(16, 24, 40, .1), 0 10px 26px -10px rgba(16, 24, 40, .4); border-radius: 2px; }
+
+/* Promotions list. */
+.pt-plist { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.pt-promo { border: 1px solid var(--ed-border); border-radius: 10px; padding: 8px 10px; background: var(--ed-panel-2); }
+/* Finished promotions stay visible (history) but recede. */
+.pt-promo.pt-st-finished { opacity: .65; }
+.pt-promo-h { display: flex; align-items: center; gap: 8px; }
+.pt-promo-h .ed-iconbtn { width: 28px; height: 28px; }
+.pt-promo-v { font-size: 13px; margin: 2px 0; }
+/* Promo red on a themed panel: #d61f26 is too dark on the dark panel, so a lighter red replaces it in dark mode.
+   Two dark rules mirror base.css's theme model: explicit data-theme="dark", or system dark unless the user forced
+   light. Both are (0,2,1)/(0,3,1) and beat the light rule (0,1,0). */
+.pt-promo-val { font-weight: 700; color: #d61f26; }
+:root[data-theme="dark"] .pt-promo-val { color: #f87171; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .pt-promo-val { color: #f87171; } }
+
+/* Markdown (auto discount by days-to-expiry) rule editor: one row per threshold. */
+.pt-mdrows { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.pt-mdrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
+/* 64px fits a 3-digit number plus spinner; inputs default to ~170px which would wrap every row. */
+.pt-mdin { width: 64px; }
+.pt-arrow { color: var(--ed-muted); }
+
+/* dialogs */
+/* The body scrolls, not the dialog: header and buttons stay in view. min() caps at 720px on tall monitors. */
+.pt-dlg .ed-dlg-body { max-height: min(70vh, 720px); overflow: auto; }
+/* fieldset has an intrinsic min-width:min-content in every engine; without min-width:0 a long label inside forces
+   the dialog wider than the viewport. */
+.pt-fs { border: 1px solid var(--ed-border); border-radius: 10px; padding: 8px 12px 12px; margin: 0; min-width: 0; }
+.pt-fs legend { font-size: 12px; font-weight: 650; color: var(--ed-muted); padding: 0 4px; }
+/* Scrollable checklist (category / product pickers): bounded height so a 500-item catalogue does not push the
+   dialog buttons off screen. */
+.pt-pick { display: flex; flex-direction: column; gap: 2px; max-height: 200px; overflow: auto; border: 1px solid var(--ed-border); border-radius: 8px; padding: 6px; }
+.pt-pick-cats { max-height: 150px; }
+.pt-pick-items { margin-top: 6px; }
+/* Whole row is a <label>: clicking the text toggles the checkbox. */
+.pt-check { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+.pt-check:hover { background: var(--ed-hover); }
+/* The search filter hides rows via [hidden]. Author display:flex would beat the UA [hidden] rule by origin, but
+   ui/base.css already has `[hidden] { display: none !important }`, so this rule is redundant insurance: it keeps
+   working if this file is ever used without base.css. */
+.pt-check[hidden] { display: none; }
+/* Auto start margin pushes the hint (count) to the row end; logical property flips for RTL. */
+.pt-check .ed-hint { margin-inline-start: auto; }
+/* Import column mapping table. */
+.pt-map-wrap { max-height: 46vh; }
+.pt-map td { vertical-align: middle; }
+/* Sample cell from the imported file: one line with ellipsis; arbitrary user data must not stretch the table. */
+.pt-sample { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------------------------------------------------------- designer */
+/* Controls (narrow, first) + stage (fluid). Reverse of products: here the inputs drive the preview. */
+.pt-dwork { display: grid; gap: 18px; align-items: start; grid-template-columns: minmax(300px, 370px) minmax(0, 1fr); }
+@media (max-width: 900px) { .pt-dwork { grid-template-columns: minmax(0, 1fr); } }
+/* Same sticky + own-scroller recipe as .pt-sidecol (see products). */
+@media (min-width: 901px) and (min-height: 700px) { .pt-controls { position: sticky; top: 72px; max-height: calc(100vh - 88px); overflow: auto; padding-right: 2px; } }
+/* Spacing between consecutive fields inside a card, via adjacent-sibling selectors: the first field gets no top
+   margin, so no :first-child reset is needed. Three pairs cover field/field, grid/field and field/grid. */
+.pt-controls .ap-card .ed-field + .ed-field, .pt-controls .ap-card .ed-grid2 + .ed-field, .pt-controls .ap-card .ed-field + .ed-grid2 { margin-top: 10px; }
+.pt-controls .ed-seg { flex-wrap: wrap; }
+
+/* Template picker: auto-fill packs as many 96px tiles as fit, then stretches them equally (1fr). */
+.pt-tpls { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+.pt-tpl {
+  display: flex; flex-direction: column; align-items: stretch; gap: 5px; padding: 6px; text-align: center;
+  border: 1px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel-2); color: var(--ed-muted);
+  font-size: 12px; font-weight: 600; line-height: 1.15; transition: border-color .15s, background .15s, color .15s;
+}
+.pt-tpl:hover { color: var(--ed-text); border-color: var(--ed-border-strong); }
+/* Selected: inset 1px shadow doubles the border to 2px visually without changing the box size (no layout shift). */
+.pt-tpl.pt-on { color: var(--ed-accent); border-color: var(--ed-accent); background: var(--ed-accent-weak); box-shadow: inset 0 0 0 1px var(--ed-accent); }
+/* Fixed-height art box: tiles line up regardless of each template's aspect ratio. */
+.pt-tpl-art { display: flex; align-items: center; justify-content: center; height: 64px; }
+.pt-tpl-art svg { display: block; max-width: 100%; max-height: 64px; width: auto; height: 100%; }
+
+/* Stage: the large tag preview. clamp() padding scales with viewport but stays within 14-32px. Two backgrounds: an
+   accent spotlight behind the tag and the dot grid; background-size lists one value per layer (auto for the glow). */
+.pt-stage {
+  padding: clamp(14px, 3vw, 32px); border-radius: 12px; overflow: auto; display: flex; justify-content: center; align-items: center; min-height: 220px;
+  background-image: radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--ed-accent) 10%, transparent), transparent 62%),
+    radial-gradient(color-mix(in srgb, var(--ed-text) 9%, transparent) 1px, transparent 1.3px);
+  background-size: auto, 16px 16px;
+}
+/* line-height:0 removes the inline descender gap under the SVG that would show as a strip below the paper. */
+.pt-stage-tag { box-shadow: 0 1px 2px rgba(16, 24, 40, .1), 0 18px 40px -12px rgba(16, 24, 40, .45); line-height: 0; }
+/* Zoom "fit": scale to container (max 560px / 70vh). "actual": the SVG keeps its mm width attribute = true size. */
+.pt-zoom-fit .pt-stage-tag { width: min(100%, 560px); }
+.pt-zoom-fit .pt-stage-tag svg { display: block; width: 100%; height: auto; max-height: 70vh; aspect-ratio: var(--ar, auto); }
+/* At actual size the tag may exceed the stage. justify-content:center on an overflowing flex item pushes its left
+   part into negative space that overflow:auto cannot scroll to; flex-start + margin:auto centres only when it fits. */
+.pt-zoom-actual { justify-content: flex-start; }
+.pt-zoom-actual .pt-stage-tag { margin: 0 auto; }
+.pt-stage-meta { margin-top: 8px; text-align: center; }
+/* Reserve one line under the stage so the size caption appearing does not shift the page. */
+.pt-stage + .pt-stage-meta { min-height: 18px; }
+
+/* Tag list (thumbnails of every product's tag). Bounded scroller; padding:2px leaves room for focus rings. */
+.pt-thumbs { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); max-height: 520px; overflow: auto; padding: 2px; }
+.pt-thumb { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 10px; border: 1px solid var(--ed-border); background: var(--ed-panel-2); cursor: pointer; }
+.pt-thumb:hover { border-color: var(--ed-border-strong); }
+.pt-thumb.pt-on { border-color: var(--ed-accent); box-shadow: inset 0 0 0 1px var(--ed-accent); }
+.pt-thumb:focus-visible { outline: 2px solid var(--ed-accent); outline-offset: 2px; }
+.pt-thumb-art { display: flex; justify-content: center; align-items: center; height: 104px; }
+.pt-thumb-art svg { display: block; max-width: 100%; max-height: 104px; width: auto; height: 100%; box-shadow: 0 1px 3px rgba(16, 24, 40, .18); }
+.pt-thumb-cap { display: flex; align-items: center; gap: 6px; font-size: 12px; min-width: 0; }
+/* Caption text ellipsizes; :not(.pt-dot) excludes the status dot, which must keep its fixed 8px. Ellipsis needs
+   min-width:0 on the flex item, else it grows to its text width. */
+.pt-thumb-cap span:not(.pt-dot) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
+/* "Changed since last print" marker, same orange as markdown. */
+.pt-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #ea580c; }
+
+.pt-stats { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 10px 0; font-size: 13px; }
+
+/* A4 sheet preview. The page is laid out at real size (210mm x 297mm, cells positioned in mm by JS) and scaled down by
+   --k (set by JS to fit). transform does not affect layout, so the outer .pt-page-box is sized to the scaled
+   dimensions explicitly; without it the flex row would reserve full A4 space for each sheet. */
+.pt-sheets { --k: .4; display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; }
+.pt-page-box { width: calc(210mm * var(--k)); height: calc(297mm * var(--k)); flex: none; box-shadow: 0 1px 2px rgba(16, 24, 40, .1), 0 10px 26px -10px rgba(16, 24, 40, .45); background: #fff; overflow: hidden; }
+/* Positioned container for absolutely placed cells; same element is reused unscaled for printing. */
+.pt-page { position: relative; width: 210mm; height: 297mm; background: #fff; overflow: hidden; }
+/* Scale from the top-left corner so the scaled page fills the box exactly. */
+.pt-page-box .pt-page { transform: scale(var(--k)); transform-origin: 0 0; }
+.pt-cell { position: absolute; }
+.pt-cell svg { display: block; width: 100%; height: 100%; }
+/* Cut marks overlay: covers the page, never intercepts clicks. */
+.pt-marks { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+/* ---------------------------------------------------------------- print */
+/* Print strategy: JS appends a #pt-print container (unscaled A4 pages) to <body>, adds body.pt-printing, calls
+   print(), and removes both on afterprint. Hiding the app via CSS instead of building a separate window keeps
+   fonts, SVG defs and styles identical to the preview. Hidden on screen. */
+.pt-print { display: none; }
+@media print {
+  /* margin:0 - the sheet margin is a user setting (mm) already baked into cell positions by sheetGrid() in tag.js;
+     a UA page margin would add to it and shift every cell off the cut marks. */
+  @page { size: A4; margin: 0; }
+  /* body.pt-printing (0,1,1) ties with body.ap (0,1,1) from ui/app.css; this file loads later, so it wins and turns
+     the flex column (min-height:100vh) off, which would otherwise add a blank trailing page. */
+  body.pt-printing { display: block; background: #fff; min-height: 0; margin: 0; }
+  /* Every top-level child except the print root disappears. !important beats inline display styles and shell rules. */
+  body.pt-printing > :not(#pt-print) { display: none !important; }
+  body.pt-printing .pt-print { display: block !important; }
+  /* One A4 per page. break-after is the modern property; page-break-after is the legacy alias for older engines. */
+  .pt-print .pt-page { break-after: page; page-break-after: always; }
+  /* No break after the last page, else a blank sheet is printed. */
+  .pt-print .pt-page:last-child { break-after: auto; page-break-after: auto; }
+}

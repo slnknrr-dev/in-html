@@ -1,0 +1,5 @@
+import{normPath,encodePath,decodePath}from"./route.js";function normBase(b){const p=normPath(b);return p?'/'+p+'/':'/';}
+function pathOf(route,base='/',style='clean'){const b=encodePath(normBase(base).slice(1,-1));const prefix=b?'/'+b+'/':'/';const r=encodePath(route);if(!r)return style==='html'?prefix+'index.html':prefix;if(style==='folders')return prefix+r+'/';if(style==='html')return prefix+r+'.html';return prefix+r;}
+function decodedPathname(pathname){const raw=String(pathname||'/');const trail=raw.endsWith('/');const p=decodePath(raw);return'/'+p+(p&&trail?'/':'');}
+function routeOf(pathname,base='/'){const b=normBase(base);let p=decodedPathname(pathname);if(!(p+(p.endsWith('/')?'':'/')).startsWith(b))return null;let rest=p.slice(b.length-1).replace(/^\/+/,'');rest=rest.replace(/(^|\/)index\.html?$/i,'').replace(/\.html?$/i,'');return normPath(rest);}
+export{routeOf,pathOf};

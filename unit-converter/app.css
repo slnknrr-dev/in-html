@@ -1,0 +1,288 @@
+/* unit-converter/app.css — styles of both pages (converter, tables). Loaded third, after ui/base.css + ui/app.css.
+
+   CONTRACT
+   - Namespace: every class starts with `uc-`. Shared primitives are `ed-` (ui/base.css), shell is `ap-` (ui/app.css).
+     Prefix = ownership: a selector here never restyles another app; grep `uc-x` finds every user.
+   - Specificity budget: one class (0,1,0); two for state/context (`.uc-pin.uc-on`, `.uc-read .ed-ic`). No ids, no
+     tags as anchors. Why: equal low specificity lets source order decide, overrides stay predictable. Fails when a
+     selector needs 3+ classes — that signals a missing component class, not a need for more weight.
+   - Colours only via tokens (--ed-*), defined per theme in ui/base.css. Raw colours here would break dark mode.
+     Exception: @media print, where paper is always white (tokens follow the screen theme, not the medium).
+   - State classes are adjectives reused across components: .uc-on (selected), .uc-bad (error), .uc-home (belongs to
+     chosen system). Meaning comes from the compound selector, not from the state class alone.
+   - !important only to beat a shared primitive whose specificity we cannot lower (.uc-invalid) or inline/JS styles
+     in print. Every use is commented.
+
+   LAYOUT PRIMITIVES USED
+   - grid for 2D or column templates; flex for one axis with wrap. `min-width: 0` on grid/flex children everywhere a
+     long number can appear: default min-width:auto = min-content, so an unbreakable "123456789 m²" would overflow.
+   - minmax(0, 1fr) instead of 1fr for the same reason (1fr = minmax(auto, 1fr)).
+   - font-variant-numeric: tabular-nums wherever digits are compared vertically: equal-width digits keep columns aligned. */
+
+/* Page containers: cap line length on wide screens; 1320px ≈ two comfortable columns + gutter. */
+.uc-convert, .uc-tables { max-width: 1320px; }
+/* Vertical stack of cards. gap (not margins) — no collapsing, no :last-child fixups. min-width:0 — see CONTRACT. */
+.uc-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+/* Generic error tint. Inherited by children via `color`; compound forms below (.uc-read.uc-bad) raise priority where needed. */
+.uc-bad { color: var(--ed-danger); }
+/* Secondary line. display:block by default (own line); contexts that need it inline override (.uc-read b + .uc-sub). */
+.uc-sub { display: block; font-size: 12.5px; font-weight: 500; color: var(--ed-muted); }
+/* 650: between semibold and bold — works with variable fonts; static fonts round to nearest available weight. */
+.uc-strong { font-weight: 650; font-variant-numeric: tabular-nums; }
+/* Negative top margin pulls the lead under a card title, compensating the title's own bottom margin. */
+.uc-lead { margin: -4px 0 10px; }
+.uc-num { font-variant-numeric: tabular-nums; }
+/* !important: .ed-input sets border-color on :focus with higher specificity (0,2,0); an invalid field must stay red
+   even while focused. Cheaper than duplicating every :focus/:hover variant. */
+.uc-invalid { border-color: var(--ed-danger) !important; }
+
+/* ---------------------------------------------------------------- converter: layout */
+/* Two columns: fixed-ish input panel + fluid results. minmax(300px,380px) — input never narrower than a select with
+   long unit names, never wider than useful. align-items:start — columns keep own height (needed for sticky). */
+.uc-work { display: grid; gap: 18px; align-items: start; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); }
+/* Sticky input only when it fits: on short viewports a sticky panel taller than the screen becomes unreachable.
+   top:72px = shell header height + gap. Sticky works because the grid item is not stretched (align-items:start). */
+@media (min-width: 901px) and (min-height: 640px) { .uc-left { position: sticky; top: 72px; } }
+/* Breakpoint 900px: below it 300px + 18px + results column is too cramped → single column, input first (DOM order). */
+@media (max-width: 900px) { .uc-work { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------------------------------------------------------------- input */
+/* The smart input: larger type = primary action. min-height 48px ≥ 44px touch-target guideline. */
+.uc-big { font-size: 20px; min-height: 48px; padding: 8px 12px; font-variant-numeric: tabular-nums; }
+/* Live "how I read your input" line. min-height reserves one line → no layout jump when text appears/disappears. */
+.uc-read { display: flex; gap: 6px; align-items: flex-start; font-size: 12.5px; color: var(--ed-muted); min-height: 19px; }
+/* Icon: flex:none — never shrinks when text wraps; margin-top aligns icon with first text line (not centre of block). */
+.uc-read .ed-ic { flex: none; margin-top: 1px; }
+.uc-read .ed-ic svg { width: 14px; height: 14px; }
+/* Compound (0,2,0) beats .uc-read's muted colour (0,1,0) regardless of order. */
+.uc-read.uc-bad { color: var(--ed-danger); }
+/* Adjacent sibling: a .uc-sub right after the bold value goes inline on the same line. Context-dependent override of
+   .uc-sub's display:block — no extra modifier class needed. */
+.uc-read b + .uc-sub { display: inline; margin-inline-start: 8px; }
+/* Example chips. flex-wrap: as many per row as fit. */
+.uc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Pill: radius 999px = always fully round regardless of height (50% would make ellipses on wide chips).
+   nowrap — a chip is one token; wrapping inside it reads as two chips. */
+.uc-chip {
+  display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--ed-border); background: var(--ed-panel-2); color: var(--ed-text); font-size: 12.5px; white-space: nowrap;
+}
+.uc-chip:hover { border-color: var(--ed-accent); color: var(--ed-accent); }
+.uc-chip .ed-ic svg { width: 14px; height: 14px; }
+/* <select> from common.js unitSelect(); full width of its column. */
+.uc-unit-sel { width: 100%; }
+
+/* ---------------------------------------------------------------- main result */
+/* Accent wash fading to panel: color-mix keeps it a token derivative → follows theme. 9% — visible, not loud. */
+.uc-main-card { background: linear-gradient(160deg, color-mix(in srgb, var(--ed-accent) 9%, var(--ed-panel)), var(--ed-panel) 60%); }
+/* Scoped empty state: .ap-empty is a shell primitive; here it is re-laid out as a centred column with a faded icon. */
+.uc-main .ap-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.uc-main .ap-empty svg { width: 34px; height: 34px; opacity: .45; }
+.uc-main .ap-empty p { margin: 0; }
+.uc-kind { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+/* Tag: uppercase + tracking compensates small size (11px) for legibility. */
+.uc-kind-tag { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--ed-accent); background: var(--ed-accent-weak); padding: 2px 8px; border-radius: 999px; }
+/* "≈" note: warn colour, not danger — approximation is information, not error. */
+.uc-approx { font-size: 12px; color: var(--ed-warn); }
+/* "5 ft = 1.52 m". baseline alignment: different font sizes share one text baseline. gap row/col differ. */
+.uc-eq { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; font-variant-numeric: tabular-nums; }
+/* overflow-wrap:anywhere — huge numbers break inside instead of overflowing; also lowers min-content (unlike break-word). */
+.uc-eq-from { font-size: 18px; font-weight: 550; color: var(--ed-muted); overflow-wrap: anywhere; }
+.uc-eq-sign { font-size: 20px; color: var(--ed-faint); }
+/* clamp(min, fluid, max): result scales with viewport without media queries. Negative tracking tightens big digits. */
+.uc-eq-to { font-size: clamp(26px, 4.2vw, 38px); font-weight: 700; letter-spacing: -.02em; line-height: 1.15; overflow-wrap: anywhere; min-width: 0; }
+/* Reset inherited big size + negative tracking for the unit name under the result. */
+.uc-eq-to .uc-sub { font-size: 15px; letter-spacing: 0; }
+.uc-formula { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+/* `font` shorthand resets every font sub-property (incl. weight) — intended: code is always regular monospace. */
+.uc-formula code { font: 12.5px/1.4 var(--ed-mono); padding: 3px 8px; border-radius: 7px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); color: var(--ed-text); overflow-wrap: anywhere; }
+.uc-word { display: flex; gap: 6px; align-items: center; margin-top: 10px; font-size: 13px; }
+.uc-word svg { width: 16px; height: 16px; color: var(--ed-accent); }
+/* Pinned pair button. currentColor: border and icon fill follow `color` — one value to change, no drift. */
+.uc-pinned { color: var(--ed-warn); border-color: currentColor; }
+.uc-pinned svg { fill: currentColor; }
+
+/* ---------------------------------------------------------------- every unit */
+/* Result list as responsive grid: auto-fill creates as many 250px+ tracks as fit, 1fr shares remainder.
+   auto-fill (not auto-fit): with few items empty tracks remain, cards keep size instead of stretching to full width. */
+.uc-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+/* Row = pick button + copy button. align-items:stretch — pick button fills full row height (bigger hit area). */
+.uc-row { display: flex; align-items: stretch; min-width: 0; border: 1px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel-2); }
+/* Named grid areas: value + symbol on line 1, name across line 2. Areas read as a picture; reordering = one string.
+   Button reset (border/background/text-align) — native button styles fight the layout. Radius only on the left:
+   right side belongs to the copy button. */
+.uc-pick {
+  flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "v s" "n n";
+  gap: 0 8px; padding: 7px 10px; text-align: start; border: 0; background: none; color: var(--ed-text); border-radius: 10px 0 0 10px; cursor: pointer;
+}
+.uc-pick:hover { background: var(--ed-hover); }
+.uc-val { grid-area: v; font-weight: 650; font-size: 15px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.uc-sym { grid-area: s; font-weight: 600; font-size: 13px; color: var(--ed-muted); align-self: center; }
+/* Ellipsis needs all three: overflow:hidden + text-overflow + nowrap; and a bounded width (from grid track). */
+.uc-uname { grid-area: n; font-size: 11.5px; color: var(--ed-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* margin-inline-end (logical) — mirrors automatically in RTL. */
+.uc-copy { align-self: center; margin-inline-end: 4px; }
+/* Unit of the chosen measurement system: tinted, accent symbol. Mixes keep theme-awareness. */
+.uc-home { border-color: color-mix(in srgb, var(--ed-accent) 35%, var(--ed-border)); background: color-mix(in srgb, var(--ed-accent) 6%, var(--ed-panel)); }
+.uc-home .uc-sym { color: var(--ed-accent); }
+/* Current target unit. inset box-shadow, not border: no layout shift (border width would change box size), and it
+   stacks with .uc-home's border colour. */
+.uc-target { box-shadow: inset 0 0 0 1.5px var(--ed-accent); }
+/* Source unit: not clickable (already selected) — default cursor + dashed border signal "this is the input". */
+.uc-from .uc-pick { cursor: default; }
+.uc-from { border-style: dashed; }
+
+/* ---------------------------------------------------------------- tables */
+/* Numeric tables: collapse — single shared borders; numbers right-aligned (end) so decimal places line up. */
+.uc-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.uc-table th, .uc-table td { padding: 4px 8px; border-bottom: 1px solid var(--ed-border); text-align: end; }
+/* First column is the label/source → start-aligned. Higher specificity (0,2,1) beats the rule above (0,1,1). */
+.uc-table th:first-child, .uc-table td:first-child { text-align: start; }
+.uc-table thead th { font-weight: 650; color: var(--ed-muted); font-size: 12px; background: var(--ed-panel-2); }
+/* Zebra on td, not tr: backgrounds on <tr> are unreliable with border-collapse in some engines and in print. */
+.uc-table tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--ed-panel-2) 70%, transparent); }
+/* Highlighted current value. KNOWN DEFECT: specificity (0,2,2) < zebra above (0,2,3: extra `tbody` tag), so on even
+   rows zebra background wins despite later order; only color/weight apply. Order cannot fix a specificity loss.
+   Fix: `.uc-table tbody tr.uc-cur td` (0,2,3, later → wins). */
+.uc-table tr.uc-cur td { background: var(--ed-accent-weak); color: var(--ed-accent); font-weight: 650; }
+.uc-table caption { text-align: start; font-weight: 650; padding-bottom: 4px; }
+/* Scroll container for wide tables: horizontal scroll inside, page itself never scrolls sideways. */
+.uc-tablewrap { overflow-x: auto; }
+.uc-near .uc-table { max-width: 520px; }
+
+/* ---------------------------------------------------------------- pins, history */
+.uc-pinlist, .uc-histlist { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+/* Split pill: [go | ×]. Outer pill owns border+radius; inner buttons own halves of the radius so hover fills match. */
+.uc-pin { display: inline-flex; align-items: center; border: 1px solid var(--ed-border); border-radius: 999px; background: var(--ed-panel-2); }
+.uc-pin.uc-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.uc-pin-go { border: 0; background: none; color: var(--ed-text); padding: 4px 4px 4px 11px; font-size: 13px; font-weight: 550; cursor: pointer; border-radius: 999px 0 0 999px; }
+/* State propagates from parent: `.uc-pin.uc-on .uc-pin-go` — child needs no own state class, JS toggles one place. */
+.uc-pin.uc-on .uc-pin-go { color: var(--ed-accent); }
+.uc-pin-x { display: inline-flex; border: 0; background: none; color: var(--ed-muted); padding: 5px 8px 5px 4px; cursor: pointer; border-radius: 0 999px 999px 0; }
+.uc-pin-x:hover { color: var(--ed-danger); }
+.uc-pin-x svg { width: 13px; height: 13px; }
+/* History can grow unbounded: cap height, scroll inside. */
+.uc-histlist { max-height: 220px; overflow: auto; }
+.uc-hist-item { border: 1px solid var(--ed-border); background: var(--ed-panel-2); color: var(--ed-text); border-radius: 8px; padding: 4px 9px; font-size: 13px; cursor: pointer; }
+.uc-hist-item:hover { border-color: var(--ed-border-strong); }
+/* :focus-visible — ring for keyboard only, not mouse clicks. Negative offset draws the ring inside: these buttons sit
+   flush in a rounded parent with no room outside, an outer ring would be clipped or overlap neighbours. */
+.uc-pin-go:focus-visible, .uc-pin-x:focus-visible, .uc-pick:focus-visible { outline: 2px solid var(--ed-accent); outline-offset: -2px; }
+
+/* ---------------------------------------------------------------- extras */
+.uc-extras-h { display: flex; align-items: center; gap: 8px; margin: 28px 0 12px; font-size: 17px; font-weight: 650; }
+.uc-extras-h svg { width: 20px; height: 20px; color: var(--ed-accent); }
+/* auto-fit (not auto-fill): few cards should stretch to fill the row — opposite choice to .uc-list, on purpose. */
+.uc-extras { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); align-items: start; }
+/* Below 420px the 330px minimum + padding overflows → force one fluid column. */
+@media (max-width: 420px) { .uc-extras { grid-template-columns: minmax(0, 1fr); } }
+
+/* Price-per-unit comparator: header and rows share one column template → columns align without a <table>.
+   Columns: name | qty | price | delete(32px fixed = icon button). fr ratios favour the name. */
+.uc-phead, .uc-prow { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(64px, .7fr) minmax(72px, .8fr) 32px; gap: 6px; align-items: center; }
+.uc-phead { font-size: 11.5px; color: var(--ed-muted); font-weight: 600; margin-bottom: 4px; }
+.uc-prows { display: flex; flex-direction: column; gap: 8px; }
+/* Output spans the whole row: 1 / -1 = first to last grid line, independent of column count. */
+.uc-pout { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--ed-muted); margin-top: -2px; }
+/* :empty — no output yet → no gap/margin left behind. Requires JS to leave the node truly empty (no whitespace). */
+.uc-pout:empty { display: none; }
+.uc-pout.uc-best { color: var(--ed-text); }
+.uc-pout.uc-bad { color: var(--ed-danger); }
+.uc-badge { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); color: var(--ed-muted); }
+/* Mixing with transparent = alpha tint of the token, works on any background. */
+.uc-badge-ok { color: var(--ed-ok); border-color: color-mix(in srgb, var(--ed-ok) 40%, transparent); background: color-mix(in srgb, var(--ed-ok) 12%, transparent); }
+.uc-pfoot { margin-top: 12px; align-items: flex-end; }
+/* Inline label+control here; .ed-field is a column flexbox by default (ui/base.css) → switch axis to row. */
+.uc-pfoot .ed-field { display: flex; align-items: center; gap: 8px; margin: 0; }
+.uc-cur { width: 72px; }
+
+/* Rooms (area sum) rows: name | unit select | result | delete. */
+.uc-rrows { display: flex; flex-direction: column; gap: 6px; }
+.uc-rrow { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(64px, auto) 32px; gap: 6px; align-items: center; }
+.uc-rout { font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--ed-muted); text-align: end; white-space: nowrap; }
+.uc-rsum { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--ed-border); }
+.uc-kv dd .uc-sub { display: inline; margin-inline-start: 8px; }
+/* Phone: rebuild both row grids. Children are placed by type (> select, > input) — DOM order fixed by JS, so child
+   combinators are stable; `>` prevents matching nested controls. Header hidden: columns no longer correspond. */
+@media (max-width: 420px) {
+  .uc-rrow { grid-template-columns: minmax(0, 1fr) 32px; }
+  .uc-rrow > select { grid-column: 1 / -1; }
+  .uc-rrow > .uc-rout { grid-column: 1; text-align: start; }
+  .uc-rrow > input { grid-column: 1; }
+  .uc-rrow > button { grid-row: 2; grid-column: 2; }
+  .uc-phead { display: none; }
+  .uc-prow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px; }
+  .uc-prow > input:first-child { grid-column: 1 / -1; }
+}
+
+/* Size-scale ladder (XS…XL): equal steps. flex:1 1 0 — zero basis → widths equal regardless of label length. */
+.uc-ladder { display: flex; gap: 4px; margin: 8px 0 14px; }
+.uc-step { flex: 1 1 0; min-width: 0; padding: 6px 7px; border-radius: 8px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); display: flex; flex-direction: column; gap: 1px; }
+.uc-step-w { font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
+.uc-step-r { font-size: 11px; color: var(--ed-muted); font-variant-numeric: tabular-nums; }
+.uc-step.uc-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.uc-step.uc-on .uc-step-w { color: var(--ed-accent); }
+/* Context override: inside scales card the read-line is primary text, baseline-aligned with inputs. */
+.uc-scales .uc-read { margin-top: 6px; align-items: baseline; font-size: 13px; color: var(--ed-text); }
+.uc-euro { margin-top: 8px; }
+/* nth-child(n+3) = 3rd column onward (text columns) → start-aligned, overriding numeric end-alignment. */
+.uc-euro td:nth-child(n+3), .uc-euro th:nth-child(n+3) { text-align: start; }
+/* Attribute selector targets only number inputs: text inputs in the same card keep full width. */
+.uc-scales input[type=number] { max-width: 120px; }
+
+/* ---------------------------------------------------------------- tables page */
+/* Same pattern as .uc-work: settings column + sheet. Duplicated rather than shared: pages may diverge. */
+.uc-twork { display: grid; gap: 18px; align-items: start; grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); }
+@media (max-width: 900px) { .uc-twork { grid-template-columns: minmax(0, 1fr); } }
+.uc-grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+/* ui/app.css `.ap-card .ed-field + .ed-field` adds top margin for stacked fields; in a row grid it misaligns cells.
+   Equal specificity (0,3,0) → this file loads later → wins. Reorder the <link>s and this reset silently dies. */
+.uc-grid3 .ed-field + .ed-field { margin-top: 0; }
+.uc-ttools { gap: 8px; }
+/* The "paper": screen preview of the printed sheet. clamp padding scales with viewport. */
+.uc-paper { background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: 14px; padding: clamp(14px, 3vw, 28px); box-shadow: var(--ed-shadow); }
+.uc-sheet-title { margin: 0 0 14px; font-size: 20px; font-weight: 700; letter-spacing: -.01em; }
+/* Column count from a custom property set by JS (style="--uc-cols:3"): CSS keeps layout, JS passes only a number.
+   Fallback 2 when unset. Also mirrored as data-cols for attribute selectors (custom props cannot be queried by selectors). */
+.uc-sheet { display: grid; gap: 16px; grid-template-columns: repeat(var(--uc-cols, 2), minmax(0, 1fr)); align-items: start; }
+/* Attribute selector because a selector cannot test var(--uc-cols). No conflict with the inline style: it sets only
+   the variable; this rule sets grid-template-columns directly, so it applies. */
+@media (max-width: 1100px) { .uc-sheet[data-cols="3"] { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .uc-sheet { grid-template-columns: minmax(0, 1fr); } }
+/* break-inside:avoid — a card is never split across columns/pages. */
+.uc-tcard { margin: 0; padding: 10px; border: 1px solid var(--ed-border); border-radius: 10px; min-width: 0; break-inside: avoid; cursor: pointer; }
+/* Selected card: border + 1px outer shadow = visual 2px border without changing box size. */
+.uc-tcard.uc-on { border-color: var(--ed-accent); box-shadow: 0 0 0 1px var(--ed-accent); }
+.uc-tcard-h { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+.uc-tcard-h h3 { margin: 0; font-size: 14px; font-weight: 650; }
+.uc-tpair { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); align-items: start; }
+.uc-tfoot { font-size: 11px; color: var(--ed-faint); margin-top: 4px; }
+
+/* ---------------------------------------------------------------- print
+   Goal: sheet only, black on white, physical units (mm/pt — px are meaningless on paper).
+   !important here is deliberate: print must beat every screen rule, inline styles and theme tokens without
+   re-matching their specificity one by one. print-color-adjust:exact — browsers drop backgrounds by default to save
+   ink; zebra and header shading carry meaning, so force them (-webkit- prefix still needed for Safari/Chromium). */
+@media print {
+  @page { size: A4; margin: 12mm; }
+  body.ap { background: #fff; color: #000; min-height: 0; }
+  .ap-main { padding: 0; max-width: none; }
+  .uc-tside, .uc-ttools, .uc-noprint, .uc-tfoot { display: none !important; }
+  /* Grid → block: the side column is hidden, a 2-track grid would leave an empty track. */
+  .uc-twork { display: block; }
+  .uc-paper { border: 0; box-shadow: none; padding: 0; background: #fff; }
+  .uc-sheet-title { font-size: 16pt; margin-bottom: 6mm; }
+  /* Re-assert user column count: screen media queries (≤1100px, ≤640px) would otherwise apply to narrow paper. */
+  .uc-sheet { grid-template-columns: repeat(var(--uc-cols, 2), minmax(0, 1fr)) !important; gap: 5mm; }
+  /* page-break-inside: legacy alias of break-inside, kept for older print engines. */
+  .uc-tcard { border: 0.2mm solid #999; box-shadow: none !important; padding: 3mm; page-break-inside: avoid; }
+  .uc-tcard-h h3 { font-size: 10.5pt; }
+  .uc-table { font-size: 9pt; }
+  .uc-table th, .uc-table td { padding: 1mm 2mm; border-bottom: 0.15mm solid #ccc; color: #000; }
+  .uc-table thead th { background: #eee !important; color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .uc-table tbody tr:nth-child(even) td { background: #f5f5f5 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .uc-table tr { break-inside: avoid; }
+  /* The converter page prints its result and tables only. */
+  .uc-convert .uc-left, .uc-convert .ap-actions, .uc-convert .uc-copy, .uc-extras, .uc-extras-h { display: none !important; }
+  .uc-work { display: block; }
+}

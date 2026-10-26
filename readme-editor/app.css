@@ -1,0 +1,210 @@
+/* readme-editor/app.css - README Editor: a full-height workspace (toolbars, source | preview | outline), the README
+   frame, in-place editing, the block toolbar, dialogs. The README itself is styled by markdown/gfm.css.
+   Loaded fourth: ui/base.css, ui/app.css, markdown/gfm.css, then this file (see index.html).
+
+   CONTRACT
+   - Namespace: every own class starts with `re-`. Shared primitives are `ed-` (ui/base.css), shell `ap-`
+     (ui/app.css), rendered Markdown `md-` (markdown/gfm.js + gfm.css). Rules here may *target* ed-/ap-/md- classes
+     but only inside an re- context (`.re .ap-foot`, `.re-blk .md-math`), so another app is never restyled.
+   - App root: main.js adds `re` to <body>. Shell overrides are written as `.re .ap-x` (0,2,0) so they beat the
+     shell's single-class rules (0,1,0) by specificity, not by load order alone.
+   - Layout model: an app, not a document. The body is exactly one viewport tall and never scrolls; each pane
+     (source textarea, preview wrapper, side panel) scrolls on its own. Every flex child on that chain carries
+     min-height: 0 / min-width: 0, otherwise the default min-size:auto lets content push the pane past the viewport
+     and the inner overflow:auto never engages.
+   - Colours only via tokens (--ed-*), so dark mode follows ui/base.css. color-mix() derives tints from tokens
+     instead of adding new ones. Exceptions are commented (#0002 swatch ring).
+   - Visibility toggles by [hidden] get an explicit `[hidden] { display: none }` wherever the element also sets
+     display: an author `display: flex` rule outranks the UA stylesheet's [hidden] rule, so hidden would not hide.
+   - !important exactly once: the mobile split layout must beat the inline flex-basis written by the resizer. */
+
+/* App frame: one viewport tall, no page scroll. 100vh first as fallback, 100dvh second: on mobile 100vh includes
+   the area behind the collapsing URL bar, so the footer would be cut off; dvh tracks the visible viewport.
+   Browsers without dvh drop the second declaration and keep the first. */
+body.re { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
+/* (0,3,0) beats .ap-main / .ap-main.ap-wide in ui/app.css. flex: 1 1 auto + min-height: 0 fill the space between
+   header and footer and allow shrinking below content height; padding 0 because panes pad themselves (a padded
+   main would leave a gutter around the editor). */
+.re .ap-main.re-main { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding: 0; max-width: none; }
+/* Footer reused as a status bar: compact padding, left-aligned status and badge pushed right (order: 2). */
+.re .ap-foot { padding: 3px 12px; justify-content: space-between; border-top: 1px solid var(--ed-border); background: var(--ed-panel); font-size: 12px; gap: 10px; }
+.re .ap-foot .ap-badge { padding: 1px 8px; order: 2; }
+/* min-width: 0 lets the status text ellipsize instead of widening the footer; tabular-nums keeps the counters
+   (lines, words) from jittering as digits change. */
+.re-status { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; font-variant-numeric: tabular-nums; }
+.re-st-l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Button reset to look like a link-ish warning: font: inherit because buttons do not inherit font by default. */
+.re-st-hints { border: 0; background: none; color: var(--ed-warn); cursor: pointer; font: inherit; padding: 0; }
+
+/* Toolbars */
+.re-tools { flex: none; border-bottom: 1px solid var(--ed-border); background: var(--ed-panel); }
+/* Two toolbar rows, wrapping on desktop; on mobile they become horizontally scrollable strips (see @media). */
+.re-row1, .re-row2 { display: flex; align-items: center; gap: 4px; padding: 5px 12px; flex-wrap: wrap; }
+.re-row2 { border-top: 1px solid var(--ed-border); padding-top: 4px; padding-bottom: 4px; }
+/* Separator: flex: none so it never shrinks to 0 when the row is crowded. */
+.re-sep { width: 1px; height: 20px; background: var(--ed-border); margin: 0 4px; flex: none; }
+.re-glyph { font: 600 13px/1 var(--ed-font); min-width: 18px; text-align: center; }
+/* File name ellipsizes at 30ch so a long path cannot push the toolbar buttons onto a new row. */
+.re-fname { font: 12px var(--ed-mono); color: var(--ed-muted); margin-left: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 30ch; }
+/* Unsaved marker via ::after: pure presentation, no extra DOM; the state class is toggled by main.js. */
+.re-fname.re-dirty::after { content: " ●"; color: var(--ed-warn); }
+.re-dirsel { width: auto; max-width: 220px; }
+.re-row1 .ed-seg-btn { padding: 0 9px; }
+
+/* Workspace */
+/* position: relative: anchor for the absolutely positioned side panel on mobile and the drop outline. */
+.re-work { flex: 1 1 auto; min-height: 0; display: flex; position: relative; }
+/* Drag-and-drop target cue. Negative outline-offset draws inside the box, so it is not clipped by overflow. */
+.re-work.re-drop { outline: 3px dashed var(--ed-accent); outline-offset: -6px; }
+/* Source pane: 42% default, the resizer replaces flex-basis inline (main.js); 160px floor keeps it usable. */
+.re-srcpane { flex: 0 0 42%; min-width: 160px; display: flex; }
+/* The textarea fills the pane. resize: none because the resizer handles width and flex handles height;
+   outline: none is acceptable here because the whole pane is the focused editing surface and has its own frame. */
+.re-ta { flex: 1; resize: none; border: 0; padding: 16px; margin: 0; font: 13px/1.6 var(--ed-mono); color: var(--ed-text); background: var(--ed-panel); tab-size: 4; outline: none; }
+/* touch-action: none: the resizer handles pointer events itself; otherwise a touch drag would scroll the page and
+   the browser would cancel the pointer stream (pointercancel). */
+.re-resizer { flex: 0 0 5px; cursor: col-resize; background: var(--ed-border); touch-action: none; }
+.re-resizer:hover, .re-resizer:focus-visible { background: var(--ed-accent); outline: none; }
+/* flex-basis 0 + grow 1: the preview takes exactly the remaining width; min-width: 0 so wide tables or code blocks
+   scroll inside .re-wrap instead of widening the pane. */
+.re-pvpane { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; background: var(--ed-bg); }
+/* Bottom padding 120px: the last block can be scrolled up to mid-screen, so the floating block toolbar under it
+   stays reachable. */
+.re-wrap { flex: 1; overflow: auto; padding: 24px 24px 120px; position: relative; }
+/* The view mode is one data attribute on the container; :is() groups the panes to hide. One attribute switch is
+   cheaper and less error-prone than toggling classes on three elements. */
+.re-work[data-view="visual"] :is(.re-srcpane, .re-resizer), .re-work[data-view="source"] :is(.re-pvpane, .re-resizer) { display: none; }
+.re-work[data-view="source"] .re-srcpane { flex: 1 1 auto; }
+.re-side { flex: 0 0 260px; overflow: auto; padding: 14px; border-left: 1px solid var(--ed-border); background: var(--ed-panel); }
+/* Explicit [hidden]: .re-side sets no display, but keeps the rule symmetrical with the others (see CONTRACT). */
+.re-side[hidden] { display: none; }
+
+/* README frame like a repository page */
+/* README frame imitating the repository page: 1012px is GitHub's README column width, so line breaks and table
+   widths in the preview match what visitors will see. */
+.re-box { max-width: 1012px; margin: 0 auto; border: 1px solid var(--ed-border); border-radius: 6px; background: var(--ed-panel); }
+.re-boxhead { display: flex; gap: 8px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--ed-border); font-weight: 600; font-size: 14px; }
+.re-preview { padding: 32px; min-height: 300px; border-radius: 0 0 6px 6px; }
+/* Empty preview: the placeholder text comes from aria-label via attr(), so it is translated once in JS and serves
+   both screen readers and sighted users. */
+.re-preview.re-empty::before { content: attr(aria-label); color: var(--ed-muted); }
+/* Codeberg flavour (Forgejo): wider column and smaller radius, toggled by a class on an ancestor. */
+.re-codeberg .re-box { border-radius: 4px; max-width: 1100px; }
+.re-codeberg .re-preview { padding: 2em; }
+.re-notice { display: flex; align-items: center; gap: 8px; max-width: 1012px; margin: 0 auto 12px; padding: 6px 12px; border: 1px solid var(--ed-border); border-radius: 8px; background: var(--ed-panel); color: var(--ed-muted); font-size: 13px; }
+.re-notice[hidden] { display: none; }
+.re-notice span { flex: 1; }
+
+/* Blocks */
+/* Each top-level Markdown block is wrapped in .re-blk. Transparent dashed outline at rest so hover only changes the
+   colour (transition-able) and never the geometry: an outline takes no layout space, a border would shift text. */
+.re-blk { position: relative; border-radius: 4px; outline: 1px dashed transparent; outline-offset: 4px; transition: outline-color .1s; }
+/* 16px = GitHub's block gap, forced on the block's own last child: blocks then space uniformly whatever the
+   child's own margin, and the 4px-offset outline of one block never touches the next. (gfm.css zeroes the margin
+   of .md-body > :last-child, i.e. the last wrapper, which this rule re-pads on its child.) */
+.re-blk > :last-child { margin-bottom: 16px; }
+.re-blk:hover { outline-color: var(--ed-border-strong); }
+.re-blk.re-sel { outline: 2px solid var(--ed-accent); }
+/* Editing state: green frame + faint tint, distinct from the blue selection, so "selected" and "typing here" are
+   never confused. */
+.re-blk.re-editing { outline: 2px solid var(--ed-ok); background: color-mix(in srgb, var(--ed-ok) 5%, transparent); cursor: text; }
+/* The contenteditable itself shows no focus ring: the block frame already shows focus (and :focus-within below
+   keeps it while focus is on a cell inside). Table cells get their own ring because a table has many targets. */
+.re-blk.re-editing:focus, .re-blk [contenteditable="true"]:focus { outline: none; }
+.re-blk.re-editing:focus-within { outline: 2px solid var(--ed-ok); }
+.re-blk.re-editing :is(td, th):focus { outline: 2px solid var(--ed-accent); outline-offset: -2px; }
+/* Flash after jumping from the outline/hints: tells the eye where the scroll landed. */
+.re-blk.re-flash { animation: re-flash 1s; }
+@keyframes re-flash { from { background: var(--ed-accent-weak); } to { background: transparent; } }
+/* Clickable non-text content: images, formulas and diagrams open their editors on click. */
+.re-blk img, .re-blk .md-math, .re-blk .md-diagram { cursor: pointer; }
+.re-blk img:hover { outline: 2px solid var(--ed-accent); outline-offset: 1px; border-radius: 3px; }
+.re-blk :is(.md-math, .md-diagram):hover { background: color-mix(in srgb, var(--ed-accent) 9%, transparent); border-radius: 4px; }
+.re-blk .md-task { cursor: pointer; }
+/* Link/footnote definitions are normally invisible in rendered Markdown; the editor shows them faded (showDefs)
+   so they can be selected and edited. */
+.re-preview .md-def { font: 12px var(--ed-mono); color: var(--ed-muted); opacity: .75; }
+.re-t-def > .md-def, .re-t-footnote > .md-def { margin-bottom: 8px; }
+.re-preview img.re-held { cursor: pointer; }
+.re-foot { opacity: .9; }
+
+/* Floating block toolbar, positioned by JS next to the selected block; z-index 10 sits above blocks, below the
+   mobile side panel (20) and the shared dialogs. */
+.re-blkbar { position: absolute; z-index: 10; display: flex; gap: 1px; padding: 2px; background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: 8px; box-shadow: var(--ed-shadow); }
+.re-blkbar[hidden] { display: none; }
+/* Context bar for the active editing session, tinted with the editing colour to link it to the green block frame. */
+.re-ctx { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 5px 12px; background: color-mix(in srgb, var(--ed-ok) 12%, var(--ed-panel)); border-bottom: 1px solid var(--ed-ok); }
+.re-ctx[hidden] { display: none; }
+.re-ctx-l { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; margin-right: 6px; }
+.re-ctx .ed-btn.ed-sm { min-width: 30px; justify-content: center; padding: 0 7px; }
+
+/* Outline and hints */
+.re-toc { display: flex; flex-direction: column; margin-bottom: 18px; }
+/* TOC entries and hints are buttons reset to list rows: real buttons give keyboard and AT support for free;
+   text-align: left undoes the button default of centred text. Indent per level is set inline by outline.js. */
+.re-toc-i, .re-hint { display: flex; align-items: flex-start; gap: 6px; width: 100%; text-align: left; border: 0; background: none; color: var(--ed-text); padding: 4px 8px; border-radius: 6px; font: inherit; font-size: 13px; cursor: pointer; }
+.re-toc-i:hover, .re-hint:hover { background: var(--ed-hover); }
+.re-hints { list-style: none; margin: 0; padding: 0; }
+.re-hint .ed-ic { color: var(--ed-warn); flex: none; }
+
+/* Dialogs */
+.re-form { display: flex; flex-direction: column; gap: 10px; }
+.re-f { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.re-row { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
+.re-col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+/* Dialog grids. 1fr 1fr collapse to one column on mobile (see @media). */
+.re-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.re-mono { font-family: var(--ed-mono); font-size: 12.5px; }
+.re-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.re-split2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+/* white-space: pre in the source editor dialog: Markdown tables and code must not visually wrap while editing. */
+.re-src-ta { min-height: 360px; resize: vertical; white-space: pre; }
+.re-src-prev { border: 1px solid var(--ed-border); border-radius: 8px; padding: 16px; min-height: 360px; max-height: 62vh; overflow: auto; }
+.re-math-prev { min-height: 56px; padding: 8px; border: 1px dashed var(--ed-border); border-radius: 8px; overflow-x: auto; }
+.re-prevbox { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 64px; padding: 14px; border: 1px dashed var(--ed-border); border-radius: 8px;
+/* Checkerboard behind previews: repeating-conic-gradient draws a 2x2 checker in one declaration, revealing
+   transparent pixels of badges and images. */
+  background: repeating-conic-gradient(var(--ed-panel-2) 0 25%, transparent 0 50%) 0 0 / 16px 16px; }
+.re-badge-prev { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.re-img-prev { max-width: 100%; max-height: 220px; }
+.re-badge { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.re-swatches { display: flex; flex-wrap: wrap; gap: 4px; }
+/* #0002 (black at ~13% alpha) ring: the one raw colour, deliberately theme-independent so a white swatch stays
+   visible on a white panel and a dark swatch on a dark one. */
+.re-swatches button { width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 2px solid transparent; cursor: pointer; box-shadow: inset 0 0 0 1px #0002; }
+.re-swatches button.re-on { border-color: var(--ed-text); }
+/* Table-size picker: 10 x 22px cells, hover/click sets rows x columns. */
+.re-tgrid { display: grid; grid-template-columns: repeat(10, 22px); gap: 3px; }
+.re-tgrid button { width: 22px; height: 22px; padding: 0; border: 1px solid var(--ed-border-strong); border-radius: 3px; background: var(--ed-panel); cursor: pointer; }
+.re-tgrid button.re-on { background: var(--ed-accent-weak); border-color: var(--ed-accent); }
+/* Pushes a footer button (e.g. "remove") to the far left of the shared dialog footer. */
+.ed-dlg-foot .re-left { margin-right: auto; }
+/* min(1100px, 96vw): wide source dialog on desktop, never wider than the screen on phones. */
+.re-dlg-src { width: min(1100px, 96vw); }
+.re-help ul { margin: 0 0 14px; padding-left: 20px; }
+.re-help li { margin-bottom: 6px; }
+.re-inspop { max-height: min(80vh, 640px); overflow: auto; }
+/* minmax(170px, 1fr): items never shrink below a readable label width. */
+.re-insmenu { display: grid; grid-template-columns: repeat(3, minmax(170px, 1fr)); gap: 4px 8px; padding: 4px; }
+.re-insgroup { display: flex; flex-direction: column; }
+
+/* Phones / narrow windows: split view stacks vertically, the side panel becomes an overlay drawer, labels next to
+   icons hide, toolbars scroll horizontally instead of wrapping into four rows. */
+@media (max-width: 760px) {
+  .re-work[data-view="split"] { flex-direction: column; }
+/* !important beats the inline style.flexBasis written by the desktop resizer (inline style outranks any selector);
+   in the stacked layout a pixel width from desktop would be meaningless. */
+  .re-work[data-view="split"] .re-srcpane { flex: 0 0 38% !important; }
+  .re-work[data-view="split"] .re-resizer { display: none; }
+/* Drawer: absolute in .re-work (position: relative), pinned to the right edge, above content (z-index 20). */
+  .re-side { position: absolute; inset: 0 0 0 auto; width: min(300px, 86vw); z-index: 20; box-shadow: var(--ed-shadow-lg); }
+  .re-wrap { padding: 8px 8px 80px; }
+  .re-preview { padding: 16px; }
+  .re-btxt, .re-fname, .re-ctx-hint, .re-st-l { display: none; }
+/* scrollbar-width: none hides the strip's scrollbar (Firefox, and Chromium 121+); swipe still scrolls it. */
+  .re-row1, .re-row2 { padding: 4px 8px; gap: 2px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .re-row1 > *, .re-row2 > * { flex: none; }
+  .re-split2, .re-badge, .re-grid2 { grid-template-columns: 1fr; }
+  .re-insmenu { grid-template-columns: 1fr 1fr; }
+  .re .ap-foot .ap-badge { display: none; }
+}

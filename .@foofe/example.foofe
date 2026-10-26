@@ -1,0 +1,38 @@
+draft of foofe web framework
+
+<>
+  <block>
+    <follow "https://codeberg.org/slnknrr/foofe_lib.js">
+      foofe by @slnknrr from Codeberg
+    </follow nodecor>
+  </block>
+  <block>
+  </block>
+</hblock 1 2fr>
+
+можно plainhtml, но будет наследование стилей
+
+<horz>
+  <vert>
+    <text>
+    </text>
+  </vert>
+</horz>
+
+horz:
+  horz:
+    ver:
+      markdown:
+        # hi!
+        ! работает для того, что идёт после ! или с самого начала; строка стилей в стиле anteater
+    ver:
+      markdown(linkOrFile, "fromHeader", "toheader"): f(!, CUSTOM_PARAM) //'!' это ссылка на event
+        ! style string
+      text:
+  horz:
+    ver
+  ~
+  <vert>
+  </vert>
+
+</horz>

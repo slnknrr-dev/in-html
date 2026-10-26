@@ -1,0 +1,236 @@
+// battleship-game/setup.js - the new game screen (ruleset gallery with the rules in words, players, a bot on every other
+// seat, the shuffle: a shareable seed or the CSPRNG) and the bot picker: personalities with their principles, the
+// rating at every level and who they beat or lose to (from the simulations), saved own bots and the bot constructor
+// (method, placement, targeting, traits, level).
+//
+//   renderSetup(main, { onStart(setup), onBack, rulesBody }) -> element
+//   pickBot(current) -> Promise<seat config | null>      seat config: { kind, level, options?, name?, icon? }
+//   botCard(kind, level) -> element;  builder(onUse, init) -> element;  rulesetChoices() -> [{ raw, builtin }]
+
+import { h } from '../ui/dom.js';
+import { t } from '../ui/i18n.js';
+import { iconEl } from '../ui/icons.js';
+import { openDialog, toast } from '../ui/overlays.js';
+import { seg } from '../ui/app.js';
+import { normalizeRuleset, playerRange } from '../battleship/ruleset.js';
+import { PRESETS } from '../battleship/presets.js';
+import { TEMPLATES, TRAITS, METHODS, PLACEMENTS, TARGETING, LEVELS, templateById, profileOf } from '../battleship/bots.js';
+import { BOTSTATS } from '../battleship/botstats.js';
+import { randomSeed } from '../prng/prng.js';
+import { store, save } from './store.js';
+import { rulesetName, botName, levelName } from './names.js';
+
+// Built-in presets plus the player's own rulesets, each flagged `builtin` so the game can send presets by id only.
+export function rulesetChoices() {
+  return [...PRESETS.map((raw) => ({ raw, builtin: true })), ...store.rulesets.map((raw) => ({ raw, builtin: false }))];
+}
+
+const TAGS = ['classic', 'small', 'big', 'salvo', 'secret', 'party', 'teams', 'exclusive', 'islands', 'shapes', 'weapons'];
+const tagsOf = (raw) => (raw.tags || []).filter((x) => TAGS.includes(x));
+
+// --- ratings and duels ------------------------------------------------------------------------------------------------
+
+const ratingOf = (id, level) => BOTSTATS.templates?.[id]?.levels?.[level]?.rating ?? null;
+
+// Personalities `id` beats and loses to, head to head at Normal (win rate of `id`).
+export function duelsOf(id) {
+  const out = [];
+  for (const [k, v] of Object.entries(BOTSTATS.duels || {})) {
+    const [a, b] = k.split(':');
+    if (a === id) out.push({ id: b, p: v.a });
+    else if (b === id) out.push({ id: a, p: v.b });
+  }
+  const beats = out.filter((x) => x.p >= 0.53).sort((x, y) => y.p - x.p).slice(0, 3);
+  const loses = out.filter((x) => x.p <= 0.47).sort((x, y) => x.p - y.p).slice(0, 3);
+  return { beats, loses };
+}
+
+// The personality closest to a constructed profile (method, placement, traits).
+export function nearestTemplate(cfg) {
+  let best = null, bd = Infinity;
+  for (const tp of TEMPLATES) {
+    let d = (tp.method === cfg.method ? 0 : 1.5) + (tp.placement === cfg.placement ? 0 : 0.8);
+    for (const tr of TRAITS) d += ((tp.traits[tr.id] ?? tr.def) - (cfg.traits[tr.id] ?? tr.def)) ** 2;
+    if (d < bd) { bd = d; best = tp; }
+  }
+  return best;
+}
+
+function chip(id, p) {
+  const tp = templateById(id);
+  return h('span', { class: 'bs-chip' }, tp ? tp.icon : '🤖', ' ', tp ? t(`bot.${id}.name`) : id, p != null ? h('small', {}, ' ' + Math.round(p * 100) + '%') : null);
+}
+
+export function botCard(kind, level = 2, compact = false) {
+  const tp = templateById(kind);
+  if (!tp) return h('div', { class: 'bs-botcard' }, h('b', {}, t('bot.custom.name')));
+  const d = duelsOf(tp.id);
+  return h('div', { class: 'bs-botcard' + (compact ? ' bs-compact' : '') },
+    h('div', { class: 'bs-bot-h' }, h('span', { class: 'bs-bot-i' }, tp.icon), h('div', {}, h('b', {}, t(`bot.${tp.id}.name`)),
+      h('div', { class: 'bs-ratings' }, LEVELS.map((l) => h('span', { class: 'bs-rating' + (l.id === level ? ' bs-on' : ''), title: t('bp.rating') }, levelName(l.id), ' ', h('b', {}, String(ratingOf(tp.id, l.id) ?? '—'))))))),
+    h('p', { class: 'bs-bot-sum' }, t(`bot.${tp.id}.summary`)),
+    h('div', { class: 'bs-chips' }, tp.principles.map((_, i) => h('span', { class: 'bs-chip bs-pr' }, t(`bot.${tp.id}.p${i + 1}`)))),
+    h('div', { class: 'bs-chips bs-meta' }, h('span', { class: 'bs-chip' }, t('bp.method') + ': ' + t('method.' + tp.method)), h('span', { class: 'bs-chip' }, t('bp.placement') + ': ' + t('strat.' + tp.placement))),
+    d.beats.length ? h('div', { class: 'bs-inter bs-beats' }, h('span', {}, t('bp.beats')), d.beats.map((x) => chip(x.id, x.p))) : null,
+    d.loses.length ? h('div', { class: 'bs-inter bs-loses' }, h('span', {}, t('bp.loses')), d.loses.map((x) => chip(x.id, x.p))) : null);
+}
+
+// --- the bot picker ------------------------------------------------------------------------------------------------------
+
+export function pickBot(current = { kind: 'statistician', level: 2 }) {
+  let level = current.level || 2;
+  let choice = null;
+  let tab = 'list';
+  const body = h('div', { class: 'bs-picker' });
+  const render = () => {
+    body.textContent = '';
+    body.append(seg([{ v: 'list', l: 'bp.templates' }, { v: 'build', l: 'bp.build' }], tab, (v) => { tab = v; render(); }, 'bp.mode'));
+    if (tab === 'list') {
+      body.append(h('div', { class: 'bs-levelrow' }, h('span', {}, t('bp.level')), seg(LEVELS.map((l) => ({ v: l.id, l: 'lvl.' + l.id })), level, (v) => { level = +v; render(); }, 'bp.level')));
+      const list = h('div', { class: 'bs-botlist', role: 'listbox' });
+      for (const tp of TEMPLATES) list.append(h('button', { type: 'button', class: 'bs-botitem' + (current.kind === tp.id ? ' bs-on' : ''), role: 'option', dataset: { kind: tp.id }, onclick: () => { choice = { kind: tp.id, level }; close(); } }, botCard(tp.id, level)));
+      for (const b of store.bots) {
+        const near = nearestTemplate({ method: b.options?.method, placement: b.options?.placement, traits: b.options?.traits || {} });
+        list.append(h('div', { class: 'bs-botitem bs-own' },
+          h('button', { type: 'button', class: 'bs-own-main', onclick: () => { choice = { ...b, level: b.level || level }; close(); } },
+            h('div', { class: 'bs-bot-h' }, h('span', { class: 'bs-bot-i' }, b.icon || '🤖'), h('div', {}, h('b', {}, b.name), h('div', { class: 'ed-muted' }, t('bp.similar', { name: near ? t(`bot.${near.id}.name`) : '—' }) + ' · ' + levelName(b.level))))),
+          h('button', { type: 'button', class: 'ed-iconbtn', 'aria-label': t('bp.delete'), title: t('bp.delete'), onclick: () => { store.bots = store.bots.filter((x) => x !== b); save('bots'); render(); } }, iconEl('trash'))));
+      }
+      body.append(list);
+    } else body.append(builder((cfg) => { choice = cfg; close(); }));
+  };
+  let close = () => {};
+  render();
+  return openDialog({ title: t('bp.title'), body, wide: true, className: 'bs-pickdlg', buttons: [], onMount: (m) => { close = () => m.close(null); } }).then(() => choice);
+}
+
+// The bot constructor: method, placement, targeting, traits, level; saved bots live in store.bots.
+export function builder(onUse, init = null) {
+  const base = templateById(init?.base || 'statistician');
+  const cfg = {
+    name: init?.name || t('bp.myBot'), icon: init?.icon || '🤖', base: base.id, level: init?.level || 3,
+    method: init?.options?.method || base.method, placement: init?.options?.placement || base.placement, targeting: init?.options?.targeting || base.targeting,
+    traits: { ...base.traits, ...(init?.options?.traits || {}) },
+  };
+  const box = h('div', { class: 'bs-builder' });
+  const render = () => {
+    box.textContent = '';
+    const nameIn = h('input', { class: 'ed-input', value: cfg.name, maxlength: '24', 'aria-label': t('bp.name') });
+    nameIn.addEventListener('input', () => { cfg.name = nameIn.value; });
+    const iconIn = h('input', { class: 'ed-input bs-emoji-in', value: cfg.icon, maxlength: '4', 'aria-label': t('bp.icon') });
+    iconIn.addEventListener('input', () => { cfg.icon = iconIn.value || '🤖'; });
+    const sel = (key, list, prefix, label, after) => {
+      const s = h('select', { class: 'ed-input ed-select', 'aria-label': t(label) }, list.map((x) => h('option', { value: x, selected: x === cfg[key] }, t(prefix + x))));
+      s.addEventListener('change', () => { cfg[key] = s.value; after?.(); nearOut.textContent = t('bp.similar', { name: t(`bot.${nearestTemplate(cfg).id}.name`) }); });
+      return h('div', { class: 'bs-brow' }, h('label', { class: 'ed-label' }, t(label)), s);
+    };
+    const baseSel = h('select', { class: 'ed-input ed-select', 'aria-label': t('bp.base') }, TEMPLATES.map((tp) => h('option', { value: tp.id, selected: tp.id === cfg.base }, tp.icon + ' ' + t(`bot.${tp.id}.name`))));
+    baseSel.addEventListener('change', () => { const tp = templateById(baseSel.value); Object.assign(cfg, { base: tp.id, method: tp.method, placement: tp.placement, targeting: tp.targeting, traits: { ...tp.traits } }); render(); });
+    const nearOut = h('p', { class: 'bs-near' }, t('bp.similar', { name: t(`bot.${nearestTemplate(cfg).id}.name`) }));
+    box.append(
+      h('div', { class: 'bs-brow' }, h('label', { class: 'ed-label' }, t('bp.name')), h('div', { class: 'ap-row' }, iconIn, nameIn)),
+      h('div', { class: 'bs-brow' }, h('label', { class: 'ed-label' }, t('bp.base')), baseSel),
+      sel('method', METHODS, 'method.', 'bp.method'),
+      h('p', { class: 'ed-hint' }, t('method.' + cfg.method + '.d')),
+      sel('placement', PLACEMENTS, 'strat.', 'bp.placement'),
+      sel('targeting', TARGETING, 'tg.', 'bp.targeting'));
+    const traits = h('div', { class: 'bs-traits' });
+    for (const tr of TRAITS) {
+      const out = h('output', {}, Math.round(cfg.traits[tr.id] * 100) + '%');
+      const r = h('input', { type: 'range', class: 'ed-range', min: '0', max: '100', step: '5', value: String(Math.round(cfg.traits[tr.id] * 100)), 'aria-label': t('tr.' + tr.id) });
+      r.addEventListener('input', () => { cfg.traits[tr.id] = +r.value / 100; out.textContent = r.value + '%'; nearOut.textContent = t('bp.similar', { name: t(`bot.${nearestTemplate(cfg).id}.name`) }); });
+      traits.append(h('div', { class: 'bs-trait' }, h('div', { class: 'bs-trait-h' }, h('b', {}, t('tr.' + tr.id)), out), r, h('div', { class: 'ed-hint' }, t('tr.' + tr.id + '.d'))));
+    }
+    box.append(h('h3', {}, t('bp.traits')), traits,
+      h('div', { class: 'bs-brow' }, h('label', { class: 'ed-label' }, t('bp.level')), seg(LEVELS.map((l) => ({ v: l.id, l: 'lvl.' + l.id })), cfg.level, (v) => { cfg.level = +v; }, 'bp.level')),
+      nearOut,
+      h('div', { class: 'ap-actions' },
+        h('button', { type: 'button', class: 'ed-btn', onclick: () => { saveBot(); toast(t('bp.saved'), 'ok'); } }, iconEl('save'), t('bp.save')),
+        h('button', { type: 'button', class: 'ed-btn ed-primary', onclick: () => onUse(saveBot()) }, iconEl('check'), t('bp.use'))));
+  };
+  const saveBot = () => {
+    const entry = { kind: 'custom', level: cfg.level, name: cfg.name.trim() || t('bp.myBot'), icon: cfg.icon, base: cfg.base, options: { method: cfg.method, placement: cfg.placement, targeting: cfg.targeting, traits: { ...cfg.traits } } };
+    profileOf('custom', { level: entry.level, ...entry.options }); // validated (clamped) by the bot engine
+    const i = store.bots.findIndex((b) => b.name === entry.name);
+    if (i >= 0) store.bots[i] = entry; else store.bots.unshift(entry);
+    store.bots = store.bots.slice(0, 40);
+    save('bots');
+    return entry;
+  };
+  render();
+  return box;
+}
+
+// --- the setup screen ----------------------------------------------------------------------------------------------------
+
+// A tiny picture of a ruleset: the sea with its islands.
+function miniSea(rs) {
+  const W = rs.board.width, H = rs.board.height;
+  const k = 44 / Math.max(W, H);
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="${Math.round(W * k)}" height="${Math.round(H * k)}" aria-hidden="true"><rect class="bs-mini-w" width="${W}" height="${H}"/>`;
+  for (const [x, y] of rs.board.obstacles) s += `<rect class="bs-mini-i" x="${x}" y="${y}" width="1" height="1"/>`;
+  return s + '</svg>';
+}
+
+export function renderSetup(main, { onStart, onBack, rulesBody }) {
+  const S = store.settings;
+  const choices = rulesetChoices();
+  let current = choices.find((c) => c.raw.id === S.rulesetId) || choices[0];
+  let filter = 'all';
+  const root = h('section', { class: 'bs-setup bs-screen' });
+  const render = () => {
+    const rs = normalizeRuleset(current.raw);
+    const pr = playerRange(rs);
+    S.players = Math.max(pr.min, Math.min(pr.max, S.players || 2));
+    root.textContent = '';
+    const head = h('div', { class: 'bs-screen-h' },
+      h('button', { type: 'button', class: 'ed-iconbtn', 'aria-label': t('nav.back'), onclick: onBack }, iconEl('parent')),
+      h('h2', {}, t('setup.title')));
+    const filters = seg([{ v: 'all', l: 'setup.all' }, { v: 'classic', l: 'tag.classic' }, { v: 'party', l: 'tag.party' }, { v: 'exclusive', l: 'tag.exclusive' }, { v: 'own', l: 'setup.own' }], filter, (v) => { filter = v; render(); }, 'setup.rules');
+    const gallery = h('div', { class: 'bs-gallery' });
+    for (const c of choices) {
+      if (filter === 'classic' && !(c.builtin && !c.raw.exclusive && !(c.raw.tags || []).includes('party'))) continue;
+      if (filter === 'party' && !(c.raw.tags || []).includes('party')) continue;
+      if (filter === 'exclusive' && !c.raw.exclusive) continue;
+      if (filter === 'own' && c.builtin) continue;
+      const n = normalizeRuleset(c.raw);
+      const p = playerRange(n);
+      gallery.append(h('button', { type: 'button', class: 'bs-rscard' + (c === current ? ' bs-on' : '') + (c.raw.exclusive ? ' bs-excl' : ''), 'aria-pressed': String(c === current), dataset: { id: c.raw.id }, onclick: () => { current = c; S.rulesetId = c.raw.id; save('settings'); render(); } },
+        h('span', { class: 'bs-rsmini', html: miniSea(n) }),
+        h('span', { class: 'bs-rscard-b' },
+          h('span', { class: 'bs-rscard-h' }, h('b', {}, rulesetName(n)), c.raw.exclusive ? h('span', { class: 'bs-excl-b' }, '★') : null),
+          h('span', { class: 'bs-rscard-m' }, t('setup.meta', { w: n.board.width, h: n.board.height, ships: n.ships.length, min: p.min, max: p.max })),
+          h('span', { class: 'bs-rscard-t' }, tagsOf(c.raw).map((x) => h('span', { class: 'bs-tagp' }, t('tag.' + x))), c.builtin ? null : h('span', { class: 'bs-tagp bs-own' }, t('setup.own'))))));
+    }
+    if (filter === 'own' && !gallery.children.length) gallery.append(h('p', { class: 'ap-empty' }, t('setup.noOwn')));
+    const rulesCard = h('section', { class: 'ap-card bs-rulescard' }, h('h2', { class: 'ap-card-h' }, t('setup.rules')), filters, gallery,
+      h('details', { class: 'bs-rulesdetails', open: true }, h('summary', {}, t('setup.howPlay', { name: rulesetName(rs) })), rulesBody(rs)));
+    const count = h('div', { class: 'bs-stepper' },
+      h('button', { type: 'button', class: 'ed-iconbtn', 'aria-label': t('setup.fewer'), disabled: S.players <= pr.min, onclick: () => { S.players--; save('settings'); render(); } }, iconEl('minus')),
+      h('b', { class: 'bs-stepn' }, String(S.players)),
+      h('button', { type: 'button', class: 'ed-iconbtn', 'aria-label': t('setup.more'), disabled: S.players >= pr.max, onclick: () => { S.players++; save('settings'); render(); } }, iconEl('plus')));
+    const team = (i) => (rs.rules.teams ? h('span', { class: 'bs-team bs-team' + (i % rs.rules.teams) }) : null);
+    const seats = h('div', { class: 'bs-seats' }, h('div', { class: 'bs-seatrow bs-you' }, h('span', { class: 'bs-bot-i' }, S.avatar || '⚓'), h('b', {}, S.name || t('you')), team(0)));
+    for (let i = 1; i < S.players; i++) {
+      const b = S.seats[i - 1];
+      const tp = templateById(b.kind);
+      seats.append(h('button', { type: 'button', class: 'bs-seatrow', dataset: { seat: String(i) }, onclick: async () => { const r = await pickBot(b); if (r) { S.seats[i - 1] = r; save('settings'); render(); } } },
+        h('span', { class: 'bs-bot-i' }, b.icon || (tp ? tp.icon : '🤖')), h('b', {}, botName(b)), h('span', { class: 'bs-lvl' }, levelName(b.level)), team(i), iconEl('edit')));
+    }
+    const playersCard = h('section', { class: 'ap-card' }, h('h2', { class: 'ap-card-h' }, t('setup.players')), pr.max > pr.min ? count : null, seats, h('p', { class: 'ed-hint' }, t('setup.seatsHint')));
+    const seedIn = h('input', { class: 'ed-input', value: S.seed || '', placeholder: t('setup.seedAuto'), 'aria-label': t('setup.seed'), spellcheck: 'false' });
+    seedIn.addEventListener('input', () => { S.seed = seedIn.value.trim(); save('settings'); });
+    const shuffleCard = h('section', { class: 'ap-card' }, h('h2', { class: 'ap-card-h' }, t('setup.shuffle')),
+      seg([{ v: 'seeded', l: 'setup.prng' }, { v: 'crypto', l: 'setup.csprng' }], S.random, (v) => { S.random = v; save('settings'); render(); }, 'setup.shuffle'),
+      S.random === 'seeded' ? h('div', { class: 'ap-row bs-seedrow' }, seedIn, h('button', { type: 'button', class: 'ed-iconbtn', title: t('setup.newSeed'), 'aria-label': t('setup.newSeed'), onclick: () => { seedIn.value = S.seed = randomSeed(); save('settings'); } }, h('span', {}, '🎲'))) : null,
+      h('p', { class: 'ed-hint' }, t(S.random === 'seeded' ? 'setup.prngHint' : 'setup.csprngHint')));
+    const start = h('button', { type: 'button', class: 'bs-bigbtn', dataset: { a: 'start' }, onclick: () => {
+      const seed = S.random === 'seeded' ? (S.seed || randomSeed()) : null;
+      onStart({ ruleset: current.raw, builtin: current.builtin, players: S.players, seats: S.seats.slice(0, S.players - 1), random: S.random, seed });
+    } }, iconEl('send'), t('setup.start'));
+    root.append(head, h('div', { class: 'bs-setup-grid' }, rulesCard, h('div', { class: 'bs-setup-side' }, playersCard, shuffleCard, start)));
+  };
+  render();
+  main.append(root);
+  return root;
+}

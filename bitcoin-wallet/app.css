@@ -1,0 +1,23 @@
+/* bitcoin-wallet/app.css - the Bitcoin accent on top of walletui/wallet.css. Loaded last (after ui/base.css,
+   ui/app.css, walletui/wallet.css).
+
+   CONTRACT
+   - Re-theming by tokens only: the app redefines the four --ed-accent* custom properties and nothing else of the
+     palette; every shared component (buttons, tabs, focus rings, pills) picks the orange up through var().
+     Alternative (overriding each component's colour) would duplicate dozens of rules and drift on every ui/ change.
+   - The three blocks mirror ui/base.css exactly: light :root, OS dark unless the user forced light, forced dark.
+     Each override must sit at the same specificity as the base rule it replaces and come later in the cascade:
+     :root (0,1,0), :root:not([data-theme="light"]) (0,2,0), :root[data-theme="dark"] (0,2,0).
+   - Orange #c2620a (darker than brand #f7931a) on light backgrounds: the brand orange fails 4.5:1 contrast with white
+     text; the dark theme uses a lighter orange with near-black accent text for the same reason.
+   - Two app-local classes keep the shared wu- prefix because walletui markup conventions use it; they are defined
+     here, not in walletui, because only this app uses them. */
+:root { --ed-accent: #c2620a; --ed-accent-hover: #a85307; --ed-accent-weak: #fdf0e3; --ed-accent-text: #fff; }
+/* OS dark (and not forced light): same selector as ui/base.css, so it wins by source order at equal (0,2,0). */
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ed-accent: #f7a440; --ed-accent-hover: #ffb85e; --ed-accent-weak: #3a2a17; --ed-accent-text: #1a1209; } }
+/* User forced dark: applies whatever the OS says. */
+:root[data-theme="dark"] { --ed-accent: #f7a440; --ed-accent-hover: #ffb85e; --ed-accent-weak: #3a2a17; --ed-accent-text: #1a1209; }
+/* Wallet / dashboard title next to the network pill: margin 0 so the flex row (ap-row) aligns by its own gap. */
+.wu-h { margin: 0; font-size: 20px; }
+/* One recipient group of the send form (address + amount), boxed so multi-recipient forms read as separate units. */
+.wu-recipient { padding: 10px; border: 1px solid var(--ed-border); border-radius: 10px; }

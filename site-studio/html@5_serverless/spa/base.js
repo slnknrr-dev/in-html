@@ -1,0 +1,3 @@
+import{normPath,encodePath}from"./route.js";function normBase(b){const p=normPath(b);return p?'/'+p+'/':'/';}
+function pathOf(route,base='/',style='clean'){const b=encodePath(normBase(base).slice(1,-1));const prefix=b?'/'+b+'/':'/';const r=encodePath(route);if(!r)return style==='html'?prefix+'index.html':prefix;if(style==='folders')return prefix+r+'/';if(style==='html')return prefix+r+'.html';return prefix+r;}
+export{pathOf,normBase};

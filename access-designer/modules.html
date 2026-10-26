@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- access-designer/modules.html: the modules page of Access Designer, one of five pages sharing common.js and app.css.
+     Empty shell: modules.js renders into <main>. Separate pages keep each module graph small and let browser history work
+     without a client router. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Access Designer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f766e'/%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.4' stroke-linejoin='round' d='M16 5l9 3.5v6.5c0 5.5-3.8 9.8-9 11.5-5.2-1.7-9-6-9-11.5V8.5z'/%3E%3Ccircle cx='16' cy='13.5' r='2.2' fill='%23fff'/%3E%3Cpath stroke='%23fff' stroke-width='2.4' d='M16 15v5'/%3E%3C/svg%3E">
+<!-- Cascade order: shared tokens/primitives, app shell, then acd- rules (later file wins equal-specificity ties). -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- Page registry read by common.js with getAttribute (relative href preserved); the build rewrites these hrefs. -->
+<a id="pg-roles" href="index.html" hidden></a>
+<a id="pg-policies" href="policies.html" hidden></a>
+<a id="pg-modules" href="modules.html" hidden></a>
+<a id="pg-sessions" href="sessions.html" hidden></a>
+<a id="pg-config" href="config.html" hidden></a>
+<main class="ap-main" id="main"></main>
+<!-- Page entry module (deferred, strict, relative imports resolved from the repository root in dev). -->
+<script type="module" src="./modules.js"></script>
+</body>
+</html>

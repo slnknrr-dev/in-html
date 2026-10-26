@@ -1,0 +1,336 @@
+// rental-studio/calc.js - the money and occupancy glue of Rental Studio, without the DOM: the project model
+// (normalised on load and import), quotes of a flat through booking/rates.js, conflicts and free gaps through
+// booking/stays.js, a booking evaluated through the calculation web (ledger/web.js) with the flat's owner bound to
+// the owner role, accruals posted to the journal once per booking (ref = booking id) and reversed as a whole,
+// building expenses split across flats into owner deductions, payouts, KPI stays and cross rates.
+//
+//   normalizeProject(raw) -> project          never throws; junk is dropped, missing parts get defaults
+//   nextId(list, prefix)                      'b42' after 'b41'
+//   unitPrice(unit) / unitQuote(project, unit, { from, to, guests, today, ignoreId })
+//   unitStays(project, unitId, { blocking })  bookings of a flat as stays (+ owner-closed rules as blocks)
+//   bookingConflicts(project, booking)        confirmed bookings / closed rules that overlap a booking
+//   allConflicts(project)                     [{ unitId, a, b, kind: 'double' | 'blocked' | 'request' }]
+//   bookingCounts(b)                          a booking that earns money (confirmed)
+//   evalBooking(project, booking) -> { web, ev, lines, ops, missing, error? }
+//   postedRefs(journal) -> Set of booking ids with live accruals
+//   postBookings(project, ids) -> { journal, posted, skipped }   unpostBooking(project, id, day)
+//   expenseOps(project, { total, article, by, day, note, units }) -> { rows, ops }
+//   payoutFor(project, partyId, day, note) -> { plan, ops }
+//   kpiStays(project, unitId?)               stays for ledger/kpi.js periodKpis
+//   ratesTable(project)                      { base, rates } of ledger/rates.js from "1 X = r base" input
+
+//
+// Why a separate DOM-free module: every rule that decides money or availability is testable in Node and shared by
+// four pages; the pages only render. The project is untrusted input (localStorage, imported files), so every
+// normalize* function whitelists fields, clamps numbers and drops what it cannot repair - the rest of the app may
+// then assume a well-formed project and skip defensive checks.
+import { dayAdd, isDay, nightsBetween } from '../booking/days.js';
+import { blockedStays, normalizeCalRule, quoteStay, FEE_PER } from '../booking/rates.js';
+import { blockingStays, stayConflicts, stayOk, staysOverlap, BOOKING_STATUSES } from '../booking/stays.js';
+import { DEAL_STATUSES, normalizeShow } from '../booking/deal.js';
+import { bindWeb, evalWeb, normalizeWeb, validateWeb, webJournal, webOps } from '../ledger/web.js';
+import { appendOps, dueByCurrency, normalizeOp, reverseOp, reversedIds } from '../ledger/journal.js';
+import { payoutOps, payoutPlan, splitExpense } from '../ledger/kpi.js';
+import { normalizeRates } from '../ledger/rates.js';
+import { cleanCurrency, MONEY_MAX } from '../ledger/minor.js';
+import { cleanArticle } from '../ledger/parties.js';
+
+// App party kinds; the ledger knows four roles (owner / agency / platform / contractor), so a cleaner and the tax
+// office are contractors in the ledger and keep their own kind here.
+export const PARTY_KINDS = ['owner', 'agency', 'cleaner', 'tax', 'platform', 'other'];
+export const LEDGER_ROLE = { owner: 'owner', agency: 'agency', cleaner: 'contractor', tax: 'contractor', platform: 'platform', other: 'contractor' };
+export const CHANNELS = ['direct', 'airbnb', 'booking', 'phone', 'ics', 'other'];
+export const CURRENCIES = ['GEL', 'USD', 'EUR'];
+export const LEAD_KINDS = ['rent', 'stay', 'sale', 'manage'];
+export const COLORS = ['#0f766e', '#7c3aed', '#c2410c', '#2563eb', '#be185d', '#4d7c0f', '#0369a1', '#a16207'];
+
+// Sanitisers: str strips control characters and clamps length (single-line fields); text keeps \n (U+000A) for notes;
+// int truncates and clamps; money = non-negative integer minor units up to MONEY_MAX (keeps sums inside 2^53).
+// IDs are short ASCII tokens: safe as DOM ids, map keys and journal refs.
+const str = (v, max = 200) => String(v ?? '').replace(/[\u0000-\u001f]+/g, ' ').trim().slice(0, max);
+const text = (v, max = 2000) => String(v ?? '').replace(/[\u0000-\u0009\u000b-\u001f]+/g, ' ').slice(0, max);
+const int = (v, min, max, dflt = 0) => { const n = Math.trunc(Number(v)); return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : dflt; };
+const money = (v) => int(v, 0, MONEY_MAX, 0);
+const ID_RE = /^[a-z][a-z0-9_-]{0,23}$/i;
+const idOf = (v) => (ID_RE.test(String(v ?? '')) ? String(v) : '');
+const arr = (v, max = 2000) => (Array.isArray(v) ? v.slice(0, max) : []);
+
+// Next free numeric suffix (max + 1, gaps not reused): reusing a deleted booking id would re-link old journal lines
+// (ref = booking id) to a new booking. prefix is an internal constant, so building a RegExp from it is safe.
+export function nextId(list, prefix) {
+  let m = 0;
+  for (const x of list || []) {
+    const k = new RegExp('^' + prefix + '(\\d+)$').exec(String(x && x.id));
+    if (k) m = Math.max(m, +k[1]);
+  }
+  return prefix + (m + 1);
+}
+
+// --- normalisation --------------------------------------------------------------------------------------------------
+
+// Weekday rates are sparse: a missing weekday means "use base". Discounts capped at 90 % and fees at 12 entries -
+// limits that keep a quote sane even with hostile input.
+export function normalizePrice(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  const weekdayRates = {};
+  if (o.weekdayRates && typeof o.weekdayRates === 'object') {
+    for (let d = 0; d < 7; d++) { const v = o.weekdayRates[d]; if (v !== undefined && v !== null && v !== '' && Number.isFinite(Number(v))) weekdayRates[d] = money(v); }
+  }
+  const rules = [];
+  arr(o.rules, 60).forEach((r, i) => { const n = normalizeCalRule({ ...r, id: r && r.id != null ? r.id : i + 1 }); if (n) rules.push(n); });
+  return {
+    base: money(o.base), per: ['day', 'week', 'month'].includes(o.per) ? o.per : 'day',
+    weekdayRates, rules,
+    minNights: int(o.minNights, 0, 365), maxNights: int(o.maxNights, 0, 3650),
+    discounts: arr(o.discounts, 12).map((d) => ({ nights: int(d && d.nights, 1, 365, 7), pct: Math.max(0, Math.min(90, Number(d && d.pct) || 0)) })).filter((d) => d.pct > 0),
+    cleaning: money(o.cleaning),
+    fees: arr(o.fees, 12).map((f) => ({ name: str(f && f.name, 60), amount: money(f && f.amount), per: FEE_PER.includes(f && f.per) ? f.per : 'stay', after: int(f && f.after, 0, 50) })).filter((f) => f.name || f.amount),
+    deposit: money(o.deposit),
+  };
+}
+
+// A booking without valid id, flat or both dates is dropped, not repaired: guessing dates would invent occupancy.
+// surplus (amount above the usual price, routed separately by the web) can never exceed the total.
+export function normalizeBooking(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  const id = idOf(o.id), unitId = idOf(o.unitId);
+  if (!id || !unitId || !isDay(o.from) || !isDay(o.to)) return null;
+  const b = {
+    id, unitId, guest: str(o.guest, 120), contact: str(o.contact, 120), guests: int(o.guests, 1, 50, 1),
+    from: o.from, to: o.to, channel: CHANNELS.includes(o.channel) ? o.channel : 'direct',
+    status: BOOKING_STATUSES.includes(o.status) ? o.status : 'confirmed',
+    total: money(o.total), surplus: money(o.surplus), note: text(o.note, 1000),
+  };
+  if (b.surplus > b.total) b.surplus = b.total;
+  if (o.uid) b.uid = str(o.uid, 200);
+  return b;
+}
+
+export function normalizeLead(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  const id = idOf(o.id);
+  if (!id) return null;
+  const shows = [];
+  arr(o.shows, 40).forEach((s, i) => { const n = normalizeShow({ ...s, id: s && s.id != null ? s.id : i + 1 }); if (n) shows.push(n); });
+  return {
+    id, name: str(o.name, 120) || id, contact: str(o.contact, 120), unitId: idOf(o.unitId),
+    kind: LEAD_KINDS.includes(o.kind) ? o.kind : 'rent', budget: money(o.budget),
+    status: DEAL_STATUSES.includes(o.status) ? o.status : 'new', note: text(o.note, 1000),
+    created: isDay(o.created) ? o.created : '', shows,
+  };
+}
+
+// Order matters: flats first, then bookings filtered to existing flats with valid stays and unique ids (seen.add
+// returns the Set, truthy, so it doubles as "mark and keep"). Rates are "1 X = r base", default 1 for a missing or
+// non-positive rate so conversions never divide by zero.
+export function normalizeProject(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {};
+  const currency = CURRENCIES.includes(cleanCurrency(o.currency)) ? cleanCurrency(o.currency) : 'GEL';
+  const rates = {};
+  for (const c of CURRENCIES) {
+    if (c === currency) continue;
+    const v = Number(o.rates && o.rates[c]);
+    rates[c] = Number.isFinite(v) && v > 0 ? v : 1;
+  }
+  const parties = arr(o.parties, 60).map((p) => ({
+    id: idOf(p && p.id), kind: PARTY_KINDS.includes(p && p.kind) ? p.kind : 'other', name: str(p && p.name, 120), note: str(p && p.note, 200),
+  })).filter((p) => p.id && p.name);
+  const units = arr(o.units, 60).map((u, i) => ({
+    id: idOf(u && u.id), name: str(u && u.name, 120), area: Math.max(0, Math.min(10000, Number(u && u.area) || 0)),
+    guestsMax: int(u && u.guestsMax, 1, 50, 2), ownerId: idOf(u && u.ownerId),
+    color: /^#[0-9a-f]{6}$/i.test(String(u && u.color)) ? u.color : COLORS[i % COLORS.length],
+    price: normalizePrice(u && u.price),
+  })).filter((u) => u.id && u.name);
+  const unitIds = new Set(units.map((u) => u.id));
+  const seen = new Set();
+  const bookings = arr(o.bookings, 5000).map(normalizeBooking).filter((b) => b && unitIds.has(b.unitId) && stayOk(b) && !seen.has(b.id) && seen.add(b.id));
+  const journal = arr(o.journal, 50000).map(normalizeOp).filter((x) => x && typeof x.id === 'number' && x.id > 0);
+  return {
+    v: 1, name: str(o.name, 120), currency, rates, ratesDay: isDay(o.ratesDay) ? o.ratesDay : '',
+    parties, units, bookings,
+    web: normalizeWeb(o.web || {}),
+    journal,
+    expenses: int(o.expenses, 0, 1e6),
+    leads: arr(o.leads, 1000).map(normalizeLead).filter(Boolean),
+  };
+}
+
+// --- prices and quotes ----------------------------------------------------------------------------------------------
+
+export const unitOf = (p, id) => p.units.find((u) => u.id === id) || null;
+export const partyOf = (p, id) => p.parties.find((x) => x.id === id) || null;
+export const owners = (p) => p.parties.filter((x) => x.kind === 'owner');
+
+// Bookings of a flat as stays; `blocking` keeps only the ones that hold dates (confirmed).
+// Cancelled and declined bookings never occupy anything. blocking=true narrows to the ones that hold dates.
+export function unitStays(p, unitId, { blocking = false, ignoreId = '' } = {}) {
+  const list = p.bookings.filter((b) => b.unitId === unitId && b.id !== ignoreId && b.status !== 'cancelled' && b.status !== 'declined');
+  return blocking ? blockingStays(list) : list;
+}
+export const unitBlocks = (unit) => blockedStays(unit.price.rules);
+
+// The quote treats confirmed bookings as busy (ignoreId excludes the booking being edited, so it does not collide
+// with itself) and owner-closed rules as blocks inside quoteStay.
+export function unitQuote(p, unit, { from, to, guests = 1, today = '', ignoreId = '' } = {}) {
+  const pr = unit.price;
+  return quoteStay({
+    from, to, currency: p.currency, base: pr.base, per: pr.per, rules: pr.rules, weekdayRates: pr.weekdayRates,
+    busy: unitStays(p, unit.id, { blocking: true, ignoreId }), today, minNights: pr.minNights, maxNights: pr.maxNights,
+    guests, guestsMax: unit.guestsMax, discounts: pr.discounts, cleaning: pr.cleaning, fees: pr.fees, deposit: pr.deposit,
+  });
+}
+
+// What stands in the way of a booking: other confirmed bookings of the flat and owner-closed dates.
+export function bookingConflicts(p, b) {
+  const unit = unitOf(p, b.unitId);
+  if (!unit || !stayOk(b) || b.status === 'cancelled' || b.status === 'declined') return { taken: [], blocked: [] };
+  return {
+    taken: stayConflicts(b, unitStays(p, b.unitId, { blocking: true, ignoreId: b.id })),
+    blocked: stayConflicts(b, unitBlocks(unit)),
+  };
+}
+
+// Every problem of the calendar: two confirmed bookings on one night (double), a confirmed booking on closed dates
+// (blocked), a request on dates already taken (request: it cannot be confirmed as is).
+// O(n^2) per flat over confirmed bookings: fine for the volumes of a small agency (tens per flat per season); an
+// interval sweep would be needed only for thousands.
+export function allConflicts(p) {
+  const out = [];
+  for (const u of p.units) {
+    const live = unitStays(p, u.id).sort((a, b) => (a.from < b.from ? -1 : 1));
+    const conf = live.filter((b) => b.status === 'confirmed');
+    for (let i = 0; i < conf.length; i++) {
+      for (let j = i + 1; j < conf.length; j++) if (staysOverlap(conf[i], conf[j])) out.push({ unitId: u.id, kind: 'double', a: conf[i], b: conf[j] });
+      for (const blk of stayConflicts(conf[i], unitBlocks(u))) out.push({ unitId: u.id, kind: 'blocked', a: conf[i], block: blk });
+    }
+    for (const r of live.filter((b) => b.status === 'pending')) {
+      const hit = conf.find((c) => staysOverlap(r, c));
+      if (hit) out.push({ unitId: u.id, kind: 'request', a: r, b: hit });
+    }
+  }
+  return out;
+}
+
+export const bookingCounts = (b) => b.status === 'confirmed';
+export const nightsOf = (b) => nightsBetween(b.from, b.to);
+
+// --- the calculation web --------------------------------------------------------------------------------------------
+
+// Parties of the project in the shape bindWeb expects; the flat's owner goes first so the owner role binds to them.
+// Owner first: bindWeb binds the web's owner role to the first owner it sees, which must be this flat's owner, not
+// any owner of the project.
+function bindParties(p, unit) {
+  const list = [];
+  if (unit && unit.ownerId) list.push({ id: unit.ownerId, role: 'owner' });
+  for (const x of p.parties) if (x.kind !== 'owner') list.push({ id: x.id, role: LEDGER_ROLE[x.kind] });
+  return list;
+}
+
+// App-level checks on top of validateWeb: party nodes must point at existing parties.
+export function webIssues(p) {
+  const issues = validateWeb(p.web);
+  for (const n of p.web.nodes) {
+    if (n.kind === 'party' && n.partyId != null && !partyOf(p, String(n.partyId))) issues.push({ level: 'error', code: 'party_missing', node: n.id });
+  }
+  return issues;
+}
+
+// The web receives the usual part (total - surplus) and the surplus as separate inputs, plus nights for per-night
+// rules (at least 1 so per-night formulas never divide by zero). missing = roles or parties the web could not bind;
+// such a booking must not be posted.
+export function evalBooking(p, b, { web } = {}) {
+  const unit = unitOf(p, b.unitId);
+  const bound = bindWeb(web || p.web, bindParties(p, unit));
+  const ev = evalWeb(bound.web, { booking: b.total - b.surplus, surplus: b.surplus }, { nights: Math.max(1, nightsOf(b)) });
+  if (!ev.ok) return { web: bound.web, ev, lines: [], ops: [], missing: bound.missing, error: ev.error };
+  const lines = webOps(bound.web, ev);
+  const { ops, unbound } = webJournal(bound.web, ev, { day: b.from, currency: p.currency, ref: b.id, note: b.guest });
+  return { web: bound.web, ev, lines, ops, missing: [...bound.missing, ...unbound] };
+}
+
+// Per party: the signed sum of the lines of one evaluation (what the party keeps from this booking in the journal).
+export function linesByParty(lines) {
+  const out = {};
+  for (const l of lines) if (l.partyId != null) out[l.partyId] = (out[l.partyId] || 0) + l.amount;
+  return out;
+}
+
+// Booking ids with live accruals in the journal (a reversed posting no longer counts).
+// Only accrual refs of the form b<number> count, and reversed operations are excluded: an edited booking that was
+// unposted (reversed) can be posted again.
+export function postedRefs(journal) {
+  const dead = reversedIds(journal);
+  const out = new Set();
+  for (const o of journal) if (o.ref && !dead.has(String(o.id)) && typeof o.ref === 'string' && /^b\d+$/.test(o.ref)) out.add(o.ref);
+  return out;
+}
+
+// Posts the accruals of bookings (by id) that are confirmed and not posted yet; one bad booking skips only itself.
+// Idempotent: already posted, unconfirmed, unbound or empty bookings are skipped with a reason; the journal is
+// append-only (appendOps returns a new journal), so a failure in the middle leaves earlier postings intact.
+export function postBookings(p, ids) {
+  let journal = p.journal;
+  const done = postedRefs(journal);
+  const posted = [], skipped = [];
+  for (const id of ids) {
+    const b = p.bookings.find((x) => x.id === id);
+    if (!b || !bookingCounts(b) || done.has(id)) { skipped.push({ id, reason: done.has(id) ? 'posted' : 'status' }); continue; }
+    const e = evalBooking(p, b);
+    if (e.error || e.missing.length) { skipped.push({ id, reason: e.error || 'unbound' }); continue; }
+    if (!e.ops.length) { skipped.push({ id, reason: 'empty' }); continue; }
+    const r = appendOps(journal, e.ops);
+    if (!r.ok) { skipped.push({ id, reason: r.error }); continue; }
+    journal = r.journal;
+    posted.push(id);
+  }
+  return { journal, posted, skipped };
+}
+
+// Reverses every live line of a booking's posting (to post it again after an edit).
+// Corrections are reversals, never deletions: the journal keeps an audit trail of what was paid and corrected.
+export function unpostBooking(p, id, day) {
+  let journal = p.journal;
+  const dead = reversedIds(journal);
+  let n = 0;
+  for (const o of p.journal) {
+    if (o.ref !== id || o.reverses || dead.has(String(o.id))) continue;
+    const r = reverseOp(journal, o.id, { day: day || o.day, note: 'reposting' });
+    if (r.ok) { journal = r.journal; n++; }
+  }
+  return { journal, reversed: n };
+}
+
+// A building expense split across flats (largest remainder: the parts sum to the total), withheld from each owner.
+// Largest-remainder split: shares are floored to minor units and the leftover cents go to the largest remainders,
+// so parts always sum exactly to the total. Flats without an owner produce no deduction (nobody to charge).
+export function expenseOps(p, { total, article = 'utilities', by = 'area', day, note = '', units }) {
+  const list = (units && units.length ? p.units.filter((u) => units.includes(u.id)) : p.units).map((u) => ({ id: u.id, area: u.area, share: u.area }));
+  const rows = splitExpense(Math.max(0, Math.trunc(total) || 0), list, { by });
+  const ref = 'x' + (p.expenses + 1);
+  const ops = rows.filter((r) => r.amount > 0).map((r) => {
+    const u = unitOf(p, r.id);
+    return { kind: 'deduction', day, partyId: u.ownerId, article: cleanArticle(article) || 'other', amount: r.amount, currency: p.currency, ref, note: (note ? note + ' · ' : '') + u.name };
+  }).filter((o) => o.partyId);
+  return { rows, ops, ref };
+}
+
+export function payoutFor(p, partyId, day, note = '') {
+  const plan = payoutPlan(dueByCurrency(p.journal, partyId), p.currency);
+  return { plan, ops: payoutOps(plan, { partyId, day, note }) };
+}
+
+export function kpiStays(p, unitId = '') {
+  return p.bookings.filter((b) => !unitId || b.unitId === unitId).map((b) => ({
+    id: b.id, from: b.from, to: b.to, status: b.status === 'confirmed' ? 'confirmed' : b.status, currency: p.currency, total: b.total, surplus: b.surplus,
+  }));
+}
+
+// "1 USD = 2.70 GEL" as typed -> the ledger table (units of X per 1 base).
+// Inversion 1 / v converts the human "1 USD = 2.70 GEL" into the ledger's "units of X per 1 base".
+export function ratesTable(p) {
+  const rates = {};
+  for (const [c, v] of Object.entries(p.rates)) if (v > 0) rates[c] = 1 / v;
+  return normalizeRates({ base: p.currency, rates, day: p.ratesDay });
+}
+
+export const addDays = dayAdd;

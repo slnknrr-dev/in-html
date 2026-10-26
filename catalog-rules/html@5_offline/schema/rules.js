@@ -1,0 +1,26 @@
+import{cleanKey}from"./text.js";import{scaleWord}from"../units/scales.js";const COND_OPS=['is','not','min','max','has','none'];const COND_BARE=['has','none'];function normalizeCond(raw){if(!raw||typeof raw!=='object'||Array.isArray(raw))return null;const v=cleanKey(raw.v??raw.key);if(!v)return null;const op=COND_OPS.includes(raw.op)?raw.op:'is';const list=Array.isArray(raw.a)?raw.a:raw.a==null?[]:[raw.a];const a=[];for(const x of list.slice(0,30)){const s=String(x??'').trim().slice(0,80);if(!a.includes(s))a.push(s);}
+if(COND_BARE.includes(op))return{v,op,a:[]};if(op==='min'||op==='max'){const n=a.find((s)=>s!==''&&Number.isFinite(+s.replace(',','.')));return n===undefined?null:{v,op,a:[String(+n.replace(',','.'))]};}
+return a.length?{v,op,a}:null;}
+function condValues(x){if(Array.isArray(x))return x.map((v)=>String(v??'').trim()).filter((v)=>v!=='');if(x==null||x===false)return[];const s=String(x).trim();return s===''?[]:[s];}
+const isNum=(s)=>s!==''&&Number.isFinite(+s);const same=(x,y)=>x===y||(isNum(x)&&isNum(y)&&+x===+y);function condMatches(c,values){const vals=condValues(values?values[c.v]:undefined);switch(c.op){case'has':return vals.length>0;case'none':return vals.length===0;case'is':case'not':{const hit=vals.length===0?c.a.includes(''):vals.some((v)=>c.a.some((a)=>a!==''&&same(v,a)));return c.op==='is'?hit:!hit;}
+case'min':case'max':{const lim=+c.a[0];if(!Number.isFinite(lim))return false;return vals.some((v)=>isNum(v)&&(c.op==='min'?+v>=lim:+v<=lim));}}
+return false;}
+const condsMatch=(conds,values)=>(conds||[]).every((c)=>condMatches(c,values));const VAR_RE=/\{([a-z][a-z0-9_]{0,39})(?::([a-z][a-z0-9_]{0,39}))?\}/gi;function templateVars(tpl){const out=[];for(const m of String(tpl??'').matchAll(VAR_RE)){const k=m[1].toLowerCase();if(!out.includes(k))out.push(k);}
+return out;}
+function renderTemplate(tpl,vars,{scales=[],raw=null,lang='en',fallbacks=['en'],max=200}={}){const src=String(tpl??'').trim();if(!src)return'';const val=(k)=>{const v=vars[k.toLowerCase()];if(v==null||v===false)return'';if(Array.isArray(v))return v.map((x)=>String(x??'').trim()).filter(Boolean).join('–');return String(v).trim();};const viaScale=(k,s)=>{const sc=scales.find((x)=>x.key===s.toLowerCase());if(!sc)return'';const key=k.toLowerCase();const r=raw&&raw[key]!==undefined?raw[key]:vars[key];return scaleWord(sc,Array.isArray(r)?r[0]:r,lang);};const parts=[];for(const rawSeg of src.split(/\s*[·|,—]\s*/)){const seg=rawSeg.trim();if(!seg)continue;let missing=false;const done=seg.replace(VAR_RE,(_m,k,s)=>{const v=s?viaScale(k,s):val(k);if(!v)missing=true;return v;});if(missing)continue;const clean=done.replace(/\s{2,}/g,' ').trim();if(clean)parts.push(clean);}
+return parts.join(' · ').slice(0,max);}
+function cleanTpl(v){const out={};if(typeof v==='string'){const s=v.trim().slice(0,200);if(s)out.en=s;return out;}
+if(!v||typeof v!=='object'||Array.isArray(v))return out;for(const[k,x]of Object.entries(v)){if(!/^[a-z]{2}$/.test(k))continue;const s=String(x??'').trim().slice(0,200);if(s)out[k]=s;}
+return out;}
+function normalizeRule(raw){if(!raw||typeof raw!=='object'||Array.isArray(raw))return null;const tpl=cleanTpl(raw.tpl);if(!Object.keys(tpl).length)return null;const when=[];for(const c of(Array.isArray(raw.when)?raw.when:[]).slice(0,12)){const x=normalizeCond(c);if(x)when.push(x);}
+return{when,tpl,off:!!raw.off,note:String(raw.note??'').trim().slice(0,200)};}
+const ruleMatches=(r,values)=>!r.off&&condsMatch(r.when,values);function renderRule(r,values,vars,opts){const out={};for(const[lang,tpl]of Object.entries(r.tpl)){const t=renderTemplate(tpl,vars(lang),{scales:opts.scales,raw:values,lang,fallbacks:opts.fallbacks});if(t)out[lang]=t;}
+return out;}
+const wins=(r,out,src)=>(r.tpl[src]!==undefined?!!out[src]:Object.keys(out).length>0);function cachedVars(varsFor){const cache=new Map();return(lang)=>{if(!cache.has(lang))cache.set(lang,varsFor(lang)||{});return cache.get(lang);};}
+function buildRuleTitle(rules,values,varsFor,opts={}){const src=opts.srcLang||'en';const vars=cachedVars(varsFor);for(let i=0;i<rules.length;i++){const r=rules[i];if(!ruleMatches(r,values))continue;const out=renderRule(r,values,vars,opts);if(wins(r,out,src))return{i18n:out,rule:i};}
+if(opts.fallback){const t=renderTemplate(opts.fallback,vars(src),{scales:opts.scales,raw:values,lang:src,fallbacks:opts.fallbacks});if(t)return{i18n:{[src]:t},rule:-1};}
+return{i18n:{},rule:-2};}
+function traceRules(rules,values,varsFor,opts={}){const src=opts.srcLang||'en';const vars=cachedVars(varsFor);let decided=false;return rules.map((r,index)=>{const conds=r.when.map((c)=>({...c,ok:condMatches(c,values)}));const matched=!r.off&&conds.every((c)=>c.ok);const texts=matched?renderRule(r,values,vars,opts):{};const won=!decided&&matched&&wins(r,texts,src);if(won)decided=true;return{index,off:r.off,note:r.note,conds,matched,texts,won};});}
+function rulesVars(rules){const out=[];const add=(k)=>{if(k&&!out.includes(k))out.push(k);};for(const r of rules){for(const c of r.when)add(c.v);for(const t of Object.values(r.tpl))for(const k of templateVars(t))add(k);}
+return out;}
+export{normalizeCond,condsMatch,rulesVars,templateVars,normalizeRule,buildRuleTitle,renderTemplate,traceRules,COND_OPS,COND_BARE};

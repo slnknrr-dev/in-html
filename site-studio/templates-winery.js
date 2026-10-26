@@ -1,0 +1,1681 @@
+// templates-winery.js - template "winery": wine shop, tastings, kvevri process, age gate (ka, en, ru).
+//
+// Contract of a template module: each exported template object carries an id, localized names and build(V, ...) ->
+// a fresh document; templates.js adds catalogue metadata (group, mode, modules) where the module does not declare it,
+// and studio/gallery.js shows the catalogue.
+// The viewer API arrives as the argument V instead of an import, so templates are pure document builders that tests
+// (test.js renders every template) and the gallery can run without the editor. Generated artwork and sample data are
+// derived from seeds (tplHash / tplRand where used), so a template builds the same document on every run.
+// Data file: names, texts, figures and art specs dominate; comments mark sections, not individual values.
+import { tplHash, tplHexToHsl, tplHsl, tplRand } from '../sample/bytes.js';
+import { tplKit } from './templates-kit.js';
+// ===== Template: winery — "Tsitelvazi", a fictional family kvevri marani in Kakheti (ka / en / ru) =====
+// Theme preset 'kvevri' (viewer part theme-kvevri.js). All people, places, competitions, publications, phone numbers
+// and addresses are FICTIONAL. Artwork is procedural, deterministic SVG (seeded by tplHash/tplRand); no text in art.
+
+// ---------- SVG micro-helpers ----------
+
+const TPL_WN_LEAF = 'M0 0C-10 -8 -28 0 -38 -10C-48 -18 -44 -30 -36 -32C-46 -38 -48 -52 -36 -56C-28 -58 -20 -52 -18 -48' +
+  'C-20 -60 -14 -72 0 -78C14 -72 20 -60 18 -48C20 -52 28 -58 36 -56C48 -52 46 -38 36 -32C44 -30 48 -18 38 -10C28 0 10 -8 0 0Z';
+const TPL_WN_VEIN = 'M0 0L0 -70M0 -6L-33 -50M0 -6L33 -50M0 -3L-34 -15M0 -3L34 -15';
+
+/** Compact number for SVG coordinates. */
+function tplWnN(v) {
+  return String(Math.round(v * 10) / 10);
+}
+
+/** `<stop>` list from [[offset, color, opacity?], …]. */
+function tplWnStops(stops) {
+  return stops.map((s) => '<stop offset="' + s[0] + '" stop-color="' + s[1] + '"' +
+    (s[2] != null && s[2] !== 1 ? ' stop-opacity="' + s[2] + '"' : '') + '/>').join('');
+}
+
+/** Linear gradient; o = {x1, y1, x2, y2, user} (default: top → bottom, bounding box units). */
+function tplWnLin(id, stops, o = {}) {
+  const u = o.user ? ' gradientUnits="userSpaceOnUse"' : '';
+  return '<linearGradient id="' + id + '" x1="' + (o.x1 ?? 0) + '" y1="' + (o.y1 ?? 0) + '" x2="' + (o.x2 ?? 0) + '" y2="' +
+    (o.y2 ?? 1) + '"' + u + '>' + tplWnStops(stops) + '</linearGradient>';
+}
+
+/** Radial gradient; o = {cx, cy, r, fx, fy, user}. */
+function tplWnRad(id, stops, o = {}) {
+  const u = o.user ? ' gradientUnits="userSpaceOnUse"' : '';
+  const f = o.fx != null ? ' fx="' + o.fx + '" fy="' + o.fy + '"' : '';
+  return '<radialGradient id="' + id + '" cx="' + (o.cx ?? 0.5) + '" cy="' + (o.cy ?? 0.5) + '" r="' + (o.r ?? 0.5) + '"' + f + u + '>' +
+    tplWnStops(stops) + '</radialGradient>';
+}
+
+/** SVG document. */
+function tplWnSvg(w, h, defs, body) {
+  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + w + ' ' + h + '" width="' + w + '" height="' + h + '">' +
+    (defs ? '<defs>' + defs + '</defs>' : '') + body + '</svg>';
+}
+
+/** Smooth open path through points (Catmull-Rom → cubic Bézier). */
+function tplWnCurve(pts, move = true) {
+  const N = tplWnN;
+  let d = move ? 'M' + N(pts[0][0]) + ' ' + N(pts[0][1]) : 'L' + N(pts[0][0]) + ' ' + N(pts[0][1]);
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+    d += 'C' + N(p1[0] + (p2[0] - p0[0]) / 6) + ' ' + N(p1[1] + (p2[1] - p0[1]) / 6) + ' ' +
+      N(p2[0] - (p3[0] - p1[0]) / 6) + ' ' + N(p2[1] - (p3[1] - p1[1]) / 6) + ' ' + N(p2[0]) + ' ' + N(p2[1]);
+  }
+  return d;
+}
+
+/** Smooth closed blob around (cx, cy): n points with radius r ± jitter. */
+function tplWnBlob(rnd, cx, cy, r, jit, n = 14) {
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2, rr = r * (1 - jit + rnd() * jit * 2);
+    pts.push([cx + Math.cos(a) * rr, cy + Math.sin(a) * rr]);
+  }
+  const ring = [pts[n - 1], ...pts, pts[0], pts[1]];
+  const N = tplWnN;
+  let d = 'M' + N(pts[0][0]) + ' ' + N(pts[0][1]);
+  for (let i = 1; i <= n; i++) {
+    const p0 = ring[i - 1], p1 = ring[i], p2 = ring[i + 1], p3 = ring[i + 2];
+    d += 'C' + N(p1[0] + (p2[0] - p0[0]) / 6) + ' ' + N(p1[1] + (p2[1] - p0[1]) / 6) + ' ' +
+      N(p2[0] - (p3[0] - p1[0]) / 6) + ' ' + N(p2[1] - (p3[1] - p1[1]) / 6) + ' ' + N(p2[0]) + ' ' + N(p2[1]);
+  }
+  return d + 'Z';
+}
+
+/** Ridge points across the width (smooth rolling line around `base`). */
+function tplWnRidge(rnd, w, base, amp, k = 9) {
+  const ph1 = rnd() * 6.28, ph2 = rnd() * 6.28, f1 = 0.7 + rnd() * 0.9, f2 = 1.8 + rnd() * 2.2;
+  const pts = [];
+  for (let i = 0; i <= k; i++) {
+    const t = i / k;
+    pts.push([-40 + (w + 80) * t, base - amp * (0.62 * Math.sin(t * Math.PI * f1 + ph1) + 0.38 * Math.sin(t * Math.PI * f2 + ph2))]);
+  }
+  return pts;
+}
+
+/** y of a ridge polyline at x (linear interpolation). */
+function tplWnAt(pts, x) {
+  for (let i = 0; i < pts.length - 1; i++) {
+    if (x >= pts[i][0] && x <= pts[i + 1][0]) {
+      const t = (x - pts[i][0]) / (pts[i + 1][0] - pts[i][0]);
+      return pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t;
+    }
+  }
+  return pts[pts.length - 1][1];
+}
+
+/** Vine leaf (uses #lf / #lv from tplWnLeafDefs) at (x, y), scale s, rotation r. */
+function tplWnLeaf(x, y, s, r, fill, vein, op = 1) {
+  const t = 'translate(' + tplWnN(x) + ' ' + tplWnN(y) + ') rotate(' + Math.round(r) + ') scale(' + (Math.round(s * 100) / 100) + ')';
+  return '<g transform="' + t + '"' + (op !== 1 ? ' opacity="' + op + '"' : '') + '><use href="#lf" fill="' + fill + '"/>' +
+    (vein ? '<use href="#lv" fill="none" stroke="' + vein + '" stroke-width="' + tplWnN(1.6 / s) + '" stroke-linecap="round"/>' : '') +
+    '<path d="M0 0L0 16" stroke="' + (vein || fill) + '" stroke-width="' + tplWnN(3 / s) + '" stroke-linecap="round"/></g>';
+}
+
+function tplWnLeafDefs() {
+  return '<path id="lf" d="' + TPL_WN_LEAF + '"/><path id="lv" d="' + TPL_WN_VEIN + '"/>';
+}
+
+/** Grape cluster hanging from (cx, top); berry radius r; berries use gradients #gb / #gd (bounding-box radial). */
+function tplWnCluster(rnd, cx, top, r, o = {}) {
+  const rows = o.rows || [4, 5, 5, 4, 4, 3, 2, 1];
+  const N = tplWnN;
+  const hi = o.hi == null ? 0.45 : o.hi;
+  let s = '<path d="M' + N(cx) + ' ' + N(top + r * 0.6) + 'q' + N(r * 0.3) + ' ' + N(-r * 1.4) + ' ' + N(r * 1.5) + ' ' + N(-r * 2.4) +
+    '" fill="none" stroke="' + (o.stem || '#5b4a2a') + '" stroke-width="' + N(r * 0.32) + '" stroke-linecap="round"/>';
+  if (o.tendril !== false) {
+    s += '<path d="M' + N(cx + r * 1.1) + ' ' + N(top - r * 1.2) + 'c' + N(r * 1.2) + ' ' + N(-r * 0.4) + ' ' + N(r * 1.9) + ' ' + N(r * 0.5) +
+      ' ' + N(r * 1.3) + ' ' + N(r * 1.1) + 'c' + N(-r * 0.5) + ' ' + N(r * 0.4) + ' ' + N(-r * 0.9) + ' ' + N(-r * 0.2) + ' ' + N(-r * 0.4) + ' ' + N(-r * 0.5) +
+      '" fill="none" stroke="' + (o.stem || '#5b4a2a') + '" stroke-width="' + N(r * 0.12) + '" stroke-linecap="round"/>';
+  }
+  rows.forEach((n, ri) => {
+    const y = top + r + ri * r * 1.52;
+    const x0 = cx - ((n - 1) * r * 1.72) / 2;
+    for (let i = 0; i < n; i++) {
+      const bx = x0 + i * r * 1.72 + (rnd() - 0.5) * r * 0.35, by = y + (rnd() - 0.5) * r * 0.3, br = r * (0.9 + rnd() * 0.18);
+      s += '<circle cx="' + N(bx) + '" cy="' + N(by) + '" r="' + N(br) + '" fill="url(#' + (rnd() < 0.3 ? 'gd' : 'gb') + ')"/>';
+      if (hi) s += '<circle cx="' + N(bx - br * 0.36) + '" cy="' + N(by - br * 0.38) + '" r="' + N(br * 0.2) + '" fill="#fff" opacity="' + hi + '"/>';
+    }
+  });
+  return s;
+}
+
+/** Berry gradients for clusters: base colours c1 (light) → c2 (dark). */
+function tplWnBerryDefs(c1, c2, c3) {
+  return tplWnRad('gb', [[0, c1], [0.7, c2], [1, c3]], { cx: 0.38, cy: 0.35, r: 0.7 }) +
+    tplWnRad('gd', [[0, c2], [1, c3]], { cx: 0.4, cy: 0.38, r: 0.7 });
+}
+
+/** Kvevri silhouette (egg-shaped clay jar, pointed base): mouth centre (cx, top), width w, height h. */
+function tplWnKvevriPath(cx, top, w, h) {
+  const N = tplWnN;
+  const p = (x, y) => N(cx + x * w) + ' ' + N(top + y * h);
+  return 'M' + p(-0.17, 0) + 'L' + p(0.17, 0) + 'C' + p(0.2, 0.05) + ' ' + p(0.5, 0.1) + ' ' + p(0.5, 0.33) +
+    'C' + p(0.5, 0.6) + ' ' + p(0.16, 0.9) + ' ' + p(0.05, 1) + 'L' + p(-0.05, 1) +
+    'C' + p(-0.16, 0.9) + ' ' + p(-0.5, 0.6) + ' ' + p(-0.5, 0.33) + 'C' + p(-0.5, 0.1) + ' ' + p(-0.2, 0.05) + ' ' + p(-0.17, 0) + 'Z';
+}
+
+/** Soil strata between y0 and y1: wavy bands with pebbles; returns markup. layers = [[color, share], …]. */
+function tplWnStrata(rnd, w, y0, y1, layers, pebbles = 40) {
+  let s = '';
+  let y = y0;
+  const total = layers.reduce((a, l) => a + l[1], 0);
+  const cuts = [];
+  layers.forEach(([color, share], i) => {
+    const top = i === 0 ? null : tplWnRidge(rnd, w, y, (y1 - y0) * 0.018, 8);
+    if (top) s += '<path d="' + tplWnCurve(top) + 'L' + (w + 40) + ' ' + y1 + 'L-40 ' + y1 + 'Z" fill="' + color + '"/>';
+    else s += '<rect x="0" y="' + tplWnN(y0) + '" width="' + w + '" height="' + tplWnN(y1 - y0) + '" fill="' + color + '"/>';
+    cuts.push(y);
+    y += ((y1 - y0) * share) / total;
+  });
+  for (let i = 0; i < pebbles; i++) {
+    const px = rnd() * w, py = y0 + 14 + rnd() * (y1 - y0 - 20), pr = 2 + rnd() * 7;
+    s += '<ellipse cx="' + tplWnN(px) + '" cy="' + tplWnN(py) + '" rx="' + tplWnN(pr * 1.4) + '" ry="' + tplWnN(pr) + '" fill="' +
+      (rnd() < 0.5 ? '#000' : '#fff') + '" opacity="' + (0.06 + rnd() * 0.12).toFixed(2) + '"/>';
+  }
+  return s;
+}
+
+// ---------- Landscapes (hero, CTA, gallery) ----------
+
+const TPL_WN_LAND = {
+  dusk: {
+    sky: [[0, '#1d1430'], [0.3, '#47233f'], [0.56, '#9c4256'], [0.8, '#e5845a'], [1, '#f6c88a']],
+    sun: '#ffe1a6', glow: '#ffb46e', mtn: '#5d3756', mtnD: '#4a2a45', snow: '#e6b9b5', near: '#3f2440',
+    hills: ['#75405a', '#5a2e48', '#40203a', '#2b1529', '#190b18'], rows: ['#5e3049', '#45213a', '#2f1529', '#1d0c1a', '#100610'],
+    leaf: '#120710', cloud: '#f2a07e', haze: '#d9806a', win: '#ffcf7a', tree: '#2a1426', bird: '#2a1426',
+  },
+  night: {
+    sky: [[0, '#0b0a1c'], [0.45, '#1b1634'], [0.8, '#3a2244'], [1, '#64324a']],
+    sun: '#f4ead2', glow: '#bfb4d6', mtn: '#2e2442', mtnD: '#241c36', snow: '#9b92b8', near: '#1f1830',
+    hills: ['#2c2140', '#231a35', '#1a1229', '#130c1f', '#0b0713'], rows: ['#21183a', '#1a122c', '#120c20', '#0c0716', '#06040c'],
+    leaf: '#07040b', cloud: '#5a4a72', haze: '#4a3058', win: '#ffd27e', tree: '#120c1d', bird: '#120c1d',
+  },
+  dawn: {
+    sky: [[0, '#b9c7cf'], [0.45, '#e6dccb'], [0.8, '#f5d3a2'], [1, '#fae6c0']],
+    sun: '#fff4d8', glow: '#ffe2a8', mtn: '#9da2b0', mtnD: '#878c9c', snow: '#f6f2ea', near: '#8b8f86',
+    hills: ['#a7ab78', '#8a9458', '#6c7a3e', '#55632c', '#38441b'], rows: ['#8b9460', '#6f7c45', '#55622f', '#3f4c1f', '#283312'],
+    leaf: '#3d4a1e', cloud: '#fff6e6', haze: '#f3e6cc', win: '#4a3a2a', tree: '#4c5a2a', bird: '#5a5048',
+  },
+};
+
+/**
+ * Vineyard landscape → SVG markup. o = {w, h, seed, mode:'dusk'|'night'|'dawn', horizon (0..1), frame (foreground
+ * leaves & cluster), house, rowsFrom (first hill with vine rows)}.
+ */
+function tplWnLandscape(o = {}) {
+  const w = o.w || 1600, h = o.h || 900, mode = o.mode || 'dusk';
+  const P = TPL_WN_LAND[mode] || TPL_WN_LAND.dusk;
+  const rnd = tplRand(tplHash('wn-land:' + (o.seed || 1) + ':' + mode + ':' + w + 'x' + h));
+  const N = tplWnN;
+  const hz = h * (o.horizon || 0.56);
+  const sc = Math.max(0.55, Math.min(w / 1600, h / 900) * 1.05);
+  const sunX = w * (o.sunX || 0.66), sunY = hz - h * (mode === 'night' ? 0.36 : mode === 'dawn' ? 0.03 : 0.015);
+  let defs = tplWnLin('sky', P.sky) +
+    tplWnRad('glow', [[0, P.glow, 0.75], [0.35, P.glow, 0.28], [1, P.glow, 0]], { cx: N(sunX), cy: N(sunY), r: N(w * 0.42), user: true }) +
+    tplWnLin('snow', [[0, P.snow], [0.2, P.snow], [0.34, P.mtn], [1, P.mtnD]], { y1: N(hz - h * 0.22), y2: N(hz), user: true }) +
+    tplWnLin('haze', [[0, P.haze, 0], [0.55, P.haze, 0.55], [1, P.haze, 0]]) +
+    tplWnRad('vig', [[0, '#000', 0], [0.7, '#000', 0], [1, '#000', mode === 'dawn' ? 0.16 : 0.42]], { r: 0.75 }) +
+    tplWnLeafDefs() +
+    tplWnBerryDefs(mode === 'dawn' ? '#8a5f86' : '#4b2a46', mode === 'dawn' ? '#4a2850' : '#24101f', mode === 'dawn' ? '#2a1430' : '#12060f');
+  let b = '<rect width="' + w + '" height="' + h + '" fill="url(#sky)"/>';
+  // Stars and moon (night) / sun (dusk, dawn).
+  if (mode === 'night') {
+    for (let i = 0; i < 70; i++) {
+      b += '<circle cx="' + N(rnd() * w) + '" cy="' + N(rnd() * hz * 0.85) + '" r="' + N(0.6 + rnd() * 1.6 * sc) + '" fill="#fff" opacity="' + (0.25 + rnd() * 0.6).toFixed(2) + '"/>';
+    }
+    defs += '<mask id="moon"><rect width="' + w + '" height="' + h + '" fill="#fff"/><circle cx="' + N(sunX + 22 * sc) + '" cy="' + N(sunY - 10 * sc) + '" r="' + N(40 * sc) + '" fill="#000"/></mask>';
+    b += '<circle cx="' + N(sunX) + '" cy="' + N(sunY) + '" r="' + N(w * 0.3) + '" fill="url(#glow)" opacity=".5"/>' +
+      '<circle cx="' + N(sunX) + '" cy="' + N(sunY) + '" r="' + N(44 * sc) + '" fill="' + P.sun + '" mask="url(#moon)"/>';
+  } else {
+    b += '<rect width="' + w + '" height="' + h + '" fill="url(#glow)"/>' +
+      '<circle cx="' + N(sunX) + '" cy="' + N(sunY) + '" r="' + N(58 * sc) + '" fill="' + P.sun + '" opacity="' + (mode === 'dawn' ? 0.8 : 0.95) + '"/>';
+  }
+  // Long cloud streaks.
+  for (let i = 0; i < 6; i++) {
+    const cw = w * (0.12 + rnd() * 0.25), ch = (4 + rnd() * 9) * sc, cx = rnd() * w - cw / 2, cy = hz * (0.18 + rnd() * 0.62);
+    b += '<rect x="' + N(cx) + '" y="' + N(cy) + '" width="' + N(cw) + '" height="' + N(ch) + '" rx="' + N(ch / 2) + '" fill="' + P.cloud + '" opacity="' + (0.18 + rnd() * 0.35).toFixed(2) + '"/>';
+  }
+  // Caucasus range: snowy far peaks, darker near range.
+  const peaks = [];
+  const nP = Math.max(10, Math.round(w / 70));
+  for (let i = 0; i <= nP; i++) {
+    const x = -20 + ((w + 40) * i) / nP + (rnd() - 0.5) * 30 * sc;
+    peaks.push([x, hz - h * (i % 2 ? 0.05 + rnd() * 0.06 : 0.11 + rnd() * 0.1)]);
+  }
+  b += '<path d="M' + peaks.map((p) => N(p[0]) + ' ' + N(p[1])).join('L') + 'L' + (w + 20) + ' ' + N(hz + 30) + 'L-20 ' + N(hz + 30) + 'Z" fill="url(#snow)" opacity=".9"/>';
+  const near = tplWnRidge(rnd, w, hz - h * 0.035, h * 0.03, 12);
+  b += '<path d="' + tplWnCurve(near) + 'L' + (w + 40) + ' ' + N(hz + 40) + 'L-40 ' + N(hz + 40) + 'Z" fill="' + P.near + '" opacity=".85"/>';
+  b += '<rect y="' + N(hz - h * 0.09) + '" width="' + w + '" height="' + N(h * 0.15) + '" fill="url(#haze)"/>';
+  // Rolling hills with vine rows.
+  const bases = [0.015, 0.075, 0.16, 0.28, 0.43], amps = [0.025, 0.04, 0.055, 0.065, 0.075];
+  const ridges = [];
+  const rowsFrom = o.rowsFrom ?? 1;
+  for (let i = 0; i < 5; i++) {
+    const pts = tplWnRidge(rnd, w, hz + h * bases[i], h * amps[i], 9);
+    ridges.push(pts);
+    b += '<path d="' + tplWnCurve(pts) + 'L' + (w + 40) + ' ' + h + 'L-40 ' + h + 'Z" fill="' + P.hills[i] + '"/>';
+    if (i >= rowsFrom && i <= 3) {
+      let dots = '', wires = '';
+      const count = 5 + i * 3;
+      for (let r = 1; r <= count; r++) {
+        const off = h * 0.006 * (i + 1) * Math.pow(r, 1.18);
+        const row = pts.map(([x, y]) => [x, y + off + Math.sin(x / w * 6 + r) * 2]);
+        const c = tplWnCurve(row);
+        dots += c;
+        wires += c;
+      }
+      const lw = (1.3 + i * 1.5) * sc;
+      b += '<path d="' + wires + '" fill="none" stroke="' + P.rows[i] + '" stroke-width="' + N(lw * 0.3) + '" opacity=".55"/>' +
+        '<path d="' + dots + '" fill="none" stroke="' + P.rows[i] + '" stroke-width="' + N(lw) + '" stroke-linecap="round" stroke-dasharray="0.1 ' + N(lw * 1.9) + '"/>';
+    }
+    // Cypresses & round trees on the far crests; the family house on the second hill.
+    if (i === 1 || i === 2) {
+      const n = i === 1 ? 5 : 3;
+      for (let t = 0; t < n; t++) {
+        const x = w * (0.05 + rnd() * 0.9), y = tplWnAt(pts, x) + 3;
+        const th = (i === 1 ? 26 : 40) * sc * (0.75 + rnd() * 0.5);
+        if (rnd() < 0.6) b += '<ellipse cx="' + N(x) + '" cy="' + N(y - th) + '" rx="' + N(th * 0.2) + '" ry="' + N(th) + '" fill="' + P.tree + '"/>';
+        else b += '<circle cx="' + N(x) + '" cy="' + N(y - th * 0.45) + '" r="' + N(th * 0.5) + '" fill="' + P.tree + '"/><circle cx="' + N(x + th * 0.45) + '" cy="' + N(y - th * 0.3) + '" r="' + N(th * 0.38) + '" fill="' + P.tree + '"/>';
+      }
+    }
+    if (i === 1 && o.house !== false) {
+      const x = w * (o.houseX || 0.3), y = tplWnAt(pts, x) + 4 * sc, hw = 54 * sc, hh = 26 * sc;
+      b += '<g fill="' + P.tree + '"><rect x="' + N(x - hw / 2) + '" y="' + N(y - hh) + '" width="' + N(hw) + '" height="' + N(hh) + '"/>' +
+        '<path d="M' + N(x - hw * 0.6) + ' ' + N(y - hh) + 'L' + N(x) + ' ' + N(y - hh * 1.75) + 'L' + N(x + hw * 0.6) + ' ' + N(y - hh) + 'Z"/>' +
+        '<rect x="' + N(x + hw * 0.18) + '" y="' + N(y - hh * 1.9) + '" width="' + N(hw * 0.1) + '" height="' + N(hh * 0.5) + '"/></g>' +
+        '<path d="M' + N(x - hw / 2) + ' ' + N(y - hh * 0.55) + 'h' + N(hw) + '" stroke="' + P.win + '" stroke-width="' + N(1.2 * sc) + '" opacity=".5"/>' +
+        '<rect x="' + N(x - hw * 0.32) + '" y="' + N(y - hh * 0.95) + '" width="' + N(hw * 0.14) + '" height="' + N(hh * 0.32) + '" fill="' + P.win + '"/>' +
+        '<rect x="' + N(x + hw * 0.08) + '" y="' + N(y - hh * 0.95) + '" width="' + N(hw * 0.14) + '" height="' + N(hh * 0.32) + '" fill="' + P.win + '" opacity=".8"/>';
+    }
+  }
+  // Birds.
+  if (mode !== 'night') {
+    for (let i = 0; i < 5; i++) {
+      const x = w * (0.12 + rnd() * 0.4), y = hz * (0.3 + rnd() * 0.35), s2 = (5 + rnd() * 6) * sc;
+      b += '<path d="M' + N(x) + ' ' + N(y) + 'q' + N(s2) + ' ' + N(-s2 * 0.8) + ' ' + N(s2 * 2) + ' 0q' + N(s2) + ' ' + N(-s2 * 0.8) + ' ' + N(s2 * 2) + ' 0" fill="none" stroke="' + P.bird + '" stroke-width="' + N(1.6 * sc) + '" stroke-linecap="round"/>';
+    }
+  }
+  // Foreground frame: vine leaves and a cluster in the corners.
+  if (o.frame !== false) {
+    const L = (x, y, s, r) => tplWnLeaf(x, y, s, r, P.leaf, mode === 'dawn' ? '#2a3512' : null);
+    const fs = sc * (o.frameScale || 1);
+    b += L(-20 * fs, h + 10 * fs, 2.6 * fs, 38) + L(120 * fs, h + 30 * fs, 2 * fs, 8) + L(w + 10 * fs, h + 20 * fs, 2.4 * fs, -42) +
+      L(w - 150 * fs, h + 40 * fs, 1.7 * fs, -12);
+    b += '<path d="M' + N(-10) + ' ' + N(h - 190 * fs) + 'C' + N(120 * fs) + ' ' + N(h - 230 * fs) + ' ' + N(170 * fs) + ' ' + N(h - 160 * fs) + ' ' + N(260 * fs) + ' ' + N(h - 200 * fs) + '" fill="none" stroke="' + P.leaf + '" stroke-width="' + N(5 * fs) + '" stroke-linecap="round"/>';
+    b += tplWnCluster(rnd, 205 * fs, h - 196 * fs, 13 * fs, { stem: P.leaf, hi: mode === 'dawn' ? 0.4 : 0.18 });
+  }
+  b += '<rect width="' + w + '" height="' + h + '" fill="url(#vig)"/>';
+  return tplWnSvg(w, h, defs, b);
+}
+
+// ---------- Marani interior (story) ----------
+
+function tplWnCellar(seed = 1) {
+  const w = 800, h = 1000, N = tplWnN;
+  const rnd = tplRand(tplHash('wn-cellar:' + seed));
+  let defs = tplWnLin('wall', [[0, '#3c2318'], [1, '#1d0f0a']]) +
+    tplWnLin('far', [[0, '#d9a465'], [0.55, '#9b5f33'], [1, '#4a2a18']]) +
+    tplWnLin('beam', [[0, '#fff1cf', 0.55], [1, '#fff1cf', 0]], { x1: 0, y1: 0, x2: 0.3, y2: 1 }) +
+    tplWnLin('floor', [[0, '#5a3522'], [1, '#1c0e08']]) +
+    tplWnRad('clay', [[0, '#c58552'], [0.7, '#94522c'], [1, '#6a3519']], { cx: 0.4, cy: 0.3, r: 0.8 }) +
+    tplWnRad('cand', [[0, '#ffc66e', 0.55], [1, '#ffc66e', 0]]) +
+    tplWnRad('vig', [[0, '#000', 0], [0.65, '#000', 0.05], [1, '#000', 0.6]], { r: 0.72 }) +
+    '<pattern id="st" width="120" height="64" patternUnits="userSpaceOnUse">' +
+    '<rect x="2" y="2" width="70" height="28" rx="6" fill="#fff" opacity=".05"/><rect x="76" y="2" width="42" height="28" rx="6" fill="#000" opacity=".12"/>' +
+    '<rect x="2" y="34" width="34" height="28" rx="6" fill="#000" opacity=".1"/><rect x="40" y="34" width="78" height="28" rx="6" fill="#fff" opacity=".04"/></pattern>';
+  let b = '<rect width="' + w + '" height="' + h + '" fill="url(#wall)"/><rect width="' + w + '" height="' + h + '" fill="url(#st)"/>';
+  // Arch to the far room with a lit doorway and a beam of light on the floor.
+  const ax = 400, aw = 300, ay = 210, ab = 640;
+  const arch = 'M' + (ax - aw / 2) + ' ' + ab + 'L' + (ax - aw / 2) + ' ' + (ay + aw / 2) + 'A' + aw / 2 + ' ' + aw / 2 + ' 0 0 1 ' + (ax + aw / 2) + ' ' + (ay + aw / 2) + 'L' + (ax + aw / 2) + ' ' + ab + 'Z';
+  b += '<path d="' + arch + '" fill="url(#far)"/>';
+  b += '<path d="M352 640L352 420A48 48 0 0 1 448 420L448 640Z" fill="#fff4d6" opacity=".9"/>';
+  b += '<path d="M352 640L448 640L620 1000L120 1000Z" fill="url(#beam)" opacity=".55"/>';
+  b += '<path d="' + 'M' + (ax - aw / 2 - 18) + ' ' + ab + 'L' + (ax - aw / 2 - 18) + ' ' + (ay + aw / 2) + 'A' + (aw / 2 + 18) + ' ' + (aw / 2 + 18) + ' 0 0 1 ' + (ax + aw / 2 + 18) + ' ' + (ay + aw / 2) + 'L' + (ax + aw / 2 + 18) + ' ' + ab +
+    '" fill="none" stroke="#6b4129" stroke-width="36" stroke-dasharray="30 5"/>';
+  // Wall niches with a clay jug (doqi) and a candle.
+  b += '<path d="M90 520L90 400A50 50 0 0 1 190 400L190 520Z" fill="#170b06" opacity=".7"/>';
+  b += '<path d="M120 518C108 500 112 470 128 462L128 446L152 446L152 462C168 470 172 500 160 518Z" fill="url(#clay)"/><path d="M152 452C170 452 172 476 160 484" fill="none" stroke="#7a3f20" stroke-width="5"/>';
+  b += '<circle cx="660" cy="440" r="110" fill="url(#cand)"/><rect x="652" y="450" width="16" height="44" rx="3" fill="#efe2c8"/><ellipse cx="660" cy="440" rx="6" ry="13" fill="#ffd27a"/><ellipse cx="660" cy="444" rx="3" ry="6" fill="#fff6dc"/>';
+  b += '<rect x="610" y="494" width="100" height="10" rx="3" fill="#2a160d"/>';
+  // Floor with kvevri mouths in perspective rows.
+  b += '<path d="M0 640L800 640L800 1000L0 1000Z" fill="url(#floor)"/>';
+  b += '<path d="M352 640L448 640L620 1000L120 1000Z" fill="url(#beam)" opacity=".18"/>';
+  const rows = [[700, 3, 0.55], [800, 3, 0.8], [935, 2, 1.15]];
+  rows.forEach(([y, n, s], ri) => {
+    for (let i = 0; i < n; i++) {
+      const span = 640 * s;
+      const x = 400 + (i - (n - 1) / 2) * (span / n) + (ri === 1 ? 40 : 0) + (rnd() - 0.5) * 20;
+      const rx = 62 * s, ry = 20 * s;
+      b += '<ellipse cx="' + N(x) + '" cy="' + N(y + 6 * s) + '" rx="' + N(rx * 1.25) + '" ry="' + N(ry * 1.35) + '" fill="#a2683f" opacity=".55"/>' +
+        '<ellipse cx="' + N(x) + '" cy="' + N(y) + '" rx="' + N(rx) + '" ry="' + N(ry) + '" fill="url(#clay)"/>' +
+        '<ellipse cx="' + N(x) + '" cy="' + N(y + 2 * s) + '" rx="' + N(rx * 0.72) + '" ry="' + N(ry * 0.62) + '" fill="#140906"/>';
+      if ((ri + i) % 2 === 0) {
+        b += '<ellipse cx="' + N(x + 4 * s) + '" cy="' + N(y - 3 * s) + '" rx="' + N(rx * 0.86) + '" ry="' + N(ry * 0.74) + '" fill="#8d8379"/>' +
+          '<ellipse cx="' + N(x + 4 * s) + '" cy="' + N(y - 6 * s) + '" rx="' + N(rx * 0.62) + '" ry="' + N(ry * 0.45) + '" fill="#a59b90"/>';
+      }
+    }
+  });
+  // Gourd ladle hanging on the left wall.
+  b += '<path d="M60 160L60 330" stroke="#8a6a44" stroke-width="5"/><circle cx="60" cy="356" r="30" fill="#c79a52"/><circle cx="52" cy="346" r="9" fill="#fff" opacity=".18"/>';
+  b += '<rect width="' + w + '" height="' + h + '" fill="url(#vig)"/>';
+  return tplWnSvg(w, h, defs, b);
+}
+
+// ---------- Kvevri cross-section & terroir ----------
+
+function tplWnKvevriSection(o = {}) {
+  const w = 800, h = o.h || 1000, N = tplWnN;
+  const rnd = tplRand(tplHash('wn-kvevri:' + (o.seed || 1)));
+  const amber = o.amber !== false;
+  const gl = 170;
+  let defs = tplWnLin('sky', [[0, '#f4e9d6'], [1, '#e7d2b0']]) +
+    tplWnRad('clay', [[0, '#cf8a55'], [0.65, '#a35a30'], [1, '#71361a']], { cx: 0.35, cy: 0.3, r: 0.85 }) +
+    tplWnLin('wine', amber ? [[0, '#f3c068'], [0.6, '#d98a32'], [1, '#9c4f17']] : [[0, '#8e2a3c'], [1, '#3a0a16']]) +
+    tplWnLeafDefs() + tplWnBerryDefs('#6a3f72', '#3a1a44', '#1e0b26');
+  let b = '<rect width="' + w + '" height="' + gl + '" fill="url(#sky)"/>';
+  b += '<circle cx="660" cy="60" r="34" fill="#f2c27a" opacity=".85"/><circle cx="660" cy="60" r="60" fill="#f2c27a" opacity=".18"/>';
+  // Ground and strata.
+  b += tplWnStrata(rnd, w, gl, h, [['#5b3b24', 1.2], ['#7b4f30', 1.6], ['#9a6a43', 1.4], ['#bfa27d', 1.6], ['#8b6c4c', 1.2]], 46);
+  // Grass line and a vine on the surface.
+  let grass = '';
+  for (let x = 0; x < w; x += 9) grass += 'M' + x + ' ' + (gl + 2) + 'l' + N(-3 + rnd() * 6) + ' ' + N(-6 - rnd() * 10);
+  b += '<path d="' + grass + '" stroke="#6d7436" stroke-width="2.4" stroke-linecap="round"/>';
+  b += '<path d="M128 ' + (gl + 4) + 'C120 130 140 110 132 70M132 96C160 80 190 84 214 74M132 92C108 80 82 86 60 76" fill="none" stroke="#5a3d22" stroke-width="7" stroke-linecap="round"/>';
+  b += tplWnLeaf(214, 78, 0.62, 60, '#6f7a37', '#4a5422') + tplWnLeaf(62, 80, 0.58, -64, '#7d8740', '#4a5422') + tplWnLeaf(150, 64, 0.5, 12, '#5f6b2d', '#3c4420');
+  b += tplWnCluster(rnd, 178, 92, 7, { rows: [3, 4, 3, 2, 1], stem: '#5a3d22', tendril: false });
+  // Roots.
+  b += '<path d="M128 ' + (gl + 4) + 'C126 260 150 330 140 440M134 250C110 300 90 320 70 400M138 330C170 370 180 420 176 520M142 420C130 470 136 520 120 600" fill="none" stroke="#3a2414" stroke-width="3" stroke-linecap="round" opacity=".7"/>';
+  // The kvevri: lime-washed clay, cut open to show wine, skins settled in the cone, beeswax lining.
+  const kx = 470, kt = gl + 8, kw = 470, kh = h - gl - 70;
+  b += '<path d="' + tplWnKvevriPath(kx, kt, kw + 22, kh + 16) + '" fill="#e9dcc4" opacity=".55"/>';
+  b += '<path d="' + tplWnKvevriPath(kx, kt, kw, kh) + '" fill="url(#clay)"/>';
+  const ip = tplWnKvevriPath(kx, kt + 22, kw - 56, kh - 50);
+  defs += '<clipPath id="in"><path d="' + ip + '"/></clipPath>';
+  b += '<path d="' + ip + '" fill="url(#wine)"/>';
+  let skins = '';
+  for (let i = 0; i < 70; i++) {
+    const t = rnd();
+    const yy = kt + 22 + (kh - 50) * (0.72 + 0.27 * Math.sqrt(t));
+    const spread = (kw - 56) * 0.5 * (1 - (yy - kt) / (kh + 20)) * 1.6;
+    skins += '<ellipse cx="' + N(kx + (rnd() - 0.5) * spread * 2) + '" cy="' + N(yy) + '" rx="' + N(4 + rnd() * 6) + '" ry="' + N(3 + rnd() * 3) + '" fill="' + (rnd() < 0.5 ? '#6b2f12' : '#8a4318') + '" opacity=".9"/>';
+  }
+  for (let i = 0; i < 16; i++) {
+    skins += '<circle cx="' + N(kx + (rnd() - 0.5) * 220) + '" cy="' + N(kt + 60 + rnd() * kh * 0.5) + '" r="' + N(2 + rnd() * 5) + '" fill="none" stroke="#fff6dc" stroke-width="1.4" opacity=".55"/>';
+  }
+  b += '<g clip-path="url(#in)">' + skins + '<path d="M' + (kx - 260) + ' ' + (kt + 70) + 'L' + (kx - 120) + ' ' + (kt + 40) + 'L' + (kx - 160) + ' ' + (kt + kh) + 'L' + (kx - 300) + ' ' + (kt + kh) + 'Z" fill="#fff" opacity=".12"/></g>';
+  b += '<path d="' + ip + '" fill="none" stroke="#f0cf6e" stroke-width="4" opacity=".85"/>';
+  // Stone lid, clay seal and the soil heaped over it.
+  b += '<ellipse cx="' + kx + '" cy="' + (kt - 2) + '" rx="96" ry="16" fill="#8f857a"/><ellipse cx="' + kx + '" cy="' + (kt - 7) + '" rx="74" ry="9" fill="#a9a093"/>';
+  b += '<path d="M' + (kx - 110) + ' ' + (kt + 2) + 'C' + (kx - 70) + ' ' + (kt - 34) + ' ' + (kx + 70) + ' ' + (kt - 34) + ' ' + (kx + 110) + ' ' + (kt + 2) + 'Z" fill="#a8713f" opacity=".8"/>';
+  // Steady-temperature marker.
+  b += '<path d="M' + (kx + 250) + ' ' + (kt + kh * 0.42) + 'H785" stroke="#fff3dc" stroke-width="2" stroke-dasharray="6 6" opacity=".7"/>' +
+    '<rect x="752" y="' + N(kt + kh * 0.42 - 58) + '" width="14" height="58" rx="7" fill="#fff3dc" opacity=".85"/><circle cx="759" cy="' + N(kt + kh * 0.42 + 6) + '" r="12" fill="#c43c3c"/>' +
+    '<rect x="755" y="' + N(kt + kh * 0.42 - 30) + '" width="8" height="34" rx="4" fill="#c43c3c"/>';
+  return tplWnSvg(w, h, defs, b);
+}
+
+function tplWnTerroir(seed = 1) {
+  const w = 800, h = 800, N = tplWnN;
+  const rnd = tplRand(tplHash('wn-terroir:' + seed));
+  const land = tplWnLandscape({ w, h: 360, mode: 'dawn', seed: seed + 7, horizon: 0.5, frame: false, house: true, houseX: 0.62, rowsFrom: 1 });
+  const inner = land.replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, '');
+  let b = '<g>' + inner + '</g>';
+  // Cut face of the hill with roots through the strata and fossil spirals in the limestone.
+  b += '<path d="M0 330C200 310 420 352 800 324L800 800L0 800Z" fill="#5b3b24"/>';
+  b += '<g clip-path="url(#cut)">' + tplWnStrata(rnd, w, 330, 800, [['#5b3b24', 1], ['#80532f', 1.3], ['#a37a4e', 1], ['#cdb48c', 1.5], ['#9e8462', 0.8]], 60) + '</g>';
+  let fossils = '';
+  for (let i = 0; i < 7; i++) {
+    const x = 60 + rnd() * 680, y = 600 + rnd() * 110, r = 6 + rnd() * 8;
+    fossils += '<path d="M' + N(x) + ' ' + N(y) + 'm' + N(-r) + ' 0a' + N(r) + ' ' + N(r) + ' 0 1 1 ' + N(r * 2) + ' 0a' + N(r * 0.7) + ' ' + N(r * 0.7) + ' 0 1 1 ' + N(-r * 1.4) + ' 0a' + N(r * 0.4) + ' ' + N(r * 0.4) + ' 0 1 1 ' + N(r * 0.8) + ' 0" fill="none" stroke="#7d6646" stroke-width="2" opacity=".7"/>';
+  }
+  b += fossils;
+  b += '<path d="M330 334C320 420 350 470 336 560C326 620 344 690 332 780M336 420C300 460 270 470 240 540M340 500C380 540 400 600 396 690M334 600C300 640 296 700 270 760M342 380C372 400 400 400 430 450" fill="none" stroke="#2e1b0f" stroke-width="4" stroke-linecap="round" opacity=".8"/>';
+  b += '<path d="M0 330C200 310 420 352 800 324" fill="none" stroke="#3a2516" stroke-width="3"/>';
+  const defs = '<clipPath id="cut"><path d="M0 330C200 310 420 352 800 324L800 800L0 800Z"/></clipPath>';
+  return tplWnSvg(w, h, defs, b);
+}
+
+// ---------- Bottles (shop) ----------
+
+const TPL_WN_SHAPES = {
+  bordeaux: { nr: 21, br: 86, nk: 300, sh: 372, c: [0.62, 0.22] },
+  burgundy: { nr: 21, br: 94, nk: 248, sh: 446, c: [0.5, 0.5] },
+  rhine: { nr: 17, br: 66, nk: 236, sh: 486, c: [0.62, 0.58] },
+};
+
+/** Label motif in a ~64 px box centred at (x, y). */
+function tplWnMotif(kind, x, y, c, c2) {
+  const N = tplWnN;
+  if (kind === 'leaf') return tplWnLeaf(x, y + 30, 0.72, 0, c, c2);
+  if (kind === 'sun') {
+    let r = '';
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2;
+      r += 'M' + N(x + Math.cos(a) * 20) + ' ' + N(y + Math.sin(a) * 20) + 'L' + N(x + Math.cos(a) * 31) + ' ' + N(y + Math.sin(a) * 31);
+    }
+    return '<path d="' + r + '" stroke="' + c + '" stroke-width="3" stroke-linecap="round"/><circle cx="' + x + '" cy="' + y + '" r="14" fill="' + c + '"/>';
+  }
+  if (kind === 'ornament') {
+    const sq = (rot) => '<rect x="' + (x - 20) + '" y="' + (y - 20) + '" width="40" height="40" fill="none" stroke="' + c + '" stroke-width="3" transform="rotate(' + rot + ' ' + x + ' ' + y + ')"/>';
+    return sq(0) + sq(45) + '<circle cx="' + x + '" cy="' + y + '" r="11" fill="' + c + '"/><circle cx="' + x + '" cy="' + y + '" r="33" fill="none" stroke="' + c + '" stroke-width="1.5"/>';
+  }
+  if (kind === 'kvevri') return '<path d="' + tplWnKvevriPath(x, y - 30, 46, 62) + '" fill="' + c + '"/><path d="M' + (x - 30) + ' ' + (y - 30) + 'h60" stroke="' + c + '" stroke-width="3"/>';
+  if (kind === 'flower') {
+    let p = '';
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      p += '<ellipse cx="' + N(x + Math.cos(a) * 15) + '" cy="' + N(y + Math.sin(a) * 15) + '" rx="13" ry="8" transform="rotate(' + Math.round((a * 180) / Math.PI) + ' ' + N(x + Math.cos(a) * 15) + ' ' + N(y + Math.sin(a) * 15) + ')" fill="' + c + '" opacity=".85"/>';
+    }
+    return p + '<circle cx="' + x + '" cy="' + y + '" r="7" fill="' + c2 + '"/>';
+  }
+  // cluster
+  let s = '';
+  const rows = [4, 3, 2, 1];
+  rows.forEach((n, ri) => {
+    for (let i = 0; i < n; i++) s += '<circle cx="' + N(x + (i - (n - 1) / 2) * 13) + '" cy="' + N(y - 14 + ri * 11) + '" r="6.4" fill="' + c + '"/>';
+  });
+  return s + '<path d="M' + x + ' ' + (y - 22) + 'q3 -10 12 -12" fill="none" stroke="' + c + '" stroke-width="3" stroke-linecap="round"/>';
+}
+
+/**
+ * Wine bottle still life (800×800; the bottle stays inside the central safe zone so any card ratio between
+ * 3/4 and 4/3 keeps it whole). o = {seed, shape, glass:'dark'|'clear', wine, label, band, ink, foil, wax, motif,
+ * seal, bg, prop:'cluster'|'glass'}.
+ */
+function tplWnBottle(o) {
+  const w = 800, h = 800, N = tplWnN, cx = 400, top = 150, base = 668;
+  const S = TPL_WN_SHAPES[o.shape] || TPL_WN_SHAPES.burgundy;
+  const rnd = tplRand(tplHash('wn-bottle:' + (o.seed || o.motif)));
+  const [bh, bs, bl] = tplHexToHsl(o.bg || '#efe3cc');
+  const bg1 = tplHsl(bh, bs, Math.min(96, bl + 4)), bg2 = tplHsl(bh, Math.max(10, bs - 6), bl - 10);
+  const { nr, br, nk, sh } = S;
+  const path = 'M' + (cx - nr) + ' ' + (top + 10) + 'L' + (cx - nr) + ' ' + nk +
+    'C' + (cx - nr) + ' ' + N(nk + (sh - nk) * S.c[0]) + ' ' + (cx - br) + ' ' + N(nk + (sh - nk) * S.c[1]) + ' ' + (cx - br) + ' ' + sh +
+    'L' + (cx - br) + ' ' + (base - 16) + 'Q' + (cx - br) + ' ' + base + ' ' + (cx - br + 16) + ' ' + base + 'L' + (cx + br - 16) + ' ' + base +
+    'Q' + (cx + br) + ' ' + base + ' ' + (cx + br) + ' ' + (base - 16) + 'L' + (cx + br) + ' ' + sh +
+    'C' + (cx + br) + ' ' + N(nk + (sh - nk) * S.c[1]) + ' ' + (cx + nr) + ' ' + N(nk + (sh - nk) * S.c[0]) + ' ' + (cx + nr) + ' ' + nk +
+    'L' + (cx + nr) + ' ' + (top + 10) + 'Z';
+  const dark = o.glass === 'dark';
+  const [wh, ws, wl] = tplHexToHsl(o.wine || '#7a1f2b');
+  let defs = tplWnLin('bg', [[0, bg1], [1, bg2]]) +
+    tplWnRad('sh', [[0, '#2a1a10', 0.45], [1, '#2a1a10', 0]]) +
+    tplWnRad('halo', [[0, '#fff', 0.55], [1, '#fff', 0]]) +
+    tplWnLin('gl', dark ? [[0, '#070a05'], [0.3, '#26301d'], [0.55, '#151c10'], [1, '#050704']] :
+      [[0, tplHsl(wh, ws, Math.max(8, wl - 22))], [0.32, tplHsl(wh, Math.min(100, ws + 6), Math.min(80, wl + 8))], [0.62, o.wine], [1, tplHsl(wh, ws, Math.max(6, wl - 26))]], { x2: 1, y2: 0 }) +
+    tplWnLin('air', [[0, '#ffffff', 0.5], [0.5, '#f4efe6', 0.2], [1, '#ffffff', 0.45]], { x2: 1, y2: 0 }) +
+    tplWnLin('cyl', [[0, '#000', 0.28], [0.25, '#000', 0], [0.7, '#000', 0], [1, '#000', 0.32]], { x2: 1, y2: 0 }) +
+    tplWnLin('foil', [[0, o.foil], [0.35, '#ffffff', 0.35], [0.5, o.foil], [1, '#000000', 0.5]], { x2: 1, y2: 0 }) +
+    '<clipPath id="bt"><path d="' + path + '"/></clipPath>' + tplWnLeafDefs() +
+    tplWnBerryDefs(o.berry ? o.berry[0] : '#7d4f7e', o.berry ? o.berry[1] : '#43204a', o.berry ? o.berry[2] : '#230d29');
+  let b = '<rect width="' + w + '" height="' + h + '" fill="url(#bg)"/>';
+  // Niche with a thin gold outline, floor and soft shadow.
+  b += '<path d="M220 640L220 310A180 180 0 0 1 580 310L580 640Z" fill="#fff" opacity=".28"/>' +
+    '<path d="M206 640L206 310A194 194 0 0 1 594 310L594 640" fill="none" stroke="#b08d43" stroke-width="1.5" opacity=".6"/>';
+  b += '<circle cx="400" cy="300" r="190" fill="url(#halo)"/>';
+  b += '<rect y="640" width="800" height="160" fill="' + bg2 + '"/><path d="M0 640H800" stroke="#b08d43" stroke-width="1" opacity=".5"/>';
+  b += '<ellipse cx="' + cx + '" cy="' + (base + 2) + '" rx="' + (br + 60) + '" ry="20" fill="url(#sh)"/>';
+  // Glass body, wine, air space and highlights.
+  b += '<path d="' + path + '" fill="url(#gl)"/>';
+  b += '<g clip-path="url(#bt)">';
+  if (!dark) b += '<rect x="' + (cx - br) + '" y="' + top + '" width="' + br * 2 + '" height="' + (nk - 40 - top) + '" fill="url(#air)"/>' +
+    '<path d="M' + (cx - nr) + ' ' + (nk - 40) + 'h' + nr * 2 + '" stroke="#fff" stroke-width="2" opacity=".5"/>';
+  b += '<rect x="' + N(cx - br * 0.68) + '" y="' + (top + 10) + '" width="' + N(br * 0.15) + '" height="' + (base - top - 30) + '" fill="#fff" opacity="' + (dark ? 0.2 : 0.32) + '"/>' +
+    '<rect x="' + N(cx + br * 0.55) + '" y="' + (sh + 10) + '" width="' + N(br * 0.07) + '" height="' + (base - sh - 40) + '" fill="#fff" opacity=".14"/>' +
+    '<rect x="' + (cx - br) + '" y="' + top + '" width="' + br * 2 + '" height="' + (base - top) + '" fill="url(#cyl)"/>';
+  // Label.
+  const lw = Math.round(br * 1.72), lh = Math.min(220, base - sh - 70), lx = cx - lw / 2, ly = base - 44 - lh;
+  b += '<rect x="' + lx + '" y="' + ly + '" width="' + lw + '" height="' + lh + '" fill="' + o.label + '"/>';
+  b += '<rect x="' + (lx + 8) + '" y="' + (ly + 8) + '" width="' + (lw - 16) + '" height="' + (lh - 16) + '" fill="none" stroke="' + o.ink + '" stroke-width="1.2" opacity=".75"/>' +
+    '<rect x="' + (lx + 12) + '" y="' + (ly + 12) + '" width="' + (lw - 24) + '" height="' + (lh - 24) + '" fill="none" stroke="' + o.ink + '" stroke-width=".6" opacity=".6"/>';
+  b += '<rect x="' + lx + '" y="' + (ly + lh - 34) + '" width="' + lw + '" height="14" fill="' + o.band + '"/>';
+  b += tplWnMotif(o.motif, cx, ly + 54, o.band, o.ink);
+  const bar = (yy, ww, op, c) => '<rect x="' + N(cx - ww / 2) + '" y="' + yy + '" width="' + N(ww) + '" height="6" rx="3" fill="' + (c || o.ink) + '" opacity="' + op + '"/>';
+  b += bar(ly + 100, lw * 0.62, 0.85) + bar(ly + 114, lw * 0.4, 0.45) + '<path d="M' + N(cx - lw * 0.22) + ' ' + (ly + 130) + 'h' + N(lw * 0.44) + '" stroke="' + o.ink + '" stroke-width="1" opacity=".5"/>' +
+    bar(ly + 140, lw * 0.18, 0.6, o.band);
+  b += '<rect x="' + lx + '" y="' + ly + '" width="' + lw + '" height="' + lh + '" fill="url(#cyl)" opacity=".8"/>';
+  b += '</g>';
+  // Capsule: foil or dripping wax.
+  if (o.wax) {
+    let drips = 'M' + (cx - nr - 3) + ' ' + (top - 2) + 'H' + (cx + nr + 3) + 'V' + (top + 70);
+    const dn = 5;
+    for (let i = dn; i >= 0; i--) {
+      const x = cx - nr - 3 + ((nr * 2 + 6) * i) / dn, d = 70 + (i % 2 ? 26 + rnd() * 40 : rnd() * 10);
+      drips += 'L' + N(x) + ' ' + N(top + d) + (i % 2 ? 'a4 4 0 0 1 -6 0' : '');
+    }
+    b += '<path d="' + drips + 'Z" fill="' + o.wax + '"/><rect x="' + N(cx - nr * 0.55) + '" y="' + (top + 4) + '" width="5" height="62" rx="2.5" fill="#fff" opacity=".28"/>';
+  } else {
+    b += '<path d="M' + (cx - nr - 2) + ' ' + (top + 96) + 'V' + (top + 4) + 'Q' + (cx - nr - 2) + ' ' + (top - 3) + ' ' + (cx - nr + 6) + ' ' + (top - 3) + 'H' + (cx + nr - 6) + 'Q' + (cx + nr + 2) + ' ' + (top - 3) + ' ' + (cx + nr + 2) + ' ' + (top + 4) + 'V' + (top + 96) + 'Z" fill="url(#foil)"/>' +
+      '<path d="M' + (cx - nr - 2) + ' ' + (top + 86) + 'h' + (nr * 2 + 4) + '" stroke="#000" stroke-width="1" opacity=".25"/>' +
+      '<path d="M' + (cx - nr - 2) + ' ' + (top + 18) + 'h' + (nr * 2 + 4) + '" stroke="' + o.band + '" stroke-width="5" opacity=".9"/>';
+  }
+  // Neck label.
+  b += '<rect x="' + (cx - nr - 1) + '" y="' + (nk - 24) + '" width="' + (nr * 2 + 2) + '" height="24" fill="' + o.label + '"/><rect x="' + (cx - nr - 1) + '" y="' + (nk - 16) + '" width="' + (nr * 2 + 2) + '" height="6" fill="' + o.band + '"/>';
+  // Wax seal medallion (limited editions).
+  if (o.seal) {
+    const sx = cx + lw / 2 - 18, sy = ly + lh - 8;
+    b += '<path d="' + tplWnBlob(rnd, sx, sy, 24, 0.08, 12) + '" fill="' + o.seal + '"/><circle cx="' + sx + '" cy="' + sy + '" r="15" fill="none" stroke="#000" stroke-width="1.5" opacity=".25"/>' +
+      '<circle cx="' + (sx - 6) + '" cy="' + (sy - 7) + '" r="5" fill="#fff" opacity=".25"/>';
+  }
+  // Props: a cluster with a leaf, or a glass of the wine.
+  if (o.prop === 'glass') {
+    const gx = 600, gy = 520;
+    b += '<ellipse cx="' + gx + '" cy="664" rx="44" ry="8" fill="url(#sh)"/>' +
+      '<path d="M' + (gx - 40) + ' ' + gy + 'C' + (gx - 44) + ' ' + (gy + 60) + ' ' + (gx - 22) + ' ' + (gy + 92) + ' ' + gx + ' ' + (gy + 94) + 'C' + (gx + 22) + ' ' + (gy + 92) + ' ' + (gx + 44) + ' ' + (gy + 60) + ' ' + (gx + 40) + ' ' + gy + 'Z" fill="#fff" opacity=".35"/>' +
+      '<path d="M' + (gx - 42) + ' ' + (gy + 30) + 'C' + (gx - 38) + ' ' + (gy + 72) + ' ' + (gx - 20) + ' ' + (gy + 92) + ' ' + gx + ' ' + (gy + 94) + 'C' + (gx + 20) + ' ' + (gy + 92) + ' ' + (gx + 38) + ' ' + (gy + 72) + ' ' + (gx + 42) + ' ' + (gy + 30) + 'Z" fill="' + o.wine + '" opacity=".92"/>' +
+      '<ellipse cx="' + gx + '" cy="' + (gy + 30) + '" rx="42" ry="6" fill="' + tplHsl(wh, ws, Math.min(85, wl + 14)) + '"/>' +
+      '<path d="M' + gx + ' ' + (gy + 94) + 'V' + (gy + 140) + 'M' + (gx - 30) + ' ' + (gy + 142) + 'h60" stroke="#fff" stroke-width="5" stroke-linecap="round" opacity=".7"/>' +
+      '<path d="M' + (gx - 26) + ' ' + (gy + 8) + 'c-4 30 2 54 12 66" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" opacity=".45"/>';
+  } else {
+    b += tplWnLeaf(205, 668, 0.95, -78, '#6b7533', '#454d20') + '<ellipse cx="226" cy="664" rx="58" ry="9" fill="url(#sh)"/>' +
+      '<g transform="rotate(-18 226 600)">' + tplWnCluster(rnd, 226, 560, 10.5, { rows: [4, 5, 4, 3, 2, 1], stem: '#5a4024' }) + '</g>';
+  }
+  return tplWnSvg(w, h, defs, b);
+}
+
+// ---------- Gallery scenes ----------
+
+function tplWnKvevriYard(seed = 1) {
+  const w = 800, h = 600, N = tplWnN;
+  const rnd = tplRand(tplHash('wn-yard:' + seed));
+  let defs = tplWnLin('sky', [[0, '#f0d2a4'], [1, '#f6e5c6']]) + tplWnLin('gr', [[0, '#d7b98f'], [1, '#b8946a']]) +
+    tplWnRad('clay', [[0, '#d99862'], [0.6, '#ad6236'], [1, '#77391b']], { cx: 0.32, cy: 0.3, r: 0.85 }) +
+    tplWnRad('lime', [[0, '#f4ece0'], [0.7, '#d9cfc0'], [1, '#a99e8e']], { cx: 0.32, cy: 0.3, r: 0.85 }) +
+    tplWnRad('sh', [[0, '#3a2412', 0.45], [1, '#3a2412', 0]]);
+  let b = '<rect width="' + w + '" height="' + h + '" fill="url(#sky)"/>';
+  const far = tplWnRidge(rnd, w, 300, 26, 8);
+  b += '<path d="' + tplWnCurve(far) + 'L840 600L-40 600Z" fill="#9aa06a"/>';
+  const mid = tplWnRidge(rnd, w, 330, 14, 8);
+  b += '<path d="' + tplWnCurve(mid) + 'L840 600L-40 600Z" fill="#7d8a4c"/>';
+  for (let i = 0; i < 9; i++) {
+    const x = 20 + i * 92 + rnd() * 30, y = tplWnAt(mid, x);
+    b += '<ellipse cx="' + N(x) + '" cy="' + N(y - 30) + '" rx="8" ry="34" fill="#55632c"/>';
+  }
+  b += '<path d="M-10 360C200 350 560 372 810 356L810 600L-10 600Z" fill="url(#gr)"/>';
+  // Kvevri: standing (lime-washed or bare clay) and one lying on its side in front.
+  const jars = [[150, 250, 150, 190, 'lime', -4], [330, 210, 190, 240, 'clay', 2], [520, 240, 165, 205, 'lime', 5], [670, 270, 120, 150, 'clay', -3]];
+  for (const [x, t, jw, jh, f, rot] of jars) {
+    b += '<ellipse cx="' + x + '" cy="' + (t + jh) + '" rx="' + N(jw * 0.6) + '" ry="12" fill="url(#sh)"/>' +
+      '<g transform="rotate(' + rot + ' ' + x + ' ' + (t + jh) + ')"><path d="' + tplWnKvevriPath(x, t, jw, jh) + '" fill="url(#' + f + ')"/>' +
+      '<ellipse cx="' + x + '" cy="' + t + '" rx="' + N(jw * 0.17) + '" ry="' + N(jw * 0.04) + '" fill="#3a1d0e"/>' +
+      '<path d="M' + N(x - jw * 0.36) + ' ' + N(t + jh * 0.28) + 'q' + N(jw * 0.36) + ' ' + N(jh * 0.08) + ' ' + N(jw * 0.72) + ' 0" fill="none" stroke="#000" stroke-width="2" opacity=".18"/></g>';
+  }
+  b += '<ellipse cx="420" cy="560" rx="250" ry="22" fill="url(#sh)"/>' +
+    '<g transform="rotate(-84 420 470)"><path d="' + tplWnKvevriPath(420, 300, 180, 300) + '" fill="url(#clay)"/><ellipse cx="420" cy="300" rx="31" ry="10" fill="#3a1d0e"/></g>';
+  for (let i = 0; i < 30; i++) {
+    b += '<ellipse cx="' + N(rnd() * w) + '" cy="' + N(380 + rnd() * 210) + '" rx="' + N(2 + rnd() * 5) + '" ry="' + N(1 + rnd() * 2) + '" fill="#7a5a3a" opacity=".35"/>';
+  }
+  return tplWnSvg(w, h, defs, b);
+}
+
+function tplWnClusterArt(seed = 1) {
+  const w = 800, h = 800;
+  const rnd = tplRand(tplHash('wn-cluster:' + seed));
+  const defs = tplWnRad('bg', [[0, '#4a2232'], [0.6, '#2a1019'], [1, '#14070c']], { cx: 0.45, cy: 0.4, r: 0.8 }) + tplWnLeafDefs() +
+    tplWnBerryDefs('#6c5a9a', '#2e1d4e', '#140a24') + tplWnLin('lfg', [[0, '#8a9446'], [1, '#3f4a1c']]);
+  let b = '<rect width="' + w + '" height="' + h + '" fill="url(#bg)"/>';
+  b += tplWnLeaf(560, 520, 4.6, 150, 'url(#lfg)', '#2e3713', 0.9) + tplWnLeaf(180, 330, 3.2, -130, '#4f5a24', '#2e3713', 0.75);
+  b += '<path d="M330 40C360 110 380 150 400 190" fill="none" stroke="#6b5530" stroke-width="12" stroke-linecap="round"/>';
+  b += tplWnCluster(rnd, 410, 200, 36, { rows: [5, 6, 6, 5, 5, 4, 3, 2, 1], stem: '#6b5530', hi: 0.32 });
+  for (let i = 0; i < 70; i++) {
+    b += '<circle cx="' + tplWnN(250 + rnd() * 320) + '" cy="' + tplWnN(230 + rnd() * 420) + '" r="' + tplWnN(1 + rnd() * 2.6) + '" fill="#d9d2ee" opacity="' + (0.08 + rnd() * 0.2).toFixed(2) + '"/>';
+  }
+  b += '<circle cx="356" cy="402" r="5" fill="#fff" opacity=".7"/><circle cx="478" cy="512" r="4" fill="#fff" opacity=".6"/>';
+  return tplWnSvg(w, h, defs, b);
+}
+
+function tplWnSupra(seed = 1) {
+  const w = 800, h = 600, N = tplWnN;
+  const rnd = tplRand(tplHash('wn-supra:' + seed));
+  const defs = tplWnLin('wood', [[0, '#5a3220'], [1, '#3a1e12']]) +
+    tplWnRad('kh', [[0, '#fff0b8'], [0.45, '#f2c25a'], [1, '#c98a2c']]) +
+    tplWnRad('plate', [[0, '#fbf6ec'], [0.85, '#efe4d0'], [1, '#d9c9ae']]) +
+    tplWnRad('red', [[0, '#b0303f'], [1, '#5a0d1a']]) + tplWnRad('amb', [[0, '#f6c064'], [1, '#b2621c']]) +
+    tplWnRad('glow', [[0, '#ffd27a', 0.5], [1, '#ffd27a', 0]]) +
+    '<pattern id="zz" width="24" height="12" patternUnits="userSpaceOnUse"><path d="M0 10L6 2L12 10L18 2L24 10" fill="none" stroke="#8e2a33" stroke-width="2"/></pattern>';
+  let b = '<rect width="' + w + '" height="' + h + '" fill="url(#wood)"/>';
+  for (let i = 0; i < 8; i++) b += '<path d="M0 ' + (i * 80 + 20) + 'H800" stroke="#000" stroke-width="2" opacity=".12"/>';
+  b += '<rect x="40" y="40" width="720" height="520" rx="6" fill="#f6efe2"/><rect x="58" y="58" width="684" height="12" fill="url(#zz)"/><rect x="58" y="530" width="684" height="12" fill="url(#zz)"/>';
+  const plate = (x, y, r) => '<circle cx="' + x + '" cy="' + (y + 4) + '" r="' + r + '" fill="#000" opacity=".08"/><circle cx="' + x + '" cy="' + y + '" r="' + r + '" fill="url(#plate)"/>';
+  // Khachapuri, pkhali, salad, mtsvadi, bread, glasses, jug, horn, candles.
+  b += plate(250, 220, 92) + '<circle cx="250" cy="220" r="72" fill="url(#kh)"/><path d="M250 148V292M178 220H322M199 169L301 271M301 169L199 271" stroke="#c98a2c" stroke-width="2" opacity=".5"/>';
+  b += plate(520, 200, 70);
+  for (let i = 0; i < 7; i++) {
+    const a = (i / 7) * 6.28, x = 520 + Math.cos(a) * 34, y = 200 + Math.sin(a) * 34;
+    b += '<circle cx="' + N(x) + '" cy="' + N(y) + '" r="15" fill="' + (i % 2 ? '#5f7a2e' : '#7a5a8a') + '"/><circle cx="' + N(x + 3) + '" cy="' + N(y - 4) + '" r="2.6" fill="#c3243b"/>';
+  }
+  b += '<circle cx="520" cy="200" r="15" fill="#4c6a24"/>';
+  b += plate(600, 400, 78);
+  for (let i = 0; i < 10; i++) {
+    b += '<circle cx="' + N(570 + rnd() * 60) + '" cy="' + N(370 + rnd() * 60) + '" r="' + N(12 + rnd() * 8) + '" fill="' + (i % 3 === 0 ? '#8fae4a' : '#d2412f') + '" opacity=".95"/>';
+  }
+  b += '<path d="M560 360L640 440" stroke="#7a5a2a" stroke-width="3"/>';
+  b += '<path d="M120 420C190 380 300 380 370 420C300 460 190 460 120 420Z" fill="#d9a85c"/><path d="M150 420C210 400 280 400 340 420" fill="none" stroke="#b4782e" stroke-width="3"/>';
+  b += '<path d="M280 490C330 470 420 470 470 490C420 510 330 510 280 490Z" fill="#cf9a50"/>';
+  b += '<path d="M380 300L470 360" stroke="#5a3a20" stroke-width="4"/>';
+  for (let i = 0; i < 5; i++) b += '<rect x="' + (384 + i * 16) + '" y="' + (296 + i * 11) + '" width="16" height="14" rx="4" fill="#7a3a1a" transform="rotate(34 ' + (392 + i * 16) + ' ' + (303 + i * 11) + ')"/>';
+  const glass = (x, y, f) => '<circle cx="' + x + '" cy="' + y + '" r="24" fill="#fff" opacity=".6"/><circle cx="' + x + '" cy="' + y + '" r="19" fill="url(#' + f + ')"/><circle cx="' + (x - 7) + '" cy="' + (y - 7) + '" r="5" fill="#fff" opacity=".5"/>';
+  b += glass(110, 110, 'red') + glass(690, 110, 'amb') + glass(700, 300, 'red') + glass(100, 300, 'amb') + glass(400, 120, 'amb');
+  b += '<circle cx="420" cy="410" r="40" fill="#a35a30"/><circle cx="420" cy="410" r="26" fill="#5a2a12"/><path d="M455 390L478 378" stroke="#a35a30" stroke-width="12" stroke-linecap="round"/>';
+  b += '<path d="M640 520C660 480 720 470 740 440L746 452C724 488 672 500 652 528Z" fill="#c9b08a"/>';
+  b += '<circle cx="170" cy="520" r="60" fill="url(#glow)"/><circle cx="170" cy="520" r="10" fill="#f6efe2"/><circle cx="170" cy="520" r="4" fill="#ffcf6a"/>';
+  for (let i = 0; i < 14; i++) b += '<circle cx="' + N(300 + rnd() * 220) + '" cy="' + N(250 + rnd() * 60) + '" r="3" fill="#b3172f"/>';
+  b += '<path d="M480 120c20 -18 44 -6 40 10M486 128c26 -6 40 12 30 24" fill="none" stroke="#4c7a2e" stroke-width="5" stroke-linecap="round"/>';
+  return tplWnSvg(w, h, defs, b);
+}
+
+function tplWnChurchkhela(seed = 1) {
+  const w = 800, h = 1000, N = tplWnN;
+  const rnd = tplRand(tplHash('wn-church:' + seed));
+  const defs = tplWnLin('wall', [[0, '#7a4c2c'], [1, '#3e2414']], { x2: 1, y2: 1 }) +
+    tplWnRad('light', [[0, '#ffe2a8', 0.5], [1, '#ffe2a8', 0]], { cx: 0.25, cy: 0.15, r: 0.8 });
+  let b = '<rect width="' + w + '" height="' + h + '" fill="url(#wall)"/>';
+  for (let x = 0; x < w; x += 100) b += '<path d="M' + x + ' 0V1000" stroke="#2a160c" stroke-width="3" opacity=".45"/><path d="M' + (x + 50) + ' 0V1000" stroke="#000" stroke-width="1" opacity=".12"/>';
+  b += '<rect width="' + w + '" height="' + h + '" fill="url(#light)"/>';
+  b += '<rect x="20" y="104" width="760" height="22" rx="11" fill="#5a3418"/><rect x="20" y="106" width="760" height="6" rx="3" fill="#fff" opacity=".15"/>';
+  const cols = ['#5a1424', '#7a2618', '#b46a24', '#62182a', '#9a3a1e', '#c58430', '#4e1020'];
+  for (let k = 0; k < 7; k++) {
+    const x0 = 90 + k * 103 + (rnd() - 0.5) * 16, len = 560 + rnd() * 240, c = cols[k];
+    b += '<path d="M' + N(x0) + ' 118V150" stroke="#e8dcc4" stroke-width="2"/>';
+    let lumps = '';
+    const n = Math.round(len / 36);
+    for (let i = 0; i < n; i++) {
+      const y = 160 + i * 36 + rnd() * 6, x = x0 + Math.sin(i * 0.9 + k) * 3;
+      lumps += '<ellipse cx="' + N(x) + '" cy="' + N(y) + '" rx="' + N(19 + rnd() * 4) + '" ry="' + N(22 + rnd() * 4) + '"/>';
+    }
+    b += '<g fill="' + c + '">' + lumps + '</g>';
+    b += '<path d="M' + N(x0 - 8) + ' 160V' + N(150 + n * 36) + '" stroke="#fff" stroke-width="5" stroke-linecap="round" opacity=".16"/>';
+    b += '<path d="M' + N(x0) + ' ' + N(170 + n * 36) + 'v24" stroke="#e8dcc4" stroke-width="2"/>';
+  }
+  return tplWnSvg(w, h, defs, b);
+}
+
+function tplWnAmberGlass(seed = 1) {
+  const w = 800, h = 800;
+  const rnd = tplRand(tplHash('wn-glass:' + seed));
+  const defs = tplWnLin('wall', [[0, '#c9a47a'], [1, '#8a6442']]) + tplWnLin('win', [[0, '#fff8e6'], [1, '#f2d39a']]) +
+    tplWnLin('wine', [[0, '#f7c46a'], [1, '#b0601c']]) + tplWnLin('tbl', [[0, '#6b4026'], [1, '#3e2214']]) +
+    tplWnRad('caus', [[0, '#ffc45a', 0.75], [1, '#ffc45a', 0]]) + tplWnRad('sh', [[0, '#1e0f06', 0.5], [1, '#1e0f06', 0]]) +
+    tplWnBerryDefs('#e8d27a', '#b59a3a', '#7a6420') + tplWnLeafDefs();
+  let b = '<rect width="' + w + '" height="' + h + '" fill="url(#wall)"/>';
+  b += '<path d="M230 600V250A170 170 0 0 1 570 250V600Z" fill="url(#win)"/>' +
+    '<path d="M400 80V600M230 330H570M230 470H570" stroke="#7a5638" stroke-width="10"/>' +
+    '<path d="M218 600V250A182 182 0 0 1 582 250V600" fill="none" stroke="#6b4a30" stroke-width="16"/>';
+  b += '<path d="M0 600H800V800H0Z" fill="url(#tbl)"/><path d="M0 600H800" stroke="#2a160c" stroke-width="4"/>';
+  b += '<ellipse cx="470" cy="690" rx="190" ry="40" fill="url(#caus)"/><ellipse cx="350" cy="676" rx="110" ry="16" fill="url(#sh)"/>';
+  // The glass: tulip bowl, amber wine with meniscus, stem and foot.
+  b += '<path d="M290 300C282 420 312 500 380 512C448 500 478 420 470 300Z" fill="#fff" opacity=".22"/>' +
+    '<path d="M286 390C290 460 320 506 380 512C440 506 470 460 474 390Z" fill="url(#wine)" opacity=".95"/>' +
+    '<ellipse cx="380" cy="390" rx="94" ry="12" fill="#f9d58a"/>' +
+    '<path d="M290 300C282 420 312 500 380 512C448 500 478 420 470 300" fill="none" stroke="#fff" stroke-width="3" opacity=".6"/>' +
+    '<ellipse cx="380" cy="300" rx="90" ry="10" fill="none" stroke="#fff" stroke-width="2.5" opacity=".6"/>' +
+    '<path d="M380 512V650" stroke="#fff" stroke-width="7" opacity=".55"/><ellipse cx="380" cy="656" rx="74" ry="12" fill="#fff" opacity=".4"/>' +
+    '<path d="M312 320C304 380 312 440 336 476" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" opacity=".45"/>';
+  b += '<g transform="rotate(-70 620 650)">' + tplWnCluster(rnd, 620, 600, 12, { rows: [3, 4, 3, 2, 1], stem: '#6b5530', hi: 0.5 }) + '</g>';
+  b += tplWnLeaf(700, 700, 1, -100, '#7a8a3a', '#4a5422');
+  return tplWnSvg(w, h, defs, b);
+}
+
+function tplWnBasket(seed = 1) {
+  const w = 800, h = 600, N = tplWnN;
+  const rnd = tplRand(tplHash('wn-basket:' + seed));
+  let defs = tplWnLin('bg', [[0, '#c9cf8f'], [0.6, '#9aa65c'], [1, '#6c7a36']]) + tplWnLeafDefs() +
+    tplWnBerryDefs('#7a5a9a', '#3e2458', '#1e0e30') +
+    tplWnRad('gw', [[0, '#f6e7a0'], [0.7, '#cdb24e'], [1, '#8f7a24']], { cx: 0.38, cy: 0.35, r: 0.7 }) +
+    '<pattern id="wv" width="36" height="24" patternUnits="userSpaceOnUse"><rect width="36" height="24" fill="#a8743c"/>' +
+    '<path d="M0 6C9 0 27 0 36 6M0 18C9 12 27 12 36 18" fill="none" stroke="#7a4f22" stroke-width="5"/><path d="M9 0V24M27 0V24" stroke="#c99a5a" stroke-width="3"/></pattern>' +
+    tplWnRad('sh', [[0, '#2a2410', 0.5], [1, '#2a2410', 0]]);
+  let b = '<rect width="' + w + '" height="' + h + '" fill="url(#bg)"/>';
+  for (let i = 0; i < 9; i++) b += '<path d="M' + (i * 110 - 160) + ' 0L' + (i * 110 + 40) + ' 420" stroke="#55632c" stroke-width="' + (10 + i % 3 * 4) + '" stroke-dasharray="2 14" stroke-linecap="round" opacity=".55"/>';
+  b += '<path d="M0 430C240 410 520 444 800 420V600H0Z" fill="#5d6a2a"/>';
+  b += '<ellipse cx="400" cy="548" rx="260" ry="26" fill="url(#sh)"/>';
+  // Clusters piled up in the basket (golden Rkatsiteli and dark Saperavi).
+  defs += '<clipPath id="top"><rect x="120" y="120" width="560" height="270"/></clipPath>';
+  const piles = [[300, 250, 'gb'], [420, 230, 'gw'], [520, 262, 'gb'], [360, 290, 'gw'], [470, 300, 'gb']];
+  let pile = '';
+  for (const [x, y, g] of piles) {
+    const rows = [5, 5, 4, 3, 2];
+    rows.forEach((n, ri) => {
+      for (let i = 0; i < n; i++) {
+        const bx = x + (i - (n - 1) / 2) * 22 + (rnd() - 0.5) * 6, by = y + ri * 18 - 40 + (rnd() - 0.5) * 5;
+        pile += '<circle cx="' + N(bx) + '" cy="' + N(by) + '" r="12" fill="url(#' + g + ')"/><circle cx="' + N(bx - 4) + '" cy="' + N(by - 4) + '" r="2.6" fill="#fff" opacity=".45"/>';
+      }
+    });
+  }
+  b += tplWnLeaf(230, 330, 1.5, -60, '#6f7a37', '#454d20') + tplWnLeaf(590, 330, 1.6, 64, '#7d8740', '#454d20');
+  b += '<g clip-path="url(#top)">' + pile + '</g>';
+  b += '<path d="M190 330H610L570 540H230Z" fill="url(#wv)"/><path d="M180 322H620" stroke="#7a4f22" stroke-width="18" stroke-linecap="round"/>' +
+    '<path d="M180 318H620" stroke="#c99a5a" stroke-width="5" stroke-linecap="round"/>';
+  b += '<path d="M200 330C200 140 600 140 600 330" fill="none" stroke="#8a5a2a" stroke-width="12"/>';
+  // Secateurs on the grass.
+  b += '<g transform="rotate(-18 690 520)"><path d="M640 520L700 512L700 528Z" fill="#aab0b4"/><path d="M700 514C740 500 780 506 790 520C770 520 740 524 700 528Z" fill="#b8323a"/>' +
+    '<path d="M700 520C740 534 776 544 786 532C766 530 736 524 700 524Z" fill="#8e2a30"/><circle cx="700" cy="520" r="5" fill="#666"/></g>';
+  return tplWnSvg(w, h, defs, b);
+}
+
+// ---------- Portraits (team) ----------
+
+/** Stylised portrait (600×600). o = {seed, skin, hair, hairStyle:'grey'|'bun'|'short'|'long', beard, mustache, cloth, accent, bg, hat, scarf}. */
+function tplWnPortrait(o) {
+  const w = 600, h = 600, N = tplWnN;
+  const [sh0, ss, sl] = tplHexToHsl(o.skin);
+  const skinD = tplHsl(sh0, ss, sl - 9), blush = tplHsl(sh0 - 8, Math.min(90, ss + 20), sl - 4);
+  const [ch, cs, cl] = tplHexToHsl(o.cloth);
+  const defs = tplWnLin('bg', [[0, o.bg[0]], [1, o.bg[1]]]) + tplWnLin('cl', [[0, o.cloth], [1, tplHsl(ch, cs, Math.max(6, cl - 14))]]);
+  let b = '<rect width="' + w + '" height="' + h + '" fill="url(#bg)"/>';
+  b += '<path d="M120 600V300A180 180 0 0 1 480 300V600Z" fill="#fff" opacity=".14"/>';
+  b += tplWnLeaf(500, 170, 1.3, 30, '#fff', null, 0.1) + tplWnLeaf(110, 210, 1, -40, '#fff', null, 0.08);
+  if (o.hairStyle === 'long') b += '<path d="M200 300C190 200 240 150 300 150C360 150 410 200 400 300C410 400 430 470 440 520L160 520C170 470 190 400 200 300Z" fill="' + o.hair + '"/>';
+  // Shoulders, neck, head, ears.
+  b += '<path d="M70 600C80 480 180 438 300 438C420 438 520 480 530 600Z" fill="url(#cl)"/>';
+  b += '<path d="M262 360H338V450C320 468 280 468 262 450Z" fill="' + skinD + '"/>';
+  if (o.chokha) {
+    b += '<path d="M240 446L300 560L360 446" fill="none" stroke="' + o.accent + '" stroke-width="10"/><path d="M262 446L300 520L338 446Z" fill="#efe6d6"/>';
+    let gz = '';
+    for (let i = 0; i < 6; i++) gz += '<rect x="' + (170 + i * 9) + '" y="' + (490 - i * 4) + '" width="7" height="44" rx="3"/><rect x="' + (424 - i * 9) + '" y="' + (490 - i * 4) + '" width="7" height="44" rx="3"/>';
+    b += '<g fill="' + o.accent + '" opacity=".9">' + gz + '</g>';
+  } else if (o.apron) {
+    b += '<path d="M262 450C280 470 320 470 338 450L330 600H270Z" fill="#efe2cc" opacity=".35"/><path d="M200 470L230 600M400 470L370 600" stroke="' + o.accent + '" stroke-width="16"/><path d="M220 540H380V600H220Z" fill="' + o.accent + '"/>';
+  } else {
+    b += '<path d="M262 444L300 494L338 444" fill="none" stroke="' + o.accent + '" stroke-width="12" stroke-linejoin="round"/>';
+  }
+  if (o.scarf) b += '<path d="M236 440C270 476 330 476 364 440L380 470C340 510 260 510 220 470Z" fill="' + o.scarf + '"/><path d="M300 482L276 590L312 588Z" fill="' + o.scarf + '"/>';
+  b += '<ellipse cx="208" cy="300" rx="16" ry="26" fill="' + skinD + '"/><ellipse cx="392" cy="300" rx="16" ry="26" fill="' + skinD + '"/>';
+  b += '<ellipse cx="300" cy="286" rx="90" ry="108" fill="' + o.skin + '"/>';
+  // Hair.
+  if (o.hairStyle === 'grey') b += '<path d="M212 268C206 200 248 168 300 168C352 168 394 200 388 268C372 230 340 214 300 214C260 214 228 230 212 268Z" fill="' + o.hair + '"/>';
+  if (o.hairStyle === 'short') b += '<path d="M210 262C200 190 246 160 302 160C360 160 402 196 390 262C380 226 352 206 300 206C254 206 224 226 210 262Z" fill="' + o.hair + '"/>';
+  if (o.hairStyle === 'bun') b += '<circle cx="300" cy="158" r="40" fill="' + o.hair + '"/><path d="M208 280C196 196 246 170 300 170C354 170 404 196 392 280C384 236 350 210 300 214C250 210 216 236 208 280Z" fill="' + o.hair + '"/>';
+  if (o.hairStyle === 'long') b += '<path d="M208 290C196 200 246 162 300 162C354 162 404 200 392 290C376 230 340 212 300 214C260 212 224 230 208 290Z" fill="' + o.hair + '"/>';
+  if (o.hat) b += '<path d="M214 236C210 168 236 140 300 140C364 140 390 168 386 236C350 220 250 220 214 236Z" fill="' + o.hat + '"/><path d="M226 172C260 160 340 160 374 172M222 200C262 188 338 188 378 200" fill="none" stroke="#000" stroke-width="3" opacity=".25" stroke-dasharray="4 6"/>';
+  // Face: brows, eyes, nose, smile, cheeks, beard / mustache.
+  const brow = o.brow || o.hair;
+  b += '<path d="M244 258q20 -12 38 -2M318 256q20 -10 38 2" fill="none" stroke="' + brow + '" stroke-width="6" stroke-linecap="round"/>';
+  b += '<ellipse cx="263" cy="284" rx="7" ry="8" fill="#2a1a14"/><ellipse cx="337" cy="284" rx="7" ry="8" fill="#2a1a14"/><circle cx="265" cy="281" r="2" fill="#fff"/><circle cx="339" cy="281" r="2" fill="#fff"/>';
+  b += '<path d="M302 296C298 316 292 326 300 330" fill="none" stroke="' + skinD + '" stroke-width="5" stroke-linecap="round"/>';
+  b += '<circle cx="246" cy="326" r="16" fill="' + blush + '" opacity=".35"/><circle cx="354" cy="326" r="16" fill="' + blush + '" opacity=".35"/>';
+  if (o.beard) b += '<path d="M212 300C214 380 252 414 300 414C348 414 386 380 388 300C374 340 350 352 336 346C320 340 280 340 264 346C250 352 226 340 212 300Z" fill="' + o.hair + '"/>';
+  if (o.mustache) b += '<path d="M262 350C280 334 296 340 300 346C304 340 320 334 338 350C322 356 308 354 300 350C292 354 278 356 262 350Z" fill="' + o.mustache + '"/>';
+  b += '<path d="M276 362q24 18 48 0" fill="none" stroke="' + (o.beard ? '#f4e6dc' : '#8a3a36') + '" stroke-width="5" stroke-linecap="round"/>';
+  if (o.earrings) b += '<circle cx="206" cy="330" r="6" fill="' + o.earrings + '"/><circle cx="394" cy="330" r="6" fill="' + o.earrings + '"/>';
+  return tplWnSvg(w, h, defs, b);
+}
+
+// ---------- Award marks (logos) ----------
+
+function tplWnMedal(kind) {
+  const w = 360, h = 220, N = tplWnN, cx = 180, cy = 104;
+  const G = '#b08d43', R = '#7a1f2b', O = '#5d6331', I = '#2a1016';
+  let defs = tplWnLin('g', [[0, '#e3c27a'], [0.5, '#b08d43'], [1, '#8a6a2a']], { x2: 1, y2: 1 }) + tplWnLeafDefs();
+  let b = '';
+  if (kind === 'laurel') {
+    for (const side of [-1, 1]) {
+      for (let i = 0; i < 8; i++) {
+        const a = (200 + i * 17) * (Math.PI / 180), x = cx + side * Math.cos(a) * -70, y = cy - Math.sin(a) * -70 + 4;
+        b += '<ellipse cx="' + N(x) + '" cy="' + N(y) + '" rx="7" ry="15" fill="url(#g)" transform="rotate(' + Math.round(side * (i * 17 - 60)) + ' ' + N(x) + ' ' + N(y) + ')"/>';
+      }
+    }
+    let st = '';
+    for (let i = 0; i < 10; i++) {
+      const r = i % 2 ? 15 : 34, a = -Math.PI / 2 + (i * Math.PI) / 5;
+      st += (i ? 'L' : 'M') + N(cx + Math.cos(a) * r) + ' ' + N(cy + Math.sin(a) * r);
+    }
+    b += '<path d="' + st + 'Z" fill="' + R + '"/><path d="M150 176Q180 190 210 176" fill="none" stroke="' + R + '" stroke-width="6" stroke-linecap="round"/>';
+  } else if (kind === 'rosette') {
+    b += '<path d="M150 140L128 206L150 196L162 214L176 146Z" fill="' + R + '"/><path d="M210 140L232 206L210 196L198 214L184 146Z" fill="' + R + '" opacity=".85"/>';
+    let sc = '';
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2;
+      sc += '<circle cx="' + N(cx + Math.cos(a) * 62) + '" cy="' + N(cy + Math.sin(a) * 62) + '" r="10"/>';
+    }
+    b += '<g fill="url(#g)">' + sc + '</g><circle cx="' + cx + '" cy="' + cy + '" r="62" fill="url(#g)"/><circle cx="' + cx + '" cy="' + cy + '" r="46" fill="' + R + '"/>' +
+      '<circle cx="' + cx + '" cy="' + cy + '" r="38" fill="none" stroke="#e3c27a" stroke-width="2" stroke-dasharray="3 5"/>' + tplWnLeaf(cx, cy + 22, 0.52, 0, '#e3c27a', R);
+  } else if (kind === 'shield') {
+    b += '<path d="M180 20L256 44V110C256 160 220 190 180 206C140 190 104 160 104 110V44Z" fill="' + O + '"/>' +
+      '<path d="M180 34L242 54V110C242 152 212 176 180 190C148 176 118 152 118 110V54Z" fill="none" stroke="#e3c27a" stroke-width="2.5"/>';
+    let cl = '';
+    [4, 3, 2, 1].forEach((n, ri) => { for (let i = 0; i < n; i++) cl += '<circle cx="' + N(cx + (i - (n - 1) / 2) * 20) + '" cy="' + N(82 + ri * 18) + '" r="9.5"/>'; });
+    b += '<g fill="url(#g)">' + cl + '</g><path d="M180 72q4 -18 22 -22" fill="none" stroke="url(#g)" stroke-width="4" stroke-linecap="round"/>';
+  } else if (kind === 'seal') {
+    b += '<circle cx="' + cx + '" cy="' + cy + '" r="84" fill="none" stroke="' + I + '" stroke-width="3"/><circle cx="' + cx + '" cy="' + cy + '" r="74" fill="none" stroke="' + G + '" stroke-width="8" stroke-dasharray="1.5 7" stroke-linecap="round"/>' +
+      '<circle cx="' + cx + '" cy="' + cy + '" r="62" fill="' + I + '"/><path d="' + tplWnKvevriPath(cx, cy - 40, 62, 84) + '" fill="url(#g)"/><path d="M152 64H208" stroke="url(#g)" stroke-width="4"/>' +
+      '<circle cx="128" cy="' + cy + '" r="3" fill="' + G + '"/><circle cx="232" cy="' + cy + '" r="3" fill="' + G + '"/>';
+  } else {
+    let hx = '';
+    for (let i = 0; i < 6; i++) {
+      const a = Math.PI / 6 + (i * Math.PI) / 3;
+      hx += (i ? 'L' : 'M') + N(cx + Math.cos(a) * 86) + ' ' + N(cy + Math.sin(a) * 86);
+    }
+    b += '<path d="' + hx + 'Z" fill="none" stroke="' + I + '" stroke-width="3"/><path d="' + hx + 'Z" fill="' + O + '" opacity=".12" transform="translate(' + cx + ' ' + cy + ') scale(.84) translate(' + -cx + ' ' + -cy + ')"/>' +
+      '<path d="M128 140A56 56 0 0 1 232 140" fill="none" stroke="' + G + '" stroke-width="5" stroke-linecap="round"/>' + tplWnLeaf(cx, cy + 46, 0.98, 0, O, '#e8e2c8');
+  }
+  return tplWnSvg(w, h, defs, b);
+}
+
+// ---------- Map, seal, texture ----------
+
+function tplWnMap(seed = 1) {
+  const w = 1200, h = 800, N = tplWnN;
+  const rnd = tplRand(tplHash('wn-map:' + seed));
+  let defs = tplWnRad('pv', [[0, '#000', 0], [0.75, '#000', 0], [1, '#5a3a1a', 0.22]], { r: 0.72 }) +
+    '<pattern id="grid" width="80" height="80" patternUnits="userSpaceOnUse"><path d="M80 0H0V80" fill="none" stroke="#8a6a44" stroke-width="1" opacity=".18"/></pattern>' +
+    '<pattern id="vn" width="12" height="12" patternUnits="userSpaceOnUse"><path d="M0 6H12" stroke="#6b7533" stroke-width="3" stroke-dasharray="2 2" stroke-linecap="round"/></pattern>' +
+    '<pattern id="vn2" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(70)"><path d="M0 6H12" stroke="#5d6331" stroke-width="3" stroke-dasharray="2 2" stroke-linecap="round"/></pattern>';
+  let b = '<rect width="' + w + '" height="' + h + '" fill="#f1e6cf"/><rect width="' + w + '" height="' + h + '" fill="url(#grid)"/>';
+  // Mountains along the top.
+  let m = '';
+  for (let i = 0; i < 30; i++) {
+    const x = i * 42 + rnd() * 20 - 10, y = 70 + rnd() * 60, s = 22 + rnd() * 20;
+    m += 'M' + N(x - s) + ' ' + N(y + s * 0.8) + 'L' + N(x) + ' ' + N(y - s * 0.4) + 'L' + N(x + s) + ' ' + N(y + s * 0.8);
+  }
+  b += '<path d="' + m + '" fill="#d9c7a6" stroke="#8a7457" stroke-width="2" stroke-linejoin="round"/>';
+  // Forest patches.
+  for (let f = 0; f < 4; f++) {
+    const fx = 120 + rnd() * 960, fy = 190 + rnd() * 80;
+    let t = '';
+    for (let i = 0; i < 14; i++) t += '<circle cx="' + N(fx + (rnd() - 0.5) * 140) + '" cy="' + N(fy + (rnd() - 0.5) * 50) + '" r="' + N(8 + rnd() * 6) + '"/>';
+    b += '<g fill="#8f9a5a" opacity=".75">' + t + '</g>';
+  }
+  // Vineyard parcels.
+  const parcels = [[130, 420, 170, 110, 'vn'], [330, 470, 150, 120, 'vn2'], [700, 300, 180, 120, 'vn'], [900, 440, 160, 130, 'vn2'], [560, 560, 140, 110, 'vn'], [180, 600, 180, 110, 'vn2']];
+  for (const [x, y, pw, ph, p] of parcels) {
+    const pts = [[x, y], [x + pw, y + (rnd() - 0.5) * 30], [x + pw + (rnd() - 0.5) * 30, y + ph], [x + (rnd() - 0.5) * 30, y + ph + (rnd() - 0.5) * 20]];
+    const d = 'M' + pts.map((q) => N(q[0]) + ' ' + N(q[1])).join('L') + 'Z';
+    b += '<path d="' + d + '" fill="#e6dcb6"/><path d="' + d + '" fill="url(#' + p + ')"/><path d="' + d + '" fill="none" stroke="#7d8a4c" stroke-width="1.5"/>';
+  }
+  // River with a tributary.
+  b += '<path d="M-20 360C200 330 300 420 480 400C660 380 760 250 940 270C1060 284 1140 230 1220 210" fill="none" stroke="#a9c6cc" stroke-width="26" stroke-linecap="round"/>' +
+    '<path d="M-20 360C200 330 300 420 480 400C660 380 760 250 940 270C1060 284 1140 230 1220 210" fill="none" stroke="#c9dde0" stroke-width="10" stroke-linecap="round"/>' +
+    '<path d="M610 170C640 230 600 300 640 370" fill="none" stroke="#a9c6cc" stroke-width="8" stroke-linecap="round"/>';
+  // Roads: main cased road and dashed lanes.
+  const road = 'M-20 720C240 660 420 700 600 640C780 580 900 620 1220 520';
+  b += '<path d="' + road + '" fill="none" stroke="#b49a72" stroke-width="18" stroke-linecap="round"/><path d="' + road + '" fill="none" stroke="#fff8ea" stroke-width="10" stroke-linecap="round"/>';
+  b += '<path d="M600 640C620 560 660 520 700 470M860 600C880 520 860 480 900 440" fill="none" stroke="#a88a62" stroke-width="4" stroke-dasharray="10 8"/>';
+  // Village houses.
+  let hs = '';
+  for (let i = 0; i < 22; i++) {
+    const x = 470 + rnd() * 220, y = 600 + rnd() * 80, s = 8 + rnd() * 8;
+    hs += '<rect x="' + N(x) + '" y="' + N(y) + '" width="' + N(s) + '" height="' + N(s * 0.8) + '" transform="rotate(' + Math.round(rnd() * 40 - 20) + ' ' + N(x) + ' ' + N(y) + ')"/>';
+  }
+  b += '<g fill="#a07a58">' + hs + '</g>';
+  // Route to the marani and the pin.
+  b += '<path d="M700 470C740 430 760 420 790 380" fill="none" stroke="#7a1f2b" stroke-width="5" stroke-dasharray="2 10" stroke-linecap="round"/>';
+  b += '<circle cx="800" cy="356" r="56" fill="#7a1f2b" opacity=".12"/><path d="M800 362C780 336 770 322 770 306A30 30 0 0 1 830 306C830 322 820 336 800 362Z" fill="#7a1f2b"/><circle cx="800" cy="306" r="11" fill="#f7f1e6"/>';
+  // Compass rose and scale bar.
+  b += '<g transform="translate(1100 700)"><circle r="44" fill="none" stroke="#8a7457" stroke-width="1.5"/><path d="M0 -40L9 0L0 40L-9 0Z" fill="#b08d43"/><path d="M-40 0L0 -7L40 0L0 7Z" fill="#8a7457" opacity=".6"/><path d="M0 -40L9 0L-9 0Z" fill="#7a1f2b"/></g>';
+  b += '<g transform="translate(60 750)"><rect width="60" height="10" fill="#3a2a1a"/><rect x="60" width="60" height="10" fill="#fff8ea" stroke="#3a2a1a"/><rect x="120" width="60" height="10" fill="#3a2a1a"/></g>';
+  b += '<rect width="' + w + '" height="' + h + '" fill="url(#pv)"/>';
+  return tplWnSvg(w, h, defs, b);
+}
+
+function tplWnSeal(seed = 1) {
+  const w = 240, h = 240;
+  const rnd = tplRand(tplHash('wn-seal:' + seed));
+  const defs = tplWnRad('wax', [[0, '#b32c3f'], [0.7, '#7d1626'], [1, '#55101b']], { cx: 0.4, cy: 0.35, r: 0.75 }) +
+    tplWnRad('gb', [[0, '#f0d79a'], [1, '#b08d43']], { cx: 0.4, cy: 0.35, r: 0.7 }) + tplWnLeafDefs();
+  let b = '<path d="' + tplWnBlob(rnd, 120, 120, 112, 0.05, 18) + '" fill="url(#wax)"/>';
+  b += '<circle cx="120" cy="120" r="84" fill="none" stroke="#4a0c16" stroke-width="5" opacity=".55"/><circle cx="120" cy="120" r="84" fill="none" stroke="#e0606f" stroke-width="1.5" opacity=".5" transform="translate(-1.5 -1.5)"/>';
+  let cl = '';
+  [4, 3, 2, 1].forEach((n, ri) => { for (let i = 0; i < n; i++) cl += '<circle cx="' + tplWnN(120 + (i - (n - 1) / 2) * 22) + '" cy="' + (108 + ri * 19) + '" r="10.5" fill="url(#gb)"/>'; });
+  b += tplWnLeaf(146, 92, 0.56, 38, '#d8b86a', '#7d1626') + cl + '<path d="M120 97q2 -24 -14 -36" fill="none" stroke="#d8b86a" stroke-width="5" stroke-linecap="round"/>';
+  b += '<path d="M54 92A72 72 0 0 1 112 46" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" opacity=".18"/>';
+  return tplWnSvg(w, h, defs, b);
+}
+
+function tplWnTexture() {
+  const w = 1600, h = 900;
+  const defs = tplWnRad('bg', [[0, '#4a1a26'], [0.6, '#2e0f17'], [1, '#1a070c']], { cx: 0.5, cy: 0.35, r: 0.85 }) + tplWnLeafDefs() +
+    '<pattern id="kv" width="200" height="240" patternUnits="userSpaceOnUse"><path d="' + tplWnKvevriPath(60, 30, 70, 100) + '" fill="none" stroke="#c9a04e" stroke-width="1.5"/>' +
+    '<g transform="translate(150 200) rotate(20) scale(.5)"><use href="#lf" fill="none" stroke="#c9a04e" stroke-width="3"/></g>' +
+    '<circle cx="150" cy="60" r="2" fill="#c9a04e"/><circle cx="20" cy="190" r="2" fill="#c9a04e"/></pattern>';
+  const b = '<rect width="' + w + '" height="' + h + '" fill="url(#bg)"/><rect width="' + w + '" height="' + h + '" fill="url(#kv)" opacity=".13"/>' +
+    '<rect width="' + w + '" height="' + h + '" fill="url(#bg)" opacity=".35"/>';
+  return tplWnSvg(w, h, defs, b);
+}
+
+// ---------- Artwork catalogue ----------
+
+const TPL_WN_BOTTLE_ART = {
+  saperavi: { shape: 'bordeaux', glass: 'dark', wine: '#5a0f22', label: '#f4ead8', band: '#7a1f2b', ink: '#2a1016', foil: '#6d1a2a', motif: 'cluster', bg: '#ecdcd0', prop: 'glass' },
+  rkatsiteli: { shape: 'burgundy', glass: 'clear', wine: '#d48a2e', label: '#f6efe2', band: '#5d6331', ink: '#2f2a1a', foil: '#b08d43', motif: 'leaf', bg: '#f1e3c8', prop: 'cluster', berry: ['#f0dc8a', '#c9a84a', '#8a7020'] },
+  mtsvane: { shape: 'burgundy', glass: 'clear', wine: '#e1b555', label: '#eef0e2', band: '#4f6b4a', ink: '#22301f', foil: '#5c7a52', motif: 'sun', bg: '#e6ead6', prop: 'glass' },
+  kisi: { shape: 'burgundy', glass: 'clear', wine: '#c7752c', label: '#1f1a17', band: '#c9a04e', ink: '#c9a04e', foil: '#8e1c2a', wax: '#8e1c2a', motif: 'ornament', seal: '#b08d43', bg: '#e7d9c6', prop: 'cluster', berry: ['#f0dc8a', '#c9a84a', '#8a7020'] },
+  khikhvi: { shape: 'burgundy', glass: 'clear', wine: '#b25e1f', label: '#efe0c2', band: '#3b0d18', ink: '#3b0d18', foil: '#1e1a1a', motif: 'kvevri', seal: '#9b2335', bg: '#e6d3b8', prop: 'glass' },
+  tavkveri: { shape: 'rhine', glass: 'clear', wine: '#e8918a', label: '#fbf6f1', band: '#c4566a', ink: '#5a2a30', foil: '#d98b8f', motif: 'flower', bg: '#f4e2dc', prop: 'cluster', berry: ['#e08a9a', '#9a3552', '#4a1226'] },
+};
+
+const TPL_WN_PORTRAIT_ART = {
+  levan: { skin: '#e2b48f', hair: '#d6d0c6', hairStyle: 'grey', mustache: '#d9d3ca', brow: '#bdb5a8', cloth: '#2f2a2c', accent: '#b08d43', chokha: true, hat: '#4a3a30', bg: ['#8a2a36', '#4a0f19'] },
+  nino: { skin: '#efc6a2', hair: '#3a2418', hairStyle: 'bun', cloth: '#f1e6d2', accent: '#7a1f2b', apron: true, earrings: '#c9a04e', bg: ['#d4b066', '#9c7a35'] },
+  giorgi: { skin: '#d9a47c', hair: '#2a1c14', hairStyle: 'short', beard: true, cloth: '#5d6331', accent: '#3c4220', bg: ['#e8dabd', '#c4ad82'] },
+  tamar: { skin: '#f0c9a8', hair: '#6a3418', hairStyle: 'long', cloth: '#7a1f2b', accent: '#5a1220', scarf: '#c9a04e', earrings: '#e3c27a', bg: ['#6f7a3a', '#3c4220'] },
+};
+
+/** Every artwork of the template as SVG markup, keyed by role. Deterministic. */
+function tplWnArtAll() {
+  const A = {
+    hero: tplWnLandscape({ w: 1600, h: 900, mode: 'dusk', seed: 1, horizon: 0.6, sunX: 0.7, houseX: 0.28 }),
+    night: tplWnLandscape({ w: 1600, h: 640, mode: 'night', seed: 5, horizon: 0.62, sunX: 0.8, houseX: 0.42, frameScale: 0.9 }),
+    texture: tplWnTexture(),
+    cellar: tplWnCellar(1),
+    kvevri: tplWnKvevriSection({ seed: 2 }),
+    terroir: tplWnTerroir(3),
+    map: tplWnMap(4),
+    seal: tplWnSeal(1),
+    gDawn: tplWnLandscape({ w: 800, h: 1000, mode: 'dawn', seed: 3, horizon: 0.36, sunX: 0.6, houseX: 0.72, frameScale: 1.25 }),
+    gYard: tplWnKvevriYard(1),
+    gCluster: tplWnClusterArt(1),
+    gSupra: tplWnSupra(1),
+    gChurchkhela: tplWnChurchkhela(1),
+    gGlass: tplWnAmberGlass(1),
+    gBasket: tplWnBasket(1),
+  };
+  for (const k of Object.keys(TPL_WN_BOTTLE_ART)) A['b_' + k] = tplWnBottle({ seed: k, ...TPL_WN_BOTTLE_ART[k] });
+  for (const k of Object.keys(TPL_WN_PORTRAIT_ART)) A['p_' + k] = tplWnPortrait({ seed: k, ...TPL_WN_PORTRAIT_ART[k] });
+  for (const k of ['laurel', 'rosette', 'shield', 'seal', 'hex']) A['m_' + k] = tplWnMedal(k);
+  return A;
+}
+
+// ---------- Template ----------
+
+/** Hero landscape (1600×900, dusk) without the cloud streaks that would cross the headline on the left. */
+function tplWnHeroArt() {
+  const svg = tplWnLandscape({ w: 1600, h: 900, mode: 'dusk', seed: 1, horizon: 0.6, sunX: 0.7, houseX: 0.28 });
+  const cloud = TPL_WN_LAND.dusk.cloud;
+  return svg.replace(/<rect x="(-?[\d.]+)" y="[\d.]+" width="([\d.]+)" height="[\d.]+" rx="[\d.]+" fill="([^"]+)"[^>]*\/>/g,
+    (m, x, w, fill) => (fill === cloud && +x + +w / 2 < 1600 * 0.6 ? '' : m));
+}
+
+/** i18n value in the template's languages (ka · en · ru). */
+function tplWnT(ka, en, ru) {
+  return { ka, en, ru };
+}
+
+/** Rich text: every argument becomes a paragraph (same paragraph structure in all three languages). */
+function tplWnP(ka, en, ru) {
+  const p = (a) => (Array.isArray(a) ? a : [a]).map((x) => '<p>' + x + '</p>').join('');
+  return { ka: p(ka), en: p(en), ru: p(ru) };
+}
+
+// Sample price list (ASCII PDF): the shop's wines, tastings and trade terms.
+const TPL_WN_PRICELIST = [
+  '> Tsitelvazi family marani - Kvemo Okromi, Kakheti, Georgia - prices in GEL, valid from 1 October 2026',
+  '',
+  '# Wines from kvevri (0.75 l)',
+  '- Saperavi 2022 - dry red, 12 months in kvevri ............ 52 GEL',
+  '- Rkatsiteli 2023 - amber, 6 months on the skins ............ 38 GEL',
+  '- Mtsvane Kakhuri 2023 - amber, 3 months on the skins ....... 42 GEL',
+  '- Kisi Reserve 2021 - amber, 9 months on the skins, 600 bottles .. 78 GEL',
+  '- Khikhvi 2022 - amber, 6 months on the skins ......... 64 GEL (was 72)',
+  '- Tavkveri Rose 2024 - 3 weeks on the skins, release in spring .. 34 GEL',
+  '',
+  '# Tastings and supra at the marani (per guest)',
+  '- Marani tasting: five wines, cellar tour, bread and cheese, 1.5 h ..... 45 GEL',
+  '- Supra in the vineyard: tasting and family dinner, 3.5 h ........... 140 GEL',
+  '- Rtveli harvest day (September - October): picking, pressing, lunch .. 180 GEL',
+  '',
+  '# Trade terms for restaurants and wine shops',
+  '- 6 bottles or more of one wine: 10% off; 36 bottles or more: 15% off',
+  '- Delivery in Tbilisi free from 300 GEL, across Georgia from 600 GEL',
+  '- Allocation of Kisi Reserve: up to 12 bottles per partner',
+  '',
+  'Orders: orders@tsitelvazi.example - phone +995 000 00 00 00 (daily 10:00-19:00).',
+  '',
+  '> Sample document of a fictional winery generated by the landing builder. Replace it with your own price list.',
+];
+
+function tplBuildWinery(V) {
+  const K = tplKit(V, ['ka', 'en', 'ru']);
+  const { B, L } = K;
+  const T = tplWnT;
+  const P = tplWnP;
+  const art = tplWnArtAll();
+  // Hero: keep the left part of the sky (behind the headline) free of cloud streaks.
+  art.hero = tplWnHeroArt();
+  const img = (key, name, title) => K.svg(name + '.svg', art[key], { title });
+
+  // ----- attachments -----
+  const aHero = img('hero', 'kakheti-dusk', T('ვენახები კავკასიონის ძირას, მზის ჩასვლისას', 'Vineyards below the Caucasus at dusk', 'Виноградники у подножия Кавказа на закате'));
+  const aSeal = img('seal', 'tsitelvazi-seal', T('წითელვაზის ბეჭედი', 'Tsitelvazi seal', 'Печать Цителвази'));
+  const aCellar = img('cellar', 'marani-cellar', T('მარანი: ქვევრების თავები იატაკში', 'The marani: kvevri mouths in the floor', 'Марани: горлышки квеври в полу'));
+  const aKvevri = img('kvevri', 'kvevri-section', T('ქვევრი ჭრილში: ღვინო ჭაჭაზე, მიწის ქვეშ', 'A kvevri in section: wine on the skins, under the earth', 'Квеври в разрезе: вино на мезге под землёй'));
+  const aTerroir = img('terroir', 'terroir', T('ნიადაგის ფენები ვენახის ქვეშ', 'Soil layers under the vineyard', 'Слои почвы под виноградником'));
+  const aMap = img('map', 'map-kvemo-okromi', T('როგორ მოგვაგნოთ', 'How to find us', 'Как нас найти'));
+  const aNight = img('night', 'kakheti-night', T('ვენახი მთვარიან ღამეს', 'The vineyard on a moonlit night', 'Виноградник в лунную ночь'));
+  const bottle = {};
+  for (const k of Object.keys(TPL_WN_BOTTLE_ART)) bottle[k] = img('b_' + k, 'bottle-' + k, T('ბოთლი', 'Bottle', 'Бутылка'));
+  const portrait = {};
+  for (const k of Object.keys(TPL_WN_PORTRAIT_ART)) portrait[k] = img('p_' + k, 'portrait-' + k, T('პორტრეტი', 'Portrait', 'Портрет'));
+  const medal = {};
+  for (const k of ['laurel', 'rosette', 'shield', 'hex']) medal[k] = img('m_' + k, 'award-' + k, T('ჯილდო', 'Award', 'Награда'));
+  const gal = {
+    gDawn: img('gDawn', 'gallery-dawn', T('დილის ნისლი ვენახზე', 'Morning mist over the vines', 'Утренний туман над лозами')),
+    gYard: img('gYard', 'gallery-kvevri-yard', T('ახალი ქვევრები ეზოში', 'New kvevri in the yard', 'Новые квеври во дворе')),
+    gCluster: img('gCluster', 'gallery-saperavi', T('საფერავის მტევანი', 'A cluster of Saperavi', 'Гроздь саперави')),
+    gSupra: img('gSupra', 'gallery-supra', T('სუფრა მარანში', 'Supra in the marani', 'Застолье в марани')),
+    gChurchkhela: img('gChurchkhela', 'gallery-churchkhela', T('ჩურჩხელები შრება', 'Churchkhela drying', 'Сушится чурчхела')),
+    gGlass: img('gGlass', 'gallery-amber-glass', T('ქარვისფერი ღვინო ფანჯარასთან', 'Amber wine by the window', 'Янтарное вино у окна')),
+    gBasket: img('gBasket', 'gallery-harvest-basket', T('რთველის კალათა', 'A harvest basket', 'Корзина урожая')),
+  };
+  const pdf = K.addAtt({
+    name: 'tsitelvazi-price-list-2026.pdf', mime: 'application/pdf',
+    data: K.files.makePDF('Tsitelvazi Marani - Price List 2026', TPL_WN_PRICELIST, { accent: '#7b2335', band: 'TSITELVAZI FAMILY MARANI - KAKHETI' }),
+    title: T('ფასების სია 2026', 'Price list 2026', 'Прайс-лист 2026'),
+    desc: T('ღვინოები, დეგუსტაციები და პირობები რესტორნებისთვის · PDF', 'Wines, tastings and trade terms for restaurants · PDF', 'Вина, дегустации и условия для ресторанов · PDF'),
+  });
+
+  // ----- configured requests (browser-local endpoints: zero network) -----
+  const rqLoad = { id: K.id(), name: 'Load cart', method: 'GET', url: 'local:cart/{cartId}', headers: [], credentials: 'omit', timeout: 8000, retries: 1, itemsPath: 'items' };
+  const rqSave = { id: K.id(), name: 'Save cart', method: 'PUT', url: 'local:cart/{cartId}', headers: [], credentials: 'omit', timeout: 8000, retries: 2, itemsPath: 'items' };
+  const rqOrder = { id: K.id(), name: 'Place order', method: 'POST', url: 'local:orders', headers: [], credentials: 'omit', timeout: 10000, retries: 2, itemsPath: 'items' };
+  const rqInbox = { id: K.id(), name: 'Visit request', method: 'POST', url: 'local:inbox', headers: [], credentials: 'omit', timeout: 10000, retries: 2, itemsPath: 'items' };
+
+  const field = (key, type, label, o = {}) => K.item({ key, type, label: L(label), ph: L(o.ph || ''), options: L(o.options || ''), required: !!o.required, half: !!o.half });
+
+  const d = K.doc({
+    name: 'Tsitelvazi — family kvevri winery',
+    preset: 'kvevri',
+    author: 'Tsitelvazi family marani',
+    keywords: 'kvevri, qvevri, Georgian wine, amber wine, Saperavi, Rkatsiteli, Kakheti, winery, wine tasting, marani',
+    title: T('წითელვაზი — საოჯახო მარანი კახეთში', 'Tsitelvazi — family kvevri winery in Kakheti', 'Цителвази — семейный марани в Кахетии'),
+    description: T(
+      'ქვევრის ღვინოები ოთხი თაობის მარნიდან: ღვინის მაღაზია მიწოდებით, დეგუსტაციები, სუფრა და რთველი ქვემო ოქრომში.',
+      'Kvevri wines from a four-generation family marani: online shop with delivery, tastings, supra dinners and harvest days in Kvemo Okromi.',
+      'Вина из квеври от семейного марани в четвёртом поколении: магазин с доставкой, дегустации, застолья и ртвели в Квемо Окроми.'),
+    theme: { scheme: 'auto' },
+    output: {
+      autodetect: true, switcher: 'select', langLabels: 'code', themeToggle: false, toolbarPos: 'nav', uiFallback: 'en',
+      motion: 'rise', backToTop: true,
+      ageGate: {
+        enabled: true, minAge: 18, noUrl: '',
+        title: T('18 წლის ხართ?', 'Are you 18 or older?', 'Вам уже есть 18?'),
+        text: T('საიტზე ღვინო იყიდება. გთხოვთ, დაადასტუროთ, რომ სრულწლოვანი ხართ.',
+          'This site sells wine. Please confirm that you are of legal drinking age.',
+          'На сайте продаётся вино. Пожалуйста, подтвердите, что вы совершеннолетний.'),
+        yes: T('დიახ, 18+ ვარ', 'Yes, I am 18+', 'Да, мне есть 18'),
+        no: T('არა', 'No', 'Нет'),
+      },
+    },
+    shop: {
+      currency: 'GEL', mode: 'cart', cartButton: 'auto', sync: 'remote', loadReq: rqLoad.id, saveReq: rqSave.id,
+      policy: 'newest', ttlDays: 30,
+      checkout: {
+        method: 'request', req: rqOrder.id, fallback: 'mailto', email: 'orders@tsitelvazi.example', phone: '+995 000 00 00 00',
+        minTotal: 0,
+        note: T('შეკვეთას ერთი სამუშაო დღის განმავლობაში ტელეფონით დაგიდასტურებთ. გადახდა — ნაღდი ფულით ან ბარათით, მიღებისას.',
+          'We call to confirm within one working day. Pay in cash or by card when the wine arrives.',
+          'Мы позвоним и подтвердим заказ в течение рабочего дня. Оплата наличными или картой при получении.'),
+        success: T('გმადლობთ! შეკვეთა მიღებულია — მალე დაგირეკავთ მიწოდების დასაზუსტებლად.',
+          'Thank you! Your order is in — we will call you shortly to arrange delivery.',
+          'Спасибо! Заказ принят — скоро позвоним, чтобы договориться о доставке.'),
+        fields: [
+          field('name', 'text', T('სახელი და გვარი', 'Full name', 'Имя и фамилия'), { required: true, half: true }),
+          field('phone', 'tel', T('ტელეფონი', 'Phone', 'Телефон'), { required: true, half: true, ph: '+995 …' }),
+          field('email', 'email', T('ელფოსტა', 'E-mail', 'E-mail'), { half: true }),
+          field('delivery', 'select', T('მიწოდება', 'Delivery', 'Доставка'), {
+            required: true, half: true,
+            options: T('თვითგატანა მარნიდან\nკურიერი თბილისში\nკურიერი საქართველოს მასშტაბით',
+              'Pick up at the marani\nCourier in Tbilisi\nCourier across Georgia',
+              'Самовывоз из марани\nКурьер по Тбилиси\nКурьер по Грузии'),
+          }),
+          field('address', 'textarea', T('მისამართი', 'Address', 'Адрес'), { ph: T('ქალაქი, ქუჩა, სახლი', 'City, street, house', 'Город, улица, дом') }),
+          field('adult', 'checkbox', T('ვადასტურებ, რომ 18 წლის ან მეტის ვარ', 'I confirm that I am 18 or older', 'Подтверждаю, что мне 18 лет или больше'), { required: true }),
+        ],
+      },
+    },
+    requests: [rqLoad, rqSave, rqOrder, rqInbox],
+  });
+  d.meta.ogImage = aHero;
+  d.meta.favicon = aSeal;
+
+  // ----- header -----
+  d.regions.header = [B('nav', {
+    brand: T('წითელვაზი', 'Tsitelvazi', 'Цителвази'), logo: aSeal, logoH: 40,
+    items: [
+      K.item({ label: L(T('ისტორია', 'Story', 'История')), href: '#story' }),
+      K.item({ label: L(T('ქვევრი', 'Kvevri', 'Квеври')), href: '#kvevri' }),
+      K.item({ label: L(T('დეგუსტაცია', 'Tastings', 'Дегустации')), href: '#tastings' }),
+      K.item({ label: L(T('კონტაქტი', 'Visit', 'Контакты')), href: '#visit' }),
+    ],
+    ctaLabel: T('ღვინის შეძენა', 'Shop wines', 'Купить вино'), ctaHref: '#wines',
+    sticky: true, overlay: true, variant: 'bar',
+  })];
+
+  // ----- main -----
+  const hero = B('hero', {
+    badge: T('2026 წლის რთველი უკვე ქვევრებშია', 'The 2026 harvest is already in the kvevri', 'Урожай 2026 года уже в квеври'),
+    eyebrow: T('საოჯახო მარანი · კახეთი · 1931 წლიდან', 'Family marani · Kakheti · since 1931', 'Семейный марани · Кахетия · с 1931 года'),
+    title: T('ღვინო, რომელმაც ზამთარი მიწაში გაატარა', 'Wine that spent the winter in the earth', 'Вино, которое зимовало в земле'),
+    text: P(
+      'ოთხი თაობის მარანი ქვემო ოქრომში. ყურძენს ხელით ვკრეფთ, ჭაჭასთან ერთად ქვევრში ვადუღებთ და გაზაფხულამდე მიწაში ვტოვებთ — ისე, როგორც ჩვენი წინაპრები აკეთებდნენ.',
+      'Four generations of winemaking in Kvemo Okromi. We pick by hand, ferment on the skins in clay kvevri and leave the wine under the earth until spring — the way our great-grandparents did.',
+      'Четыре поколения виноделов из Квемо Окроми. Собираем виноград вручную, бродим вместе с мезгой в глиняных квеври и оставляем вино в земле до весны — так, как делали наши прадеды.'),
+    items: [
+      K.btn(T('ღვინოების ნახვა', 'Explore the wines', 'Выбрать вино'), '#wines', 'primary', 'bottle'),
+      K.btn(T('დეგუსტაციის დაჯავშნა', 'Book a tasting', 'Забронировать дегустацию'), '#tastings', 'secondary', 'glass'),
+    ],
+    layout: 'left', bg: aHero, overlay: 30, height: 'screen', tone: 'dark',
+  });
+
+  const story = K.sec({
+    anchor: 'story', eyebrow: T('ჩვენი ისტორია', 'Our story', 'Наша история'),
+    title: T('ერთი ოჯახი, ერთი მარანი, ოთხი თაობა', 'One family, one marani, four generations', 'Одна семья, один марани, четыре поколения'),
+    shape: 'none', pad: 'l',
+  }, [
+    B('columns', {
+      gap: 64, valign: 'center',
+      cols: [
+        { id: K.id(), w: 44, blocks: [B('image', { att: aCellar, ratio: '3/4', fit: 'cover', shape: 'rounded', zoom: true, caption: L(T('მარანი 1931 წლიდან: ცხრა პირველი ქვევრი დღესაც მუშაობს', 'The marani since 1931: the first nine kvevri are still in use', 'Марани с 1931 года: первые девять квеври всё ещё в работе')) })] },
+        { id: K.id(), w: 56, blocks: [
+          K.text(P(
+            ['მარანი 1931 წელს ჩვენმა დიდმა ბაბუამ, შალვამ ააშენა: ქვის კედლები, მუხის კოჭები და ცხრა ქვევრი, რომლებიც დღემდე მიწაშია ჩაფლული. დღეს მარანში ორმოცდაორი ქვევრია, ვენახი კი ალაზნის ველზე სამ ჰექტარზე მეტია.',
+              'ვმუშაობთ მცირე პარტიებით, ბუნებრივ საფუარზე, ფილტრაციისა და დანამატების გარეშე. ყოველ ბოთლს ხელით ვავსებთ, ეტიკეტზე კი იმ ქვევრის ნომერს ვწერთ, რომელშიც ღვინო დაიბადა.'],
+            ['Our great-grandfather Shalva built the marani in 1931: stone walls, oak beams and nine kvevri that are still buried in the floor. Today the cellar holds forty-two kvevri, and the vineyard covers more than three hectares of the Alazani valley.',
+              'We work in small batches with wild yeast, without filtration or additives. Every bottle is filled by hand, and its label carries the number of the kvevri the wine was born in.'],
+            ['Марани построил в 1931 году наш прадед Шалва: каменные стены, дубовые балки и девять квеври, которые до сих пор закопаны в пол. Сегодня в погребе сорок два квеври, а виноградник занимает больше трёх гектаров в Алазанской долине.',
+              'Мы работаем небольшими партиями, на диких дрожжах, без фильтрации и добавок. Каждую бутылку разливаем вручную, а на этикетке пишем номер квеври, в котором родилось вино.']), { size: 'l' }),
+          B('quote', {
+            variant: 'pull', tone: 'accent',
+            html: P('ქვევრი არასდროს ჩქარობს. ჩვენი საქმეა, მას ჯანსაღი ყურძენი მივუტანოთ — და მერე ხელი არ შევუშალოთ.',
+              'A kvevri is never in a hurry. Our job is to bring it healthy grapes — and then not to get in its way.',
+              'Квеври никуда не спешит. Наше дело — принести ему здоровый виноград, а потом не мешать.'),
+            author: T('ლევან ვაზაგაშვილი, მეღვინე', 'Levan Vazagashvili, winemaker', 'Леван Вазагашвили, винодел'),
+          }),
+        ] },
+      ],
+    }),
+    B('spacer', { h: 24 }),
+    B('stats', {
+      variant: 'band', columns: 4,
+      items: [
+        K.item({ value: '4', suffix: L(''), label: L(T('თაობა მარანში', 'generations in the marani', 'поколения в марани')) }),
+        K.item({ value: '42', suffix: L(''), label: L(T('ქვევრი მიწის ქვეშ', 'kvevri under the earth', 'квеври под землёй')) }),
+        K.item({ value: '6', suffix: L(''), label: L(T('ქართული ვაზის ჯიში', 'Georgian grape varieties', 'грузинских сортов винограда')) }),
+        K.item({ value: '70', suffix: L('+'), label: L(T('წლისაა ჩვენი უხნესი ვაზები', 'years — our oldest vines', 'лет нашим старейшим лозам')) }),
+      ],
+    }),
+  ]);
+
+  const history = K.sec({
+    tone: 'muted', align: 'center', width: 'normal', shape: 'ornament',
+    eyebrow: T('მატიანე', 'Chronicle', 'Хроника'),
+    title: T('მარნის ცხოვრება წლების განმავლობაში', 'The marani through the years', 'Жизнь марани сквозь годы'),
+  }, [B('timeline', {
+    variant: 'alternate',
+    items: [
+      K.item({ date: '1931', title: L(T('მარანი და პირველი ცხრა ქვევრი', 'The marani and its first nine kvevri', 'Марани и первые девять квеври')),
+        html: L(P('შალვა ვაზაგაშვილი სახლის ქვეშ მარანს აშენებს და იმერელი მეთუნისგან ცხრა ქვევრს ყიდულობს.',
+          'Shalva Vazagashvili builds a cellar under the house and buys nine kvevri from a potter in Imereti.',
+          'Шалва Вазагашвили строит погреб под домом и покупает девять квеври у гончара из Имерети.')), image: null }),
+      K.item({ date: '1958', title: L(T('საფერავი გორაკზე', 'Saperavi on the hillside', 'Саперави на склоне')),
+        html: L(P('ბაბუა ილია გორაკზე საფერავს რგავს. ეს ვაზები დღესაც გვაძლევს ჩვენს საუკეთესო ყურძენს.',
+          'Grandfather Ilia plants Saperavi on the hillside. These vines still give us our best grapes.',
+          'Дед Илья сажает саперави на склоне. Эти лозы до сих пор дают нам лучший виноград.')), image: null }),
+      K.item({ date: '1994', title: L(T('არცერთი გამოტოვებული რთველი', 'Not a single vintage missed', 'Ни одного пропущенного урожая')),
+        html: L(P('ყველაზე რთულ წლებშიც მარანი არ გაჩერებულა — ღვინოს ოჯახისა და მეზობლებისთვის ვაყენებდით.',
+          'Even in the hardest years the marani kept working — we made wine for the family and the neighbours.',
+          'Даже в самые тяжёлые годы марани не останавливался — мы делали вино для семьи и соседей.')), image: null }),
+      K.item({ date: '2013', title: L(T('ქვევრი — მსოფლიო მემკვიდრეობა', 'Kvevri becomes world heritage', 'Квеври — мировое наследие')),
+        html: L(P('ქვევრში ღვინის დაყენების ქართული წესი UNESCO-ს არამატერიალური კულტურული მემკვიდრეობის ნუსხაში შედის.',
+          'The Georgian kvevri winemaking method is inscribed on UNESCO’s list of intangible cultural heritage.',
+          'Грузинский способ виноделия в квеври вносят в список нематериального культурного наследия ЮНЕСКО.')), image: null }),
+      K.item({ date: '2019', title: L(T('საკუთარი ეტიკეტი', 'Our own label', 'Собственная этикетка')),
+        html: L(P('პირველი 1 200 ბოთლი საფერავი და რქაწითელი წითელვაზის სახელით.',
+          'The first 1,200 bottles of Saperavi and Rkatsiteli under the Tsitelvazi name.',
+          'Первые 1 200 бутылок саперави и ркацители под именем Цителвази.')), image: null }),
+      K.item({ date: '2024', title: L(T('კარი სტუმრებისთვის ღიაა', 'Doors open to guests', 'Двери открыты для гостей')),
+        html: L(P('დეგუსტაციები, ოჯახური სუფრა და რთველის დღეები — მარანში ახლა სტუმრებსაც ვხვდებით.',
+          'Tastings, family supra dinners and harvest days — the marani now welcomes guests.',
+          'Дегустации, семейные застолья и дни ртвели — теперь марани принимает гостей.')), image: null }),
+    ],
+  })]);
+
+  const kvevri = K.sec({
+    anchor: 'kvevri', eyebrow: T('ქვევრის გზა', 'The kvevri way', 'Путь квеври'),
+    title: T('რვა ათასი წლის ტექნოლოგია, ჩვენს მარანში', 'An eight-thousand-year-old method, in our cellar', 'Восьмитысячелетний метод в нашем погребе'),
+    lead: P('ქვევრი თიხის დიდი ჭურჭელია, შიგნიდან ფუტკრის ცვილით დაფარული და კისრამდე მიწაში ჩაფლული. მიწა ღვინოს მთელი ზამთარი ერთნაირ, გრილ ტემპერატურაზე ინახავს.',
+      'A kvevri is a large clay vessel, lined with beeswax and buried in the ground up to its neck. The earth keeps the wine at the same cool temperature all winter long.',
+      'Квеври — большой глиняный сосуд, изнутри покрытый пчелиным воском и закопанный в землю по самое горло. Земля всю зиму держит вино при одной и той же прохладной температуре.'),
+  }, [
+    B('columns', {
+      gap: 64, valign: 'top',
+      cols: [
+        { id: K.id(), w: 46, blocks: [B('image', { att: aKvevri, ratio: '3/4', fit: 'cover', shape: 'rounded', caption: L(T('ქვევრი ჭრილში: ჭაჭა ძირში ილექება, ღვინო კი თანდათან იწმინდება', 'A kvevri in section: the skins settle into the cone and the wine slowly clears', 'Квеври в разрезе: мезга оседает в конус, а вино постепенно светлеет')) })] },
+        { id: K.id(), w: 54, blocks: [B('steps', {
+          variant: 'line',
+          items: [
+            K.item({ title: L(T('რთველი', 'Rtveli — the harvest', 'Ртвели — сбор урожая')), icon: '', html: L(P(
+              'სექტემბერ-ოქტომბერში ყურძენს ხელით ვკრეფთ, დილაადრიან, სანამ გრილა.',
+              'In September and October we pick by hand, early in the morning while it is still cool.',
+              'В сентябре и октябре собираем виноград вручную, рано утром, пока прохладно.')) }),
+            K.item({ title: L(T('საწნახელი', 'The satsnakheli', 'Сацнахели')), icon: '', html: L(P(
+              'ყურძენს ხის საწნახელში ვწურავთ; ტკბილი, კანი და წიპწა ერთად მიდის ქვევრში.',
+              'Grapes are crushed in a wooden press; juice, skins and seeds go into the kvevri together.',
+              'Виноград давят в деревянном сацнахели; сок, кожица и косточки вместе идут в квеври.')) }),
+            K.item({ title: L(T('დუღილი ჭაჭაზე', 'Fermenting on the skins', 'Брожение на мезге')), icon: '', html: L(P(
+              'დუღილს ბუნებრივი საფუარი იწყებს. დღეში ორჯერ ჭაჭის ქუდს ხის ჯოხით ვურევთ.',
+              'Wild yeasts start the fermentation. Twice a day we punch down the cap of skins with a wooden paddle.',
+              'Брожение запускают дикие дрожжи. Дважды в день перемешиваем шапку мезги деревянной лопаткой.')) }),
+            K.item({ title: L(T('დახურვა', 'Sealing', 'Запечатывание')), icon: '', html: L(P(
+              'დუღილის შემდეგ ქვევრს ვავსებთ, ქვის სარქველით ვხურავთ, თიხით ვლესავთ და მიწას ვაყრით.',
+              'Once fermentation ends we top the kvevri up, close it with a stone lid, seal it with clay and cover it with earth.',
+              'После брожения доливаем квеври, закрываем каменной крышкой, обмазываем глиной и засыпаем землёй.')) }),
+            K.item({ title: L(T('ზამთარი მიწაში', 'Winter underground', 'Зимовка в земле')), icon: '', html: L(P(
+              'ხუთ-ექვს თვეს ღვინო 13–15 °C-ზე ისვენებს, ჭაჭა კი ქვევრის წვეტიან ძირში ილექება.',
+              'For five to six months the wine rests at 13–15 °C while skins and seeds sink into the pointed base.',
+              'Пять-шесть месяцев вино отдыхает при 13–15 °C, а мезга оседает в остроконечное дно.')) }),
+            K.item({ title: L(T('გახსნა და ჩამოსხმა', 'Opening and bottling', 'Вскрытие и розлив')), icon: '', html: L(P(
+              'გაზაფხულზე ქვევრს ვხსნით, სუფთა ღვინოს ლექიდან ვიღებთ და ფილტრაციის გარეშე ვასხამთ.',
+              'In spring we open the kvevri, draw the clear wine off the lees and bottle it unfiltered.',
+              'Весной вскрываем квеври, снимаем чистое вино с осадка и разливаем без фильтрации.')) }),
+          ],
+        })] },
+      ],
+    }),
+  ]);
+
+  const terroir = K.sec({
+    tone: 'muted', eyebrow: T('ტერუარი', 'Terroir', 'Терруар'),
+    title: T('ალუვიური თიხა, კირქვა და კავკასიონის სუნთქვა', 'Alluvial clay, limestone and the breath of the Caucasus', 'Аллювиальная глина, известняк и дыхание Кавказа'),
+  }, [B('columns', {
+    gap: 56, valign: 'center',
+    cols: [
+      { id: K.id(), w: 52, blocks: [B('features', {
+        variant: 'icons', columns: 2,
+        items: [
+          K.item({ icon: 'mountain', image: null, title: L(T('კავკასიონი ზურგს უკან', 'The Caucasus at our back', 'Кавказ за спиной')), html: L(P(
+            'მთიდან ჩამოსული ღამის სიგრილე ცხელ ზაფხულშიც ინარჩუნებს ყურძნის სიმჟავეს.',
+            'Cool night air from the mountains keeps the grapes fresh and lively even in hot summers.',
+            'Ночная прохлада с гор сохраняет кислотность винограда даже жарким летом.')) }),
+          K.item({ icon: 'drop', image: null, title: L(T('ალაზნის ველი', 'The Alazani valley', 'Алазанская долина')), html: L(P(
+            'ღრმა ალუვიური ნიადაგი და კენჭები აგვისტოშიც ინახავს ტენს ვაზის ფესვებისთვის.',
+            'Deep alluvial soils full of river pebbles hold moisture for the roots right through August.',
+            'Глубокие аллювиальные почвы с речной галькой держат влагу для корней даже в августе.')) }),
+          K.item({ icon: 'leaf', image: null, title: L(T('ორგანული ვენახი', 'Organic farming', 'Органическое хозяйство')), html: L(P(
+            'ჰერბიციდების გარეშე: მხოლოდ სპილენძი და გოგირდი, მწვანე საფარი რიგებს შორის, ზამთარში კი ცხვარი ძოვს.',
+            'No herbicides: only copper and sulphur, cover crops between the rows, and sheep grazing in winter.',
+            'Без гербицидов: только медь и сера, травы между рядами, а зимой там пасутся овцы.')) }),
+          K.item({ icon: 'sun', image: null, title: L(T('ძველი ვაზები', 'Old vines', 'Старые лозы')), html: L(P(
+            'საფერავის ზოგი ვაზი 70 წელზე მეტისაა: მცირე მოსავალი, მაგრამ კონცენტრირებული ყურძენი.',
+            'Some of our Saperavi vines are over 70 years old: small yields of wonderfully concentrated grapes.',
+            'Некоторым лозам саперави больше 70 лет: урожай небольшой, но очень концентрированный.')) }),
+        ],
+      })] },
+      { id: K.id(), w: 48, blocks: [B('image', { att: aTerroir, ratio: '1/1', fit: 'cover', shape: 'rounded', caption: L(T('ჩვენი ვენახის ნიადაგის ჭრილი: თიხა, ქვიშა და კირქვა', 'A cut through our vineyard: clay, sand and limestone', 'Разрез почвы нашего виноградника: глина, песок и известняк')) })] },
+    ],
+  })]);
+
+  const wineItem = (sku, key, name, html, specs, price, o = {}) => K.item({
+    sku, name: L(name), html: L(html), price, old: o.old ?? null, unit: L(T('ბოთლი 0,75 ლ', 'bottle 0.75 l', 'бутылка 0,75 л')),
+    image: bottle[key], badge: L(o.badge || ''), specs: L(specs), min: 1, step: 1, stock: o.stock || 'in',
+  });
+  const wines = K.sec({
+    anchor: 'wines', eyebrow: T('მარნის მაღაზია', 'Marani shop', 'Магазин марани'),
+    title: T('ჩვენი ღვინოები', 'Our wines', 'Наши вина'),
+    lead: P('პირდაპირ მარნიდან: მიწოდება თბილისში 1–2 დღეში, საქართველოს მასშტაბით — 2–4 დღეში. გადახდა მიღებისას.',
+      'Straight from the marani: delivery in Tbilisi in 1–2 days and across Georgia in 2–4 days. You pay on delivery.',
+      'Прямо из марани: доставка по Тбилиси за 1–2 дня, по Грузии — за 2–4 дня. Оплата при получении.'),
+    pad: 'l',
+  }, [
+    B('products', {
+      variant: 'cards', columns: 3, ratio: '1/1', qty: true, buy: L(T('კალათაში', 'Add to cart', 'В корзину')),
+      items: [
+        wineItem('wn-saperavi-2022', 'saperavi', T('საფერავი 2022', 'Saperavi 2022', 'Саперави 2022'),
+          P('მუქი ალუბალი, შავი ქლიავი და ტყის ნიადაგი; მკვრივი, ხავერდოვანი ტანინი.',
+            'Dark cherry, black plum and forest floor; firm, velvety tannins.',
+            'Тёмная вишня, чёрная слива и лесная подстилка; плотные бархатистые танины.'),
+          T('ტიპი: წითელი მშრალი\nქვევრში: 12 თვე\nალკოჰოლი: 13,5%', 'Style: dry red\nIn kvevri: 12 months\nAlcohol: 13.5%', 'Тип: красное сухое\nВ квеври: 12 месяцев\nАлкоголь: 13,5%'), 52),
+        wineItem('wn-rkatsiteli-2023', 'rkatsiteli', T('რქაწითელი 2023', 'Rkatsiteli 2023', 'Ркацители 2023'),
+          P('ქარვისფერი: ჩირი, კომში და კაკლის კანი; ცოცხალი, ოდნავ მომჭკნარი დაბოლოება.',
+            'Amber: dried apricot, quince and walnut skin; a lively, gently grippy finish.',
+            'Янтарное: курага, айва и кожица грецкого ореха; живое, слегка терпкое послевкусие.'),
+          T('ტიპი: ქარვისფერი მშრალი\nჭაჭაზე: 6 თვე\nალკოჰოლი: 12,5%', 'Style: dry amber\nOn the skins: 6 months\nAlcohol: 12.5%', 'Тип: янтарное сухое\nНа мезге: 6 месяцев\nАлкоголь: 12,5%'), 38),
+        wineItem('wn-mtsvane-2023', 'mtsvane', T('მწვანე კახური 2023', 'Mtsvane Kakhuri 2023', 'Мцване Кахури 2023'),
+          P('ოქროსფერი და ყვავილოვანი: აკაცია, მსხალი და თაფლის ნოტი.',
+            'Golden and floral: acacia blossom, ripe pear and a touch of honey.',
+            'Золотистое и цветочное: акация, спелая груша и нотка мёда.'),
+          T('ტიპი: ქარვისფერი მშრალი\nჭაჭაზე: 3 თვე\nალკოჰოლი: 12,5%', 'Style: dry amber\nOn the skins: 3 months\nAlcohol: 12.5%', 'Тип: янтарное сухое\nНа мезге: 3 месяца\nАлкоголь: 12,5%'), 42),
+        wineItem('wn-kisi-2021', 'kisi', T('ქისი რეზერვი 2021', 'Kisi Reserve 2021', 'Киси Резерв 2021'),
+          P('ჩვენი ყველაზე იშვიათი ღვინო: გარგრის კურკა, შავი ჩაი და ბოლის ნოტი. სულ 600 ბოთლი.',
+            'Our rarest amber wine: apricot kernel, black tea and a wisp of smoke. Only 600 bottles.',
+            'Самое редкое наше вино: абрикосовая косточка, чёрный чай и лёгкий дымок. Всего 600 бутылок.'),
+          T('ტიპი: ქარვისფერი მშრალი\nჭაჭაზე: 9 თვე\nალკოჰოლი: 13%', 'Style: dry amber\nOn the skins: 9 months\nAlcohol: 13%', 'Тип: янтарное сухое\nНа мезге: 9 месяцев\nАлкоголь: 13%'), 78,
+          { stock: 'low', badge: T('შეზღუდული', 'Limited', 'Лимитированное') }),
+        wineItem('wn-khikhvi-2022', 'khikhvi', T('ხიხვი 2022', 'Khikhvi 2022', 'Хихви 2022'),
+          P('მწიფე ატამი, ზაფრანა და მშრალი ბალახები; გრძელი, ოდნავ მარილიანი დაბოლოება.',
+            'Ripe peach, saffron and dried herbs; a long, faintly saline finish.',
+            'Спелый персик, шафран и сухие травы; долгое, чуть солоноватое послевкусие.'),
+          T('ტიპი: ქარვისფერი მშრალი\nჭაჭაზე: 6 თვე\nალკოჰოლი: 13%', 'Style: dry amber\nOn the skins: 6 months\nAlcohol: 13%', 'Тип: янтарное сухое\nНа мезге: 6 месяцев\nАлкоголь: 13%'), 64,
+          { old: 72 }),
+        wineItem('wn-tavkveri-2024', 'tavkveri', T('თავკვერი როზე 2024', 'Tavkveri Rosé 2024', 'Тавквери розе 2024'),
+          P('სპილენძისფერ-ვარდისფერი: მარწყვი და ბროწეული. გამოვა გაზაფხულზე — დაჯავშნეთ წინასწარ.',
+            'Copper-pink, wild strawberry and pomegranate. Released in spring — reserve yours now.',
+            'Медно-розовое: земляника и гранат. Выйдет весной — бронируйте заранее.'),
+          T('ტიპი: ვარდისფერი მშრალი\nჭაჭაზე: 3 კვირა\nალკოჰოლი: 12%', 'Style: dry rosé\nOn the skins: 3 weeks\nAlcohol: 12%', 'Тип: розовое сухое\nНа мезге: 3 недели\nАлкоголь: 12%'), 34,
+          { stock: 'pre', badge: T('ახალი', 'New', 'Новинка') }),
+      ],
+    }),
+    B('spacer', { h: 16 }),
+    B('embed', {
+      att: pdf, display: 'card', player: 'object', dl: true, op: true,
+      caption: L(T('ფასების სია 2026 — რესტორნებისა და ღვინის მაღაზიებისთვის', 'Price list 2026 — also for restaurants and wine shops', 'Прайс-лист 2026 — в том числе для ресторанов и винотек')),
+    }),
+  ]);
+
+  const order = K.sec({
+    anchor: 'order', tone: 'muted', width: 'normal',
+    eyebrow: T('შეკვეთა', 'Checkout', 'Оформление'),
+    title: T('თქვენი კალათა', 'Your cart', 'Ваша корзина'),
+  }, [B('cart', {
+    title: L(''),
+    text: L(P('კალათა ამ მოწყობილობაზე ინახება — შეგიძლიათ მოგვიანებით დაბრუნდეთ და შეკვეთა დაასრულოთ.',
+      'Your cart is saved on this device — come back any time to finish the order.',
+      'Корзина сохраняется на этом устройстве — можно вернуться позже и закончить заказ.')),
+    form: true,
+  })]);
+
+  const tastings = K.sec({
+    anchor: 'tastings', eyebrow: T('სტუმრობა მარანში', 'Visit the marani', 'В гостях у марани'),
+    title: T('დეგუსტაცია და სუფრა', 'Tastings and supra', 'Дегустации и застолье'),
+    lead: P('აირჩიეთ ფორმატი ნებისმიერი დღისთვის (დაჯავშნა ერთი დღით ადრე) ან განსაკუთრებული საღამო კალენდრიდან. ადგილი დაამატეთ კალათაში — დრო ტელეფონით შევათანხმოთ.',
+      'Choose a format for any day (book one day ahead) or a special evening from the calendar. Add your places to the cart — we will call to agree on the time.',
+      'Выберите формат на любой день (бронь за день) или особый вечер из календаря. Добавьте места в корзину — время согласуем по телефону.'),
+    pad: 'l',
+  }, [
+    B('pricing', {
+      columns: 3,
+      items: [
+        K.item({ name: L(T('მარნის დეგუსტაცია', 'Marani tasting', 'Дегустация в марани')), price: 45, period: L(T('სტუმარზე', 'per guest', 'с гостя')), featured: false,
+          label: L(T('დაჯავშნა', 'Book', 'Забронировать')), href: '', sku: 'tour-tasting',
+          html: L({
+            ka: '<ul><li>ხუთი ღვინო პირდაპირ ქვევრიდან</li><li>ექსკურსია მარანსა და ვენახში</li><li>შოთის პური, გუდის ყველი და მწვანილი</li><li>1,5 საათი · 2–12 სტუმარი</li></ul>',
+            en: '<ul><li>Five wines straight from the kvevri</li><li>A walk through the marani and the vineyard</li><li>Shoti bread, sheep’s cheese and herbs</li><li>1.5 hours · 2–12 guests</li></ul>',
+            ru: '<ul><li>Пять вин прямо из квеври</li><li>Прогулка по марани и винограднику</li><li>Хлеб шоти, овечий сыр и зелень</li><li>1,5 часа · 2–12 гостей</li></ul>',
+          }) }),
+        K.item({ name: L(T('სუფრა ვენახში', 'Supra in the vineyard', 'Застолье в винограднике')), price: 140, period: L(T('სტუმარზე', 'per guest', 'с гостя')), featured: true,
+          label: L(T('მაგიდის დაჯავშნა', 'Book a table', 'Забронировать стол')), href: '', sku: 'tour-supra',
+          html: L({
+            ka: '<ul><li>დეგუსტაცია და ოჯახური ვახშამი ნინოს სამზარეულოდან</li><li>მწვადი ვაზის ნასხლავზე, ხინკალი, ფხალი</li><li>თამადა, სადღეგრძელოები და ძველი სიმღერები</li><li>3,5 საათი · 4–20 სტუმარი</li></ul>',
+            en: '<ul><li>Tasting and a family dinner from Nino’s kitchen</li><li>Mtsvadi grilled over vine cuttings, khinkali, pkhali</li><li>A tamada, toasts and old songs</li><li>3.5 hours · 4–20 guests</li></ul>',
+            ru: '<ul><li>Дегустация и семейный ужин из кухни Нино</li><li>Мцвади на виноградной лозе, хинкали, пхали</li><li>Тамада, тосты и старые песни</li><li>3,5 часа · 4–20 гостей</li></ul>',
+          }) }),
+        K.item({ name: L(T('რთველის დღე', 'Rtveli harvest day', 'День ртвели')), price: 180, period: L(T('სტუმარზე', 'per guest', 'с гостя')), featured: false,
+          label: L(T('დაჯავშნა', 'Book', 'Забронировать')), href: '', sku: 'tour-rtveli',
+          html: L({
+            ka: '<ul><li>მხოლოდ სექტემბერ-ოქტომბერში</li><li>ყურძნის კრეფა და დაწურვა საწნახელში</li><li>სადილი ვენახში და ჩურჩხელის მასტერკლასი</li><li>მთელი დღე · ტრანსფერი თბილისიდან</li></ul>',
+            en: '<ul><li>September and October only</li><li>Pick grapes and tread them in the satsnakheli</li><li>Lunch in the vineyard and a churchkhela workshop</li><li>A full day · transfer from Tbilisi</li></ul>',
+            ru: '<ul><li>Только в сентябре и октябре</li><li>Сбор винограда и давка в сацнахели</li><li>Обед в винограднике и мастер-класс по чурчхеле</li><li>Целый день · трансфер из Тбилиси</li></ul>',
+          }) }),
+      ],
+    }),
+    B('spacer', { h: 40 }),
+    K.head(T('მოვლენების კალენდარი', 'Upcoming evenings', 'Ближайшие события'), 3, { eyebrow: L(T('ბილეთები', 'Tickets', 'Билеты')) }),
+    B('events', {
+      variant: 'list', hidePast: false,
+      items: [
+        K.item({ date: '2026-10-24', time: '18:00', title: L(T('ახალი ღვინის საღამო', 'Young wine evening', 'Вечер молодого вина')),
+          venue: L(T('წითელვაზის მარანი', 'Tsitelvazi marani', 'Марани Цителвази')), city: L(T('ქვემო ოქრომი', 'Kvemo Okromi', 'Квемо Окроми')),
+          href: '', price: 60, sku: 'ev-young-wine', status: 'few' }),
+        K.item({ date: '2026-11-14', time: '19:30', title: L(T('ქარვისფერი ღვინოები და კახური ყველი', 'Amber wines and Kakhetian cheese', 'Янтарные вина и кахетинский сыр')),
+          venue: L(T('სოლოლაკის ღვინის ოთახი', 'Sololaki Wine Room', 'Винная комната Сололаки')), city: L(T('თბილისი', 'Tbilisi', 'Тбилиси')),
+          href: '', price: 75, sku: 'ev-amber-cheese', status: 'on' }),
+        K.item({ date: '2026-12-19', time: '15:00', title: L(T('ზამთრის სუფრა: ჩურჩხელა და ცხელი ღვინო', 'Winter supra: churchkhela and mulled wine', 'Зимнее застолье: чурчхела и глинтвейн')),
+          venue: L(T('წითელვაზის მარანი', 'Tsitelvazi marani', 'Марани Цителвази')), city: L(T('ქვემო ოქრომი', 'Kvemo Okromi', 'Квемо Окроми')),
+          href: '', price: 90, sku: 'ev-winter-supra', status: 'on' }),
+        K.item({ date: '2027-02-27', time: '12:00', title: L(T('ქვევრის გახსნის დღე', 'Kvevri opening day', 'День вскрытия квеври')),
+          venue: L(T('წითელვაზის მარანი', 'Tsitelvazi marani', 'Марани Цителвази')), city: L(T('ქვემო ოქრომი', 'Kvemo Okromi', 'Квемо Окроми')),
+          href: '', price: 55, sku: 'ev-kvevri-opening', status: 'on' }),
+        K.item({ date: '2027-05-15', time: '11:00', title: L(T('გაზაფხულის ქვევრის ბაზრობა', 'Spring kvevri fair', 'Весенняя ярмарка квеври')),
+          venue: L(T('ძველი ქალაქის მოედანი', 'Old Town Square', 'Площадь Старого города')), city: L(T('თელავი', 'Telavi', 'Телави')),
+          href: '', price: 25, sku: 'ev-spring-fair', status: 'on' }),
+      ],
+    }),
+  ]);
+
+  const awards = K.sec({
+    tone: 'muted', align: 'center', eyebrow: T('აღიარება', 'Recognition', 'Признание'),
+    title: T('ჯილდოები და შეფასებები', 'Awards and reviews', 'Награды и отзывы'), shape: 'ornament',
+  }, [
+    B('features', {
+      variant: 'cards', columns: 4,
+      items: [
+        K.item({ icon: '', image: medal.laurel, title: L(T('ოქროს მედალი', 'Gold medal', 'Золотая медаль')), html: L(P(
+          'ქვევრის ღვინის კონკურსი 2025 · ქისი რეზერვი 2021', 'Kvevri Wine Contest 2025 · Kisi Reserve 2021', 'Конкурс вин из квеври 2025 · Киси Резерв 2021')) }),
+        K.item({ icon: '', image: medal.rosette, title: L(T('94 ქულა', '94 points', '94 балла')), html: L(P(
+          'Amber Wine Review · რქაწითელი 2023', 'Amber Wine Review · Rkatsiteli 2023', 'Amber Wine Review · Ркацители 2023')) }),
+        K.item({ icon: '', image: medal.shield, title: L(T('საუკეთესო საფერავი', 'Best Saperavi', 'Лучший саперави')), html: L(P(
+          'კახელ მეღვინეთა გილდია · 2024', 'Kakheti Winemakers’ Guild · 2024', 'Гильдия виноделов Кахетии · 2024')) }),
+        K.item({ icon: '', image: medal.hex, title: L(T('ორგანული ვენახი', 'Organic vineyard', 'Органический виноградник')), html: L(P(
+          'სერტიფიცირებულია 2022 წლიდან', 'Certified since 2022', 'Сертифицирован с 2022 года')) }),
+      ],
+    }),
+    B('spacer', { h: 32 }),
+    B('testimonials', {
+      variant: 'cards', columns: 3,
+      items: [
+        K.item({ rating: 5, photo: null,
+          html: L(P('ქისი რეზერვი გარგრის კურკის, შავი ჩაისა და ბოლის სურნელით — ალაზნის ველის ერთ-ერთი ყველაზე გულწრფელი ქარვისფერი ღვინო.',
+            'Kisi Reserve smells of apricot kernels, black tea and smoke — one of the most honest amber wines of the Alazani valley.',
+            'Киси Резерв пахнет абрикосовой косточкой, чёрным чаем и дымком — одно из самых честных янтарных вин Алазанской долины.')),
+          name: L(T('ანა ლომთაძე', 'Ana Lomtadze', 'Ана Ломтадзе')), role: L(T('Amber Wine Review', 'Amber Wine Review', 'Amber Wine Review')) }),
+        K.item({ rating: 5, photo: null,
+          html: L(P('დეგუსტაციაზე მოვედით და სუფრაზე დავრჩით. ნინოს ხინკალი და ლევანის სადღეგრძელოები არასდროს დაგვავიწყდება.',
+            'We came for a tasting and stayed for the supra. We will never forget Nino’s khinkali and Levan’s toasts.',
+            'Приехали на дегустацию, а остались на застолье. Хинкали Нино и тосты Левана не забудем никогда.')),
+          name: L(T('კატრინი და იონასი', 'Katrin & Jonas', 'Катрин и Йонас')), role: L(T('სტუმრები ჰამბურგიდან', 'Guests from Hamburg', 'Гости из Гамбурга')) }),
+        K.item({ rating: 5, photo: null,
+          html: L(P('საფერავი 2022 ჩვენი რესტორნის ღვინის ბარათის ფავორიტია: ღრმა, მაგრამ არასდროს მძიმე.',
+            'The Saperavi 2022 is the favourite on our wine list: deep, yet never heavy.',
+            'Саперави 2022 — любимец нашей винной карты: глубокое, но никогда не тяжёлое.')),
+          name: L(T('დავით ჩიქოვანი', 'Davit Chikovani', 'Давид Чиковани')), role: L(T('სომელიე, თბილისი', 'Sommelier, Tbilisi', 'Сомелье, Тбилиси')) }),
+      ],
+    }),
+  ]);
+
+  const gallery = K.sec({
+    eyebrow: T('ფოტოები', 'Gallery', 'Галерея'),
+    title: T('ერთი წელი ვენახსა და მარანში', 'A year in the vineyard and the marani', 'Год на винограднике и в марани'),
+    width: 'wide',
+  }, [B('gallery', {
+    variant: 'masonry', columns: 3, ratio: '4/3', zoom: true, gap: 14,
+    items: [
+      K.item({ att: gal.gDawn, caption: L(T('სექტემბრის დილა ვენახში', 'A September morning in the vineyard', 'Сентябрьское утро на винограднике')) }),
+      K.item({ att: gal.gYard, caption: L(T('ახალი ქვევრები ჩაფლვამდე', 'New kvevri waiting to be buried', 'Новые квеври ждут, когда их закопают')) }),
+      K.item({ att: gal.gCluster, caption: L(T('საფერავი რთველის წინ', 'Saperavi just before the harvest', 'Саперави накануне ртвели')) }),
+      K.item({ att: gal.gSupra, caption: L(T('სუფრა ვენახში', 'Supra in the vineyard', 'Застолье в винограднике')) }),
+      K.item({ att: gal.gGlass, caption: L(T('რქაწითელი ქვევრიდან', 'Rkatsiteli from the kvevri', 'Ркацители из квеври')) }),
+      K.item({ att: gal.gChurchkhela, caption: L(T('ჩურჩხელა ახალი ტკბილისგან', 'Churchkhela made from fresh must', 'Чурчхела из свежего сусла')) }),
+      K.item({ att: gal.gBasket, caption: L(T('რთველის პირველი კალათა', 'The first basket of the harvest', 'Первая корзина урожая')) }),
+    ],
+  })]);
+
+  const family = K.sec({
+    anchor: 'family', tone: 'muted', align: 'center', eyebrow: T('ოჯახი', 'The family', 'Семья'),
+    title: T('ვინც ღვინოს აყენებს და სტუმრებს ხვდება', 'The people who make the wine and greet the guests', 'Те, кто делает вино и встречает гостей'),
+  }, [B('team', {
+    variant: 'round', columns: 4,
+    items: [
+      K.item({ photo: portrait.levan, href: '', name: L(T('ლევან ვაზაგაშვილი', 'Levan Vazagashvili', 'Леван Вазагашвили')), role: L(T('მეღვინე', 'Winemaker', 'Винодел')),
+        html: L(P('მარანში ორმოცი რთველი აქვს გატარებული და თითოეულ ქვევრს ხმით ცნობს.', 'Forty harvests in the marani; he knows every kvevri by the sound it makes.', 'Сорок урожаев в марани; каждый квеври узнаёт по звуку.')) }),
+      K.item({ photo: portrait.nino, href: '', name: L(T('ნინო ვაზაგაშვილი', 'Nino Vazagashvili', 'Нино Вазагашвили')), role: L(T('სამზარეულო და სუფრა', 'Kitchen and supra', 'Кухня и застолье')),
+        html: L(P('ცხობს შოთის პურს თონეში და იცის, რომელ კერძს რომელი ღვინო უხდება.', 'Bakes shoti bread in the tone oven and knows which dish each wine wants.', 'Печёт шоти в тоне и знает, к какому блюду какое вино.')) }),
+      K.item({ photo: portrait.giorgi, href: '', name: L(T('გიორგი ვაზაგაშვილი', 'Giorgi Vazagashvili', 'Георгий Вазагашвили')), role: L(T('ვენახი', 'Vineyard', 'Виноградник')),
+        html: L(P('ორგანულ მევენახეობაზე გადაყვანა მისი იდეა იყო; ზამთარში ვაზებს თავად სხლავს.', 'Took the vineyard organic; prunes every vine himself in winter.', 'Перевёл виноградник на органику; зимой сам обрезает каждую лозу.')) }),
+      K.item({ photo: portrait.tamar, href: '', name: L(T('თამარ ვაზაგაშვილი', 'Tamar Vazagashvili', 'Тамар Вазагашвили')), role: L(T('სომელიე და სტუმრები', 'Sommelier and guests', 'Сомелье и гости')),
+        html: L(P('უძღვება დეგუსტაციებს ქართულად, ინგლისურად და რუსულად.', 'Leads the tastings in Georgian, English and Russian.', 'Ведёт дегустации на грузинском, английском и русском.')) }),
+    ],
+  })]);
+
+  const faq = K.sec({
+    eyebrow: T('კითხვები', 'Questions', 'Вопросы'), title: T('ხშირად დასმული კითხვები', 'Questions we often hear', 'Частые вопросы'), width: 'narrow',
+  }, [B('faq', {
+    variant: 'details', openFirst: true,
+    items: [
+      K.item({ q: L(T('სად მიგაქვთ ღვინო?', 'Where do you deliver?', 'Куда вы доставляете?')), html: L(P(
+        'თბილისში კურიერით 1–2 დღეში, საქართველოს სხვა ქალაქებში — 2–4 დღეში. შეგიძლიათ ღვინო მარნიდანაც წაიღოთ. საზღვარგარეთ გაგზავნაზე მოგვწერეთ — წესები ქვეყნების მიხედვით განსხვავდება.',
+        'By courier in Tbilisi within 1–2 days and to other Georgian cities within 2–4 days, or pick up at the marani. For shipping abroad, write to us: the rules differ from country to country.',
+        'По Тбилиси курьером за 1–2 дня, в другие города Грузии — за 2–4 дня; можно забрать и в марани. Насчёт отправки за границу напишите нам — правила зависят от страны.')) }),
+      K.item({ q: L(T('როგორ ვიხდი?', 'How do I pay?', 'Как оплатить?')), html: L(P(
+        'შეკვეთის შემდეგ დაგირეკავთ და მიწოდებას დავაზუსტებთ. გადახდა ნაღდი ფულით ან ბარათით, ღვინის მიღებისას.',
+        'After you order we call to confirm the delivery. You pay in cash or by card when the wine arrives.',
+        'После заказа мы позвоним и уточним доставку. Оплата наличными или картой при получении.')) }),
+      K.item({ q: L(T('შეიძლება მოსვლა დაჯავშნის გარეშე?', 'Can I visit without booking?', 'Можно приехать без брони?')), html: L(P(
+        'მარნის მაღაზია ყოველდღე 11:00-დან 19:00-მდე ღიაა. დეგუსტაციასა და სუფრაზე ადგილი ერთი დღით ადრე დაჯავშნეთ.',
+        'The marani shop is open daily from 11:00 to 19:00. Tastings and supra dinners need booking at least one day ahead.',
+        'Магазин марани открыт ежедневно с 11:00 до 19:00. Дегустации и застолья бронируйте хотя бы за день.')) }),
+      K.item({ q: L(T('რა არის ქარვისფერი ღვინო?', 'What is amber wine?', 'Что такое янтарное вино?')), html: L(P(
+        'თეთრი ყურძნისგან დაყენებული ღვინო, რომელიც ქვევრში კანთან და წიპწასთან ერთად დუღს და რამდენიმე თვე ჭაჭაზე რჩება. აქედან მოდის მისი ფერი, ტანინი და არომატი.',
+        'Wine from white grapes that ferments in the kvevri together with skins and seeds and stays on them for months. That gives it its colour, tannin and aroma.',
+        'Вино из белого винограда, которое бродит в квеври вместе с кожицей и косточками и месяцами остаётся на мезге. Отсюда его цвет, танины и аромат.')) }),
+      K.item({ q: L(T('შეიძლება ბავშვებთან ერთად მოსვლა?', 'Can we bring children?', 'Можно приехать с детьми?')), html: L(P(
+        'რა თქმა უნდა — სუფრაზე ბავშვებს ყურძნის წვენი და ჩურჩხელა ელით. ღვინოს მხოლოდ 18 წლიდან ვასხამთ.',
+        'Of course — children get grape juice and churchkhela at the supra. Wine is poured for guests 18 and over only.',
+        'Конечно — детей за столом ждут виноградный сок и чурчхела. Вино наливаем только гостям старше 18 лет.')) }),
+    ],
+  })]);
+
+  const cta = B('cta', {
+    variant: 'banner', tone: 'dark', bg: aNight, overlay: 35,
+    title: T('რთველი 2027: იყავით ჩვენი სტუმარი', 'Rtveli 2027: harvest with us', 'Ртвели 2027: соберите урожай вместе с нами'),
+    html: P('სექტემბერი კახეთში წლის ყველაზე მხიარული თვეა. ადგილები რთველის დღეებზე ახლავე იჯავშნება.',
+      'September is the most joyful month in Kakheti. Places for the 2027 harvest days are open for booking now.',
+      'Сентябрь — самый весёлый месяц в Кахетии. Места на дни ртвели 2027 уже можно бронировать.'),
+    items: [
+      K.btn(T('რთველის დღის დაჯავშნა', 'Book a harvest day', 'Забронировать день ртвели'), '#tastings', 'primary', 'grape'),
+      K.btn(T('მოგვწერეთ', 'Write to us', 'Написать нам'), '#visit', 'secondary', 'chat'),
+    ],
+  });
+
+  const visit = K.sec({
+    anchor: 'visit', eyebrow: T('სტუმრობა', 'Visit', 'Как добраться'),
+    title: T('გვესტუმრეთ ქვემო ოქრომში', 'Visit us in Kvemo Okromi', 'Приезжайте в Квемо Окроми'),
+    lead: P('თბილისიდან მანქანით დაახლოებით საათი და ორმოცი წუთი. დაგვიტოვეთ შეტყობინება — დაგეხმარებით ტრანსფერითა და ღამისთევით.',
+      'About an hour and forty minutes from Tbilisi by car. Leave us a message — we will help with a transfer and a place to stay.',
+      'Около часа сорока минут от Тбилиси на машине. Оставьте сообщение — поможем с трансфером и ночлегом.'),
+  }, [
+    B('contact', {
+      variant: 'split', labels: true, map: aMap, mapHref: '',
+      items: [
+        K.item({ kind: 'address', value: 'Kvemo Okromi 14, Kakheti, Georgia', label: L(T('მისამართი', 'Address', 'Адрес')), href: '' }),
+        K.item({ kind: 'hours', value: '11:00 – 19:00', label: L(T('მაღაზია, ყოველდღე', 'Shop, every day', 'Магазин, ежедневно')), href: '' }),
+        K.item({ kind: 'phone', value: '+995 000 00 00 00', label: L(T('ტელეფონი', 'Phone', 'Телефон')), href: '' }),
+        K.item({ kind: 'email', value: 'marani@tsitelvazi.example', label: L(T('ელფოსტა', 'E-mail', 'E-mail')), href: '' }),
+      ],
+    }),
+    B('spacer', { h: 40 }),
+    B('form', {
+      variant: 'card',
+      title: L(T('დაგეგმეთ სტუმრობა', 'Plan your visit', 'Запланируйте визит')),
+      submit: L(T('გაგზავნა', 'Send', 'Отправить')),
+      req: rqInbox.id, fallback: 'mailto', to: 'marani@tsitelvazi.example',
+      success: L(T('გმადლობთ! მალე გიპასუხებთ.', 'Thank you! We will reply soon.', 'Спасибо! Скоро ответим.')),
+      consent: L(T('ვეთანხმები, რომ ჩემი მონაცემები მხოლოდ ამ მოთხოვნაზე პასუხისთვის გამოიყენება.', 'I agree that my details are used only to answer this request.', 'Согласен(на), что мои данные используются только для ответа на этот запрос.')),
+      items: [
+        field('name', 'text', T('სახელი', 'Name', 'Имя'), { required: true, half: true }),
+        field('email', 'email', T('ელფოსტა', 'E-mail', 'E-mail'), { required: true, half: true }),
+        field('date', 'date', T('სასურველი თარიღი', 'Preferred date', 'Желаемая дата'), { half: true }),
+        field('guests', 'number', T('სტუმრების რაოდენობა', 'Number of guests', 'Сколько гостей'), { half: true, ph: '2' }),
+        field('topic', 'select', T('რა გაინტერესებთ?', 'What are you interested in?', 'Что вас интересует?'), {
+          options: T('დეგუსტაცია\nსუფრა ვენახში\nრთველის დღე\nრესტორნებისა და მაღაზიებისთვის\nსხვა', 'Tasting\nSupra in the vineyard\nRtveli harvest day\nTrade: restaurants and shops\nSomething else',
+            'Дегустация\nЗастолье в винограднике\nДень ртвели\nДля ресторанов и магазинов\nДругое'),
+        }),
+        field('message', 'textarea', T('შეტყობინება', 'Message', 'Сообщение'), { ph: T('მოგვიყევით თქვენი გეგმების შესახებ', 'Tell us about your plans', 'Расскажите о своих планах') }),
+      ],
+    }),
+  ]);
+
+  d.regions.main = [hero, story, history, kvevri, terroir, wines, order, tastings, awards, gallery, family, faq, cta, visit];
+
+  // ----- footer -----
+  d.regions.footer = [B('footer', {
+    variant: 'columns', logo: aSeal, logoH: 56,
+    brand: T('წითელვაზი', 'Tsitelvazi', 'Цителвази'),
+    text: P('ვაზაგაშვილების საოჯახო მარანი ქვემო ოქრომში, კახეთი. ქვევრის ღვინო 1931 წლიდან.',
+      'The Vazagashvili family marani in Kvemo Okromi, Kakheti. Kvevri wine since 1931.',
+      'Семейный марани Вазагашвили в Квемо Окроми, Кахетия. Вино из квеври с 1931 года.'),
+    items: [
+      K.item({ title: L(T('მარანი', 'Marani', 'Марани')), html: L({
+        ka: '<p><a href="#story">ისტორია</a><br><a href="#kvevri">ქვევრის გზა</a><br><a href="#family">ოჯახი</a></p>',
+        en: '<p><a href="#story">Our story</a><br><a href="#kvevri">The kvevri way</a><br><a href="#family">The family</a></p>',
+        ru: '<p><a href="#story">История</a><br><a href="#kvevri">Путь квеври</a><br><a href="#family">Семья</a></p>',
+      }) }),
+      K.item({ title: L(T('მაღაზია', 'Shop', 'Магазин')), html: L({
+        ka: '<p><a href="#wines">ღვინოები</a><br><a href="#tastings">დეგუსტაციები</a><br><a href="#cart">კალათა</a></p>',
+        en: '<p><a href="#wines">Wines</a><br><a href="#tastings">Tastings</a><br><a href="#cart">Cart</a></p>',
+        ru: '<p><a href="#wines">Вина</a><br><a href="#tastings">Дегустации</a><br><a href="#cart">Корзина</a></p>',
+      }) }),
+      K.item({ title: L(T('კონტაქტი', 'Contact', 'Контакты')), html: L({
+        ka: '<p><a href="tel:+995000000000">+995 000 00 00 00</a><br><a href="mailto:marani@tsitelvazi.example">მოგვწერეთ</a><br>ყოველდღე 11:00–19:00</p>',
+        en: '<p><a href="tel:+995000000000">+995 000 00 00 00</a><br><a href="mailto:marani@tsitelvazi.example">Write to us</a><br>Daily 11:00–19:00</p>',
+        ru: '<p><a href="tel:+995000000000">+995 000 00 00 00</a><br><a href="mailto:marani@tsitelvazi.example">Написать нам</a><br>Ежедневно 11:00–19:00</p>',
+      }) }),
+    ],
+    copy: T('© 2026 წითელვაზი · ალკოჰოლი მხოლოდ 18 წლიდან · დალიეთ ზომიერად',
+      '© 2026 Tsitelvazi · Alcohol for adults 18+ only · Please enjoy responsibly',
+      '© 2026 Цителвази · Алкоголь только для лиц старше 18 лет · Пейте умеренно'),
+  })];
+  return V.normalizeDoc(d);
+}
+
+const TPL_WINERY = {
+  id: 'winery',
+  name: { en: 'Winery', ru: 'Винодельня', uk: 'Виноробня', de: 'Weingut', fr: 'Domaine viticole', es: 'Bodega', ka: 'მარანი' },
+  desc: {
+    en: 'Family kvevri winery: wine shop with cart and checkout, tastings with tickets, the kvevri process, age gate 18+.',
+    ru: 'Семейный марани: винный магазин с корзиной и заказом, дегустации с билетами, путь квеври, проверка возраста 18+.',
+    uk: 'Сімейна виноробня квеврі: винна крамниця з кошиком і замовленням, дегустації з квитками, шлях квеврі, перевірка віку 18+.',
+    de: 'Familienweingut mit Kvevri: Weinshop mit Warenkorb und Bestellung, Verkostungen mit Tickets, der Kvevri-Weg, Altersabfrage 18+.',
+    fr: 'Domaine familial en kvevri : boutique de vins avec panier et commande, dégustations sur billet, la méthode kvevri, contrôle d’âge 18+.',
+    es: 'Bodega familiar de kvevri: tienda de vinos con carrito y pedido, catas con entradas, el método kvevri, control de edad 18+.',
+    ka: 'საოჯახო მარანი: ღვინის მაღაზია კალათითა და შეკვეთით, დეგუსტაციები ბილეთებით, ქვევრის გზა, ასაკის შემოწმება 18+.',
+  },
+  langs: ['ka', 'en', 'ru'],
+  build: tplBuildWinery,
+};
+
+export {
+  TPL_WINERY,
+  TPL_WN_BOTTLE_ART,
+  TPL_WN_PRICELIST,
+  TPL_WN_LAND,
+  TPL_WN_LEAF,
+  TPL_WN_PORTRAIT_ART,
+  TPL_WN_SHAPES,
+  TPL_WN_VEIN,
+  tplWnAmberGlass,
+  tplWnArtAll,
+  tplBuildWinery,
+  tplWnHeroArt,
+  tplWnAt,
+  tplWnBasket,
+  tplWnBerryDefs,
+  tplWnBlob,
+  tplWnBottle,
+  tplWnCellar,
+  tplWnChurchkhela,
+  tplWnCluster,
+  tplWnClusterArt,
+  tplWnCurve,
+  tplWnKvevriPath,
+  tplWnKvevriSection,
+  tplWnKvevriYard,
+  tplWnLandscape,
+  tplWnLeaf,
+  tplWnLeafDefs,
+  tplWnLin,
+  tplWnMap,
+  tplWnMedal,
+  tplWnMotif,
+  tplWnN,
+  tplWnPortrait,
+  tplWnRad,
+  tplWnRidge,
+  tplWnSeal,
+  tplWnStops,
+  tplWnStrata,
+  tplWnSupra,
+  tplWnSvg,
+  tplWnP,
+  tplWnT,
+  tplWnTerroir,
+  tplWnTexture
+};

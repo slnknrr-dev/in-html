@@ -1,0 +1,15 @@
+import{unit as unitOf,convert}from"./registry.js";import{parseNumber}from"./parse.js";const cleanScaleKey=(v)=>{const s=String(v??'').trim().toLowerCase();return/^[a-z][a-z0-9_]{0,39}$/.test(s)?s:'';};function scaleI18n(v,max=80,lang='en'){const out={};if(typeof v==='string'){const s=v.trim().slice(0,max);if(s)out[lang]=s;return out;}
+if(!v||typeof v!=='object'||Array.isArray(v))return out;for(const[k,x]of Object.entries(v)){if(!/^[a-z]{2}$/.test(k))continue;const s=String(x??'').trim().slice(0,max);if(s)out[k]=s;}
+return out;}
+const numOf=(v)=>(typeof v==='number'?v:String(v??'').trim()===''?NaN:parseNumber(v));function normalizeScale(raw){if(!raw||typeof raw!=='object'||Array.isArray(raw))return null;const key=cleanScaleKey(raw.key);if(!key)return null;const mode=raw.mode==='upto'?'upto':'exact';const steps=[];let other=false;for(const st of(Array.isArray(raw.steps)?raw.steps:[]).slice(0,40)){if(!st||typeof st!=='object')continue;const name=scaleI18n(st.name);if(!Object.keys(name).length)continue;const empty=st.at===null||st.at===undefined||String(st.at).trim()==='';const at=empty?null:numOf(st.at);if(Number.isNaN(at))continue;if(at===null){if(other)continue;other=true;}
+if(at!==null&&steps.some((x)=>x.at===at))continue;steps.push({at,name});}
+steps.sort((x,y)=>(x.at===null?1:y.at===null?-1:x.at-y.at));if(!steps.length)return null;const out={key,name:scaleI18n(raw.name),mode,steps};if(raw.unit&&unitOf(raw.unit))out.unit=String(raw.unit);return out;}
+function normalizeScales(raw){const out=[];for(const s of(Array.isArray(raw)?raw:[]).slice(0,30)){const x=normalizeScale(s);if(x&&!out.some((y)=>y.key===x.key))out.push(x);}
+return out;}
+function valueIn(scale,n,unit){const v=numOf(n);if(!Number.isFinite(v))return NaN;if(scale.unit&&unit&&unit!==scale.unit){const c=convert(v,unit,scale.unit);return c===null?NaN:c;}
+return v;}
+function scaleStepIndex(scale,n,{unit}={}){const v=valueIn(scale,n,unit);if(!Number.isFinite(v))return-1;let other=-1;for(let i=0;i<scale.steps.length;i++){const st=scale.steps[i];if(st.at===null){other=i;continue;}
+if(scale.mode==='exact'?v===st.at:v<=st.at)return i;}
+return other;}
+const scalePick=(name,lang)=>name[lang]||name.en||name.ru||Object.values(name).find(Boolean)||'';const numText=(v)=>String(Math.round(v*100)/100);function scaleWord(scale,n,lang='en',opts={}){const i=scaleStepIndex(scale,n,opts);if(i<0)return'';return scalePick(scale.steps[i].name,lang).replace(/\{n\}/g,numText(valueIn(scale,n,opts.unit)));}
+const DISTANCE_SCALE=normalizeScale({key:'distance',unit:'m',mode:'upto',name:{en:'Distance as a word',ru:'Расстояние словом',ka:'მანძილი სიტყვით'},steps:[{at:300,name:{en:'close',ru:'близко',ka:'ახლოს'}},{at:800,name:{en:'nearby',ru:'рядом',ka:'სიახლოვეს'}},{at:2000,name:{en:'walking distance',ru:'пешком',ka:'ფეხით სავალზე'}},{at:null,name:{en:'far',ru:'далеко',ka:'შორს'}},],});export{scaleWord,scaleStepIndex,normalizeScales,normalizeScale};

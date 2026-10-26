@@ -1,0 +1,1 @@
+import{PAPER_EDITOR}from"./paper/editor.js";const RESUME_EDITOR={...PAPER_EDITOR,fileExt:'resume',categories:['resume','text','layout','media'],typeIcons:{...PAPER_EDITOR.typeIcons,profile:'user',contacts:'mail',timeline:'timeline',skills:'skills',languages:'languages',keyvalue:'keyvalue',},};export{RESUME_EDITOR};

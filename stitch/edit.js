@@ -1,0 +1,265 @@
+// stitch/edit.js - editing operations on a scheme layer (pure; the editor calls them and keeps the history): cells
+// along a stroke, flood fill (contiguous or global), straight lines of cells, rectangles, selections as clips (copy,
+// cut, paste with or without empty cells, mirror, rotate), text from stitch fonts, line stitches snapped to the half
+// grid, and the history of snapshots.
+//
+//   lineCells(x0, y0, x1, y1) -> [[x, y]]                       Bresenham
+//   floodFill(scheme, li, x, y, p, { contiguous = true, diagonal = false }) -> changed count (p = -1 erases)
+//   rectCells(x0, y0, x1, y1, { filled }) -> [[x, y]]
+//   copyRegion(scheme, li, rect) -> clip { w, h, cells, parts, lines, knots, beads, palette }
+//   clearRegion(scheme, li, rect)
+//   pasteClip(scheme, li, clip, x, y, { transparent = true }) -> palette index map of the clip's entries
+//   transformClip(clip, op) -> clip         op: 'fx' | 'fy' | 'r90' | 'r180' | 'r270'
+//   textClip(text, p, opts) -> clip       a stitch-font bitmap in palette entry p (font.js options)
+//   bitmapClip(bits, w, h, p) -> clip
+//   snapHalf(v) -> v rounded to 0.5
+//   createHistory({ limit }) -> { push(scheme, label), undo(scheme) -> scheme | null, redo(scheme) -> scheme | null,
+//                                canUndo, canRedo, clear(), size }   (snapshots are compact JSON with run-length cells)
+
+// Contract: shape helpers (lineCells, rectCells, ellipseCells) only return coordinates, possibly outside the chart;
+// the caller clips and applies them, so one shape function serves preview, drawing and erasing. Operations that
+// change a layer mutate it in place and return a count, so the editor can skip a history entry when nothing changed.
+// Rectangles in copy / clear are half-open in cells (x0..x1-1) but closed for grid points (lines, knots, beads may
+// sit on x1): a selection of cells owns the points on its border.
+import { toJSON, fromJSON, inside, partsConflict, mapPart, pointMap, findEntry, addPaletteEntry } from './model.js';
+import { textBitmap } from './font.js';
+
+// Integer Bresenham (all-octant error form): exactly one cell per step along the major axis, no gaps, no doubled
+// corners, no floating-point drift. The 100 000 cap is a guard against non-integer input, which would never hit the
+// end point exactly and loop forever.
+export function lineCells(x0, y0, x1, y1) {
+  const out = [];
+  let dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0);
+  const sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
+  let err = dx + dy, x = x0, y = y0;
+  for (let i = 0; i < 100000; i++) {
+    out.push([x, y]);
+    if (x === x1 && y === y1) break;
+    const e2 = 2 * err;
+    if (e2 >= dy) { err += dy; x += sx; }
+    if (e2 <= dx) { err += dx; y += sy; }
+  }
+  return out;
+}
+
+export function rectCells(x0, y0, x1, y1, { filled = false } = {}) {
+  const out = [];
+  const ax = Math.min(x0, x1), bx = Math.max(x0, x1), ay = Math.min(y0, y1), by = Math.max(y0, y1);
+  for (let y = ay; y <= by; y++) for (let x = ax; x <= bx; x++) if (filled || x === ax || x === bx || y === ay || y === by) out.push([x, y]);
+  return out;
+}
+
+// Implicit test on cell centres; radii get +0.5 so the bounding cells themselves are inside (a 1-cell-wide ellipse
+// is a line, not empty). Outline = inside cells with a 4-neighbour outside: a 4-connected test gives a closed,
+// 8-connected ring one stitch thick, the way stitched outlines are worked.
+export function ellipseCells(x0, y0, x1, y1, { filled = false } = {}) {
+  const out = [];
+  const ax = Math.min(x0, x1), bx = Math.max(x0, x1), ay = Math.min(y0, y1), by = Math.max(y0, y1);
+  const cx = (ax + bx) / 2, cy = (ay + by) / 2, rx = (bx - ax) / 2 + 0.5, ry = (by - ay) / 2 + 0.5;
+  const inE = (x, y) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 <= 1;
+  for (let y = ay; y <= by; y++) for (let x = ax; x <= bx; x++) {
+    if (!inE(x, y)) continue;
+    if (filled || !inE(x - 1, y) || !inE(x + 1, y) || !inE(x, y - 1) || !inE(x, y + 1)) out.push([x, y]);
+  }
+  return out;
+}
+
+// Explicit stack, not recursion: a 2000 x 2000 region would overflow the call stack. Cells may be pushed more than
+// once; the colour check at pop makes duplicates harmless and is cheaper than a visited bitmap. Only full crosses
+// are considered (fractional stitches neither block nor receive the fill). diagonal = 8-connected, which leaks
+// through one-stitch diagonal outlines; off by default for that reason.
+export function floodFill(s, li, x, y, p, { contiguous = true, diagonal = false } = {}) {
+  if (!inside(s, x, y)) return 0;
+  const W = s.width, cells = s.layers[li].cells;
+  const from = cells[y * W + x], to = p < 0 ? 0 : p + 1;
+  if (from === to) return 0;
+  let n = 0;
+  if (!contiguous) {
+    for (let i = 0; i < cells.length; i++) if (cells[i] === from) { cells[i] = to; n++; }
+    return n;
+  }
+  const stack = [y * W + x];
+  while (stack.length) {
+    const i = stack.pop();
+    if (cells[i] !== from) continue;
+    cells[i] = to;
+    n++;
+    const cx = i % W, cy = (i / W) | 0;
+    if (cx > 0) stack.push(i - 1);
+    if (cx < W - 1) stack.push(i + 1);
+    if (cy > 0) stack.push(i - W);
+    if (cy < s.height - 1) stack.push(i + W);
+    if (diagonal) {
+      if (cx > 0 && cy > 0) stack.push(i - W - 1);
+      if (cx < W - 1 && cy > 0) stack.push(i - W + 1);
+      if (cx > 0 && cy < s.height - 1) stack.push(i + W - 1);
+      if (cx < W - 1 && cy < s.height - 1) stack.push(i + W + 1);
+    }
+  }
+  return n;
+}
+
+const norm = (r) => ({ x0: Math.min(r.x0, r.x1), y0: Math.min(r.y0, r.y1), x1: Math.max(r.x0, r.x1), y1: Math.max(r.y0, r.y1) });
+const within = (r, x, y) => x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1;
+
+// rect: cells x0..x1-1, y0..y1-1 (exclusive ends).
+// The clip carries a copy of the whole palette so it can be pasted into another scheme (pasteClip re-matches
+// threads). Lines are copied only when both ends are inside; a partly selected line has no sensible cut.
+export function copyRegion(s, li, rect) {
+  const r = norm(rect);
+  const l = s.layers[li];
+  const w = r.x1 - r.x0, h = r.y1 - r.y0;
+  const cells = new Uint16Array(w * h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (inside(s, r.x0 + x, r.y0 + y)) cells[y * w + x] = l.cells[(r.y0 + y) * s.width + r.x0 + x];
+  const inCell = (o) => o.x >= r.x0 && o.x < r.x1 && o.y >= r.y0 && o.y < r.y1;
+  return {
+    w, h, cells,
+    parts: l.parts.filter(inCell).map((o) => ({ ...o, x: o.x - r.x0, y: o.y - r.y0 })),
+    lines: l.lines.filter((o) => within(r, o.x1, o.y1) && within(r, o.x2, o.y2)).map((o) => ({ ...o, x1: o.x1 - r.x0, x2: o.x2 - r.x0, y1: o.y1 - r.y0, y2: o.y2 - r.y0 })),
+    knots: l.knots.filter((o) => within(r, o.x, o.y)).map((o) => ({ ...o, x: o.x - r.x0, y: o.y - r.y0 })),
+    beads: l.beads.filter((o) => within(r, o.x, o.y)).map((o) => ({ ...o, x: o.x - r.x0, y: o.y - r.y0 })),
+    palette: s.palette.map((e) => ({ ...e })),
+  };
+}
+
+export function clearRegion(s, li, rect) {
+  const r = norm(rect);
+  const l = s.layers[li];
+  for (let y = r.y0; y < r.y1; y++) for (let x = r.x0; x < r.x1; x++) if (inside(s, x, y)) l.cells[y * s.width + x] = 0;
+  const inCell = (o) => o.x >= r.x0 && o.x < r.x1 && o.y >= r.y0 && o.y < r.y1;
+  l.parts = l.parts.filter((o) => !inCell(o));
+  l.lines = l.lines.filter((o) => !(within(r, o.x1, o.y1) && within(r, o.x2, o.y2)));
+  l.knots = l.knots.filter((o) => !within(r, o.x, o.y));
+  l.beads = l.beads.filter((o) => !within(r, o.x, o.y));
+}
+
+// Pastes a clip with its top-left cell at (x, y). Clip palette entries are matched to the scheme's (same thread) or
+// added. transparent: empty clip cells keep what is under them.
+// A pasted full cross removes fractional stitches in its cell, and a pasted part removes the cross and the parts it
+// conflicts with: the layer keeps the model's one-occupant rule. Parts and points outside the chart are dropped
+// silently, which is what dragging a clip past the edge should do.
+export function pasteClip(s, li, clip, x, y, { transparent = true } = {}) {
+  // Clip entries map to the scheme's entries lazily: only the threads the clip uses are added.
+  const map = [];
+  const pm = (p) => {
+    if (!clip.palette || clip.palette === s.palette) return p;
+    if (map[p] == null) { const k = findEntry(s, clip.palette[p]); map[p] = k >= 0 ? k : addPaletteEntry(s, clip.palette[p]); }
+    return map[p];
+  };
+  const l = s.layers[li];
+  for (let cy = 0; cy < clip.h; cy++) for (let cx = 0; cx < clip.w; cx++) {
+    const v = clip.cells[cy * clip.w + cx];
+    const tx = x + cx, ty = y + cy;
+    if (!inside(s, tx, ty)) continue;
+    if (!v && transparent) continue;
+    l.cells[ty * s.width + tx] = v ? pm(v - 1) + 1 : 0;
+    if (v) l.parts = l.parts.filter((o) => o.x !== tx || o.y !== ty);
+  }
+  for (const o of clip.parts) {
+    const q = { ...o, x: o.x + x, y: o.y + y, p: pm(o.p) };
+    if (!inside(s, q.x, q.y)) continue;
+    l.parts = l.parts.filter((r) => !partsConflict(r, q));
+    l.cells[q.y * s.width + q.x] = 0;
+    l.parts.push(q);
+  }
+  const okPt = (px, py) => px >= 0 && py >= 0 && px <= s.width && py <= s.height;
+  for (const o of clip.lines) { const q = { ...o, x1: o.x1 + x, x2: o.x2 + x, y1: o.y1 + y, y2: o.y2 + y, p: pm(o.p) }; if (okPt(q.x1, q.y1) && okPt(q.x2, q.y2)) l.lines.push(q); }
+  for (const o of clip.knots) { const q = { ...o, x: o.x + x, y: o.y + y, p: pm(o.p) }; if (okPt(q.x, q.y)) l.knots.push(q); }
+  for (const o of clip.beads) { const q = { ...o, x: o.x + x, y: o.y + y, p: pm(o.p) }; if (okPt(q.x, q.y)) l.beads.push(q); }
+  return map;
+}
+
+// Same mapping rules as model.transform (cells through centres, parts re-cornered by mapPart), on a clip.
+export function transformClip(clip, op) {
+  const [pm, W, H] = pointMap(op, clip.w, clip.h);
+  const cells = new Uint16Array(W * H);
+  for (let y = 0; y < clip.h; y++) for (let x = 0; x < clip.w; x++) {
+    const v = clip.cells[y * clip.w + x];
+    if (!v) continue;
+    const [a, b] = pm(x + 0.5, y + 0.5);
+    cells[Math.floor(b) * W + Math.floor(a)] = v;
+  }
+  const cellOf = (o) => { const [a, b] = pm(o.x + 0.5, o.y + 0.5); return [Math.floor(a), Math.floor(b)]; };
+  return {
+    ...clip, w: W, h: H, cells,
+    parts: clip.parts.map((o) => { const [x, y] = cellOf(o); return { ...o, x, y, c: mapPart(o, op) }; }),
+    lines: clip.lines.map((o) => { const [a, b] = pm(o.x1, o.y1), [c, d] = pm(o.x2, o.y2); return { ...o, x1: a, y1: b, x2: c, y2: d }; }),
+    knots: clip.knots.map((o) => { const [a, b] = pm(o.x, o.y); return { ...o, x: a, y: b }; }),
+    beads: clip.beads.map((o) => { const [a, b] = pm(o.x, o.y); return { ...o, x: a, y: b }; }),
+  };
+}
+
+export function bitmapClip(bits, w, h, p) {
+  const cells = new Uint16Array(w * h);
+  for (let i = 0; i < w * h; i++) if (bits[i]) cells[i] = p + 1;
+  return { w, h, cells, parts: [], lines: [], knots: [], beads: [], palette: null };
+}
+
+export function textClip(text, p, opts = {}) {
+  const b = textBitmap(text, opts);
+  return { ...bitmapClip(b.bits, b.width, b.height, p), missing: b.missing };
+}
+
+export const snapHalf = (v) => Math.round(v * 2) / 2;
+
+// Smooths staircase edges: an empty cell whose two neighbours around one corner have the same colour (and whose
+// opposite neighbours do not) gets a three-quarter stitch of that colour in that corner. p: only this palette index
+// (default every colour). Returns the number of stitches added.
+// Anti-aliasing for stitchers: a three-quarter stitch fills the inner corner of a staircase. Conditions: the cell is
+// empty, two adjacent sides (around the corner) share a colour, and neither opposite side has it (otherwise the cell
+// is a notch in a straight edge or a hole, where a triangle would look wrong). Only the first matching corner is
+// used, and decisions read the original grid (busy is computed up front, additions applied at the end), so the
+// result does not depend on scan order.
+export function smoothEdges(s, li, p = -1) {
+  const W = s.width, H = s.height, l = s.layers[li], c = l.cells;
+  const at = (x, y) => (x >= 0 && y >= 0 && x < W && y < H ? c[y * W + x] - 1 : -1);
+  const busy = new Set(l.parts.map((q) => q.y * W + q.x));
+  const add = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (c[y * W + x] || busy.has(y * W + x)) continue;
+    const L = at(x - 1, y), R = at(x + 1, y), T = at(x, y - 1), B = at(x, y + 1);
+    const cand = [['tl', L, T, R, B], ['tr', R, T, L, B], ['bl', L, B, R, T], ['br', R, B, L, T]];
+    for (const [corner, a, b, oa, ob] of cand) {
+      if (a < 0 || a !== b || (p >= 0 && a !== p)) continue;
+      if (oa === a || ob === a) continue;
+      add.push({ x, y, k: 'three', c: corner, p: a });
+      break;
+    }
+  }
+  l.parts.push(...add);
+  return add.length;
+}
+
+// Snapshot history, not a command log: every operation in this module would need an inverse otherwise, and palette
+// merges / transforms make inverses error-prone. Snapshots are RLE JSON (toJSON), typically tens of KB, so 80 steps
+// stay small. Protocol: push(scheme) BEFORE a change; undo / redo take the current scheme (saved onto the opposite
+// stack) and return a fresh scheme object that the caller must adopt (references to the old one go stale).
+// A new push clears redo: a branch in history is discarded, the standard linear model.
+export function createHistory({ limit = 80 } = {}) {
+  const undo = [], redo = [];
+  return {
+    push(scheme, label = '') {
+      undo.push({ label, json: toJSON(scheme) });
+      if (undo.length > limit) undo.shift();
+      redo.length = 0;
+    },
+    undo(scheme) {
+      const st = undo.pop();
+      if (!st) return null;
+      redo.push({ label: st.label, json: toJSON(scheme) });
+      return fromJSON(st.json);
+    },
+    redo(scheme) {
+      const st = redo.pop();
+      if (!st) return null;
+      undo.push({ label: st.label, json: toJSON(scheme) });
+      return fromJSON(st.json);
+    },
+    get canUndo() { return undo.length > 0; },
+    get canRedo() { return redo.length > 0; },
+    get undoLabel() { return undo.length ? undo[undo.length - 1].label : ''; },
+    get redoLabel() { return redo.length ? redo[redo.length - 1].label : ''; },
+    clear() { undo.length = 0; redo.length = 0; },
+    get size() { return undo.length; },
+  };
+}

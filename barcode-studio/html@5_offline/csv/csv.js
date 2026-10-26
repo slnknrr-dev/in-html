@@ -1,0 +1,4 @@
+import"../xlsx/cells.js";const cellText=(v)=>(v==null?'':typeof v==='boolean'?(v?'TRUE':'FALSE'):String(v));function serializeCSV(rows,{delimiter=',',quote='"',newline='\r\n',quoteAll=false,guard=false}={}){const needs=new RegExp('['+(delimiter+quote).replace(/[\\\]^-]/g,'\\$&')+'\\r\\n]|^\\s|\\s$');const dq=quote+quote;const lines=new Array(rows.length);for(let r=0;r<rows.length;r++){const row=rows[r]||[];const parts=new Array(row.length);for(let c=0;c<row.length;c++){let s=cellText(row[c]);if(guard&&/^[=+\-@\t\r]/.test(s)&&!/^[-+]?\d*\.?\d+(e[-+]?\d+)?$/i.test(s))s="'"+s;parts[c]=quote&&(quoteAll||needs.test(s))?quote+s.split(quote).join(dq)+quote:s;}
+lines[r]=parts.join(delimiter);}
+return lines.join(newline)+(lines.length?newline:'');}
+export{serializeCSV};

@@ -1,0 +1,374 @@
+// carpet/motifs.js - the motif library: small knot bitmaps drawn for this library in the manner of rug motifs
+// (octagonal guls, stars, hooked diamonds, rosettes, trees, border units). A motif is rows of characters; each
+// character is a colour role ('.' transparent): A = accent1, B = accent2, C = accent3, D = accent4, O = outline,
+// G = ground, F = field, R = border, L = light. Motifs are editable and user motifs share the format.
+//
+//   MOTIFS { id: { id, name, kind: 'field' | 'border' | 'corner', rows: [string] } }
+//   motifSize(m) -> { w, h }      motifRole(m, x, y) -> role | null
+//   mirrorMotif(m, axis) / rotateMotif(m)    normMotif(raw) -> motif (validated)
+
+// Why character bitmaps: a motif is readable and editable as plain text in source and in saved files (the grid
+// IS the picture), diffs stay meaningful, and one letter per knot maps directly to a palette role.
+export const CHAR_ROLE = { A: 'accent1', B: 'accent2', C: 'accent3', D: 'accent4', O: 'outline', G: 'ground', F: 'field', R: 'border', L: 'light' };
+export const ROLE_CHAR = Object.fromEntries(Object.entries(CHAR_ROLE).map(([c, r]) => [r, c]));
+
+// Builds a symmetric motif from its top-left quarter (odd sizes share the centre row / column).
+// Symmetric motifs are authored as one quarter and mirrored: a quarter of the data to maintain, and symmetry is
+// guaranteed rather than hand-checked. The centre row/column is shared (slice(0, -1)), so sizes come out odd,
+// which gives a motif a true centre knot.
+function quarter(rows) {
+  const full = halfX(rows);
+  return [...full, ...full.slice(0, -1).reverse()];
+}
+// A whirl of arms around a centre (borjgali, the eternity sign): arms alternate A / B, the centre is C.
+function whirl(arms, curl, width) {
+  return (x, y) => {
+    const r = Math.hypot(x, y);
+    if (r > 1.02) return null;
+    if (r < 0.22) return 'C';
+    const q = ((((Math.atan2(y, x) + curl * r) / (2 * Math.PI)) % 1) + 1) % 1 * arms;
+    return q % 1 < width - 0.18 * r ? (Math.floor(q) % 2 ? 'B' : 'A') : null;
+  };
+}
+// Mirrors the left half (with the centre column) to the right.
+function halfX(rows) {
+  return rows.map((r) => r + r.slice(0, -1).split('').reverse().join(''));
+}
+// A motif from a shape: fn(x, y) on cell centres spread over [-1, 1]² gives a character or null; with `outline` the
+// cells of the shape that touch the outside become outline (O).
+// Procedural motifs: sample a shape function at cell centres over [-1, 1]^2; the outline pass marks shape cells with
+// a transparent 4-neighbour, the classic dark contour that keeps rug motifs legible.
+function shaped(w, h, fn, outline = true) {
+  const g = [];
+  for (let j = 0; j < h; j++) {
+    let r = '';
+    for (let i = 0; i < w; i++) r += fn(w > 1 ? (i / (w - 1)) * 2 - 1 : 0, h > 1 ? (j / (h - 1)) * 2 - 1 : 0) || '.';
+    g.push(r);
+  }
+  if (!outline) return g;
+  const empty = (i, j) => j < 0 || j >= h || i < 0 || i >= w || g[j][i] === '.';
+  return g.map((r, j) => r.split('').map((c, i) => (c !== '.' && (empty(i + 1, j) || empty(i - 1, j) || empty(i, j + 1) || empty(i, j - 1)) ? 'O' : c)).join(''));
+}
+
+// Data table: hand-drawn bitmaps and a few procedural ones (quarter/halfX/whirl/shaped). kind decides where the
+// editor offers the motif (field fillers, border units, corner pieces).
+export const MOTIFS = {
+  gul: { id: 'gul', name: 'Octagon gul', kind: 'field', rows: quarter([
+    '.....OOOO',
+    '...OOAAAA',
+    '..OAAAAAA',
+    '.OAABBAAA',
+    '.OABBBBAO',
+    'OAABBCCBO',
+    'OAABCCDDO',
+    'OAAABCDDD',
+    'OAAOBCDDA',
+  ]) },
+  minorGul: { id: 'minorGul', name: 'Minor gul', kind: 'field', rows: quarter([
+    '...O',
+    '..OB',
+    '.OBA',
+    'OBAC',
+  ]) },
+  star8: { id: 'star8', name: 'Eight-pointed star', kind: 'field', rows: quarter([
+    '....O..',
+    '...OAO.',
+    'O..OAAO',
+    'OAOOAAA',
+    '.OAAOAA',
+    '..OAABA',
+    'OAAABBC',
+  ]) },
+  hookDiamond: { id: 'hookDiamond', name: 'Hooked diamond', kind: 'field', rows: quarter([
+    '......O',
+    '..OO.OA',
+    '..O.OAA',
+    '....OAB',
+    'OO.OABB',
+    'O.OABBC',
+    '.OABBCA',
+  ]) },
+  ramsHorn: { id: 'ramsHorn', name: 'Ram\'s horn', kind: 'field', rows: quarter([
+    'AAA....',
+    'A..A...',
+    'A...A..',
+    '.A..BA.',
+    '..A.BBA',
+    '...ABBB',
+    '....ABB',
+  ]) },
+  rosette: { id: 'rosette', name: 'Rosette', kind: 'field', rows: quarter([
+    '...AA',
+    '.AABB',
+    '.ABBA',
+    'ABBCC',
+    'ABACD',
+  ]) },
+  boteh: { id: 'boteh', name: 'Boteh', kind: 'field', rows: [
+    '.....OO..',
+    '....OAO..',
+    '...OAAO..',
+    '..OAAAO..',
+    '.OAABAAO.',
+    '.OABBBAO.',
+    'OAABCBAAO',
+    'OAABBBAAO',
+    'OAAABAAAO',
+    '.OAAAAAO.',
+    '..OOOOO..',
+  ] },
+  tree: { id: 'tree', name: 'Tree of life', kind: 'field', rows: [
+    '....C....',
+    '...CBC...',
+    '..CB.BC..',
+    '.C.CBC.C.',
+    'CB.BCB.BC',
+    '.C.CBC.C.',
+    '..BC.CB..',
+    '.B..A..B.',
+    'B...A...B',
+    '....A....',
+    '....A....',
+    '...AAA...',
+  ] },
+  latchHook: { id: 'latchHook', name: 'Latch-hook diamond', kind: 'field', rows: quarter([
+    '....O',
+    '.O.OA',
+    '.OOAA',
+    '..OAB',
+    'OOABC',
+  ]) },
+  // Border units: repeated along the band (rows = across the band).
+  runningDog: { id: 'runningDog', name: 'Running dog', kind: 'border', rows: [
+    'AAAAAA',
+    'A.....',
+    'A.AAA.',
+    'A.A.A.',
+    'AAA.A.',
+    '....A.',
+    'AAAAAA',
+  ] },
+  trefoil: { id: 'trefoil', name: 'Reciprocal trefoil', kind: 'border', rows: [
+    'AAABBB',
+    'AABBBA',
+    'ABBBAA',
+    'ABBAAA',
+    'BBBAAB',
+  ] },
+  zigzag: { id: 'zigzag', name: 'Zigzag', kind: 'border', rows: [
+    'A.....A',
+    '.A...A.',
+    '..A.A..',
+    '...A...',
+  ] },
+  sMotif: { id: 'sMotif', name: 'S-motif', kind: 'border', rows: [
+    '.AAA..',
+    'A...A.',
+    '.A....',
+    '..AA..',
+    '....A.',
+    'A...A.',
+    '.AAA..',
+  ] },
+  vine: { id: 'vine', name: 'Vine and rosettes', kind: 'border', rows: [
+    '...B.....',
+    '..BCB..A.',
+    '...B..A..',
+    '.....A...',
+    'A...A....',
+    '.AAA...B.',
+    '......BCB',
+    '.......B.',
+  ] },
+  crenel: { id: 'crenel', name: 'Crenellation', kind: 'border', rows: [
+    'AAA...',
+    'AAA...',
+    'AAAAAA',
+    '...AAA',
+  ] },
+  cornerRosette: { id: 'cornerRosette', name: 'Corner rosette', kind: 'corner', rows: quarter([
+    'B..A',
+    '.BAA',
+    '.ACC',
+    'AACD',
+  ]) },
+
+  // --- Georgian: the Bolnisi cross (cross pattée in a ring), the borjgali (a seven-armed sun whirl), Khevsur crosses ---
+  bolnisi: { id: 'bolnisi', name: 'Bolnisi cross', kind: 'field', rows: shaped(17, 17, (x, y) => {
+    const r = Math.hypot(x, y), ax = Math.abs(x), ay = Math.abs(y);
+    if (r < 0.2) return 'B';
+    if (r > 0.93 && r < 1.02) return 'C';
+    return (ax <= 0.1 + 0.45 * ay && ay <= 0.88) || (ay <= 0.1 + 0.45 * ax && ax <= 0.88) ? 'A' : null;
+  }) },
+  borjgali: { id: 'borjgali', name: 'Borjgali', kind: 'field', rows: shaped(21, 21, whirl(7, 2, 0.66), false) },
+  khevsurCross: { id: 'khevsurCross', name: 'Khevsur cross', kind: 'field', rows: quarter([
+    'O.O..O',
+    '.O..OA',
+    'O..OAA',
+    '..OAB.',
+    '.OAB.C',
+    'OAA.CC',
+  ]) },
+  // --- Armenian: the eternity sign (arevakhach), a vishap dragon, a sunburst ray, the eagle Kazak star ---
+  eternity: { id: 'eternity', name: 'Eternity sign', kind: 'field', rows: shaped(21, 21, whirl(8, -2.3, 0.6), false) },
+  dragon: { id: 'dragon', name: 'Vishap dragon', kind: 'field', rows: [
+    'B......OO..',
+    'OB....OAAO.',
+    '.OB..OAOAAO',
+    '..OOOAAAAO.',
+    '...OAAAO.B.',
+    '..OAAAO.BO.',
+    '.OAAAO.BO..',
+    'OAAAAO.O...',
+    '.OAAAAO....',
+    '..OAAAAO...',
+    '...OAAAAO..',
+    '....OAAAAO.',
+    '.B...OAAO..',
+    '.OB...OO...',
+    '..O........',
+  ] },
+  bird: { id: 'bird', name: 'Bird', kind: 'field', rows: [
+    '.....OO..',
+    '....OAAO.',
+    '....OBAOO',
+    '...OAAAOC',
+    '.OOAAAAO.',
+    'OAAAAAO..',
+    '.OAAAAO..',
+    '..OO.O...',
+    '..O..O...',
+  ] },
+  camel: { id: 'camel', name: 'Camel', kind: 'field', rows: [
+    '.........OO..',
+    '........OAAO.',
+    '....OO..OAO..',
+    '...OAAO.OAO..',
+    '..OAAAAOAAO..',
+    '.OAAAAAAAAO..',
+    '.OAAAAAAAO...',
+    '..OO.OO.OO...',
+    '..O..O..O....',
+  ] },
+  // --- Indian and Ottoman flowers ---
+  cypress: { id: 'cypress', name: 'Cypress', kind: 'field', rows: halfX(['...O', '..OA', '..OA', '.OAA', '.OAB', '.OAA', 'OAAB', 'OAAA', 'OABA', 'OAAA', 'OAAB', '.OAA', '.OAA', '..OC', '..OC', '..OC', '.OOO']) },
+  tulip: { id: 'tulip', name: 'Tulip', kind: 'field', rows: halfX(['O...O', 'OA.OA', 'OAOAA', 'OAAAB', 'OAABB', '.OAAB', '..OAA', '...OC', '.OO.C', 'OCCOC', '.OCCC', '..OOC', '....C']) },
+  carnation: { id: 'carnation', name: 'Carnation', kind: 'field', rows: halfX(['O.O.O', 'OAOAO', 'OAAAA', '.OABB', '..OAB', '...OA', '....C', '.OO.C', 'OCCOC', '.OCCC', '..OOC', '....C', '....C']) },
+  palmette: { id: 'palmette', name: 'Palmette', kind: 'field', rows: halfX(['.....O', '..O.OA', '.OAOAA', 'OAAOAB', 'OABAAB', 'OABBAB', '.OABBC', '.OAABC', '..OOAC', '...OOO', '....OD']) },
+  lotus: { id: 'lotus', name: 'Lotus', kind: 'field', rows: halfX(['.....O', '....OA', '.O.OAB', 'OAOAAB', 'OABOAB', 'OABBOB', '.OABBB', '..OOOC', '....OC']) },
+  flowerA: { id: 'flowerA', name: 'Small flower', kind: 'field', rows: quarter(['.OA', 'OAB', 'ABC']) },
+  flowerB: { id: 'flowerB', name: 'Small blossom', kind: 'field', rows: quarter(['A..A', '.ABB', '.BCC', 'ABCD']) },
+  flowerC: { id: 'flowerC', name: 'Star flower', kind: 'field', rows: quarter(['...A', '.A.B', '..AB', 'ABBC']) },
+  // --- Mamluk, Ottoman and Holbein ---
+  umbrellaLeaf: { id: 'umbrellaLeaf', name: 'Umbrella leaf', kind: 'field', rows: halfX(['.O.O.', 'OAOAO', 'OAAAA', 'OABBB', '.OABB', '..OAB', '...OC', '...OC', '..OOC']) },
+  papyrus: { id: 'papyrus', name: 'Papyrus', kind: 'field', rows: halfX(['O..O', 'OAOA', '.OAA', '..OA', '...C', '...C', '.OOC', 'OBBC', '.OOC', '...C', '..OO']) },
+  lottoUnit: { id: 'lottoUnit', name: 'Lotto arabesque', kind: 'field', rows: shaped(17, 17, (x, y) => {
+    const ax = Math.abs(x), ay = Math.abs(y);
+    if (ax + ay < 0.34) return 'B';
+    const leaf = (a, b) => a > 0.2 && Math.abs(b) < 0.34 * Math.sin((Math.PI * (a - 0.2)) / 0.8);
+    if (leaf(ax, y) || leaf(ay, x)) return 'A';
+    const d = (ax + ay) / Math.SQRT2, e = Math.abs(ax - ay) / Math.SQRT2;
+    return d > 0.5 && d < 1.12 && e < 0.2 * Math.sin((Math.PI * (d - 0.5)) / 0.62) ? 'A' : null;
+  }) },
+  holbeinGul: { id: 'holbeinGul', name: 'Holbein octagon', kind: 'field', rows: shaped(15, 15, (x, y) => {
+    const ax = Math.abs(x), ay = Math.abs(y), oct = Math.max(ax, ay, (ax + ay) / 1.4);
+    if (oct > 1) return null;
+    if (oct > 0.82) return 'A';
+    if ((ax < 0.12 || ay < 0.12) && oct < 0.62) return 'C';
+    if (Math.abs(ax - ay) < 0.12 && oct < 0.62) return 'C';
+    return oct < 0.66 ? 'B' : null;
+  }) },
+  elephantFoot: { id: 'elephantFoot', name: 'Elephant-foot gul', kind: 'field', rows: shaped(15, 15, (x, y) => {
+    const ax = Math.abs(x), ay = Math.abs(y), oct = Math.max(ax, ay, (ax + ay) / 1.35);
+    if (oct > 1) return null;
+    if (oct > 0.9) return 'O';
+    if (ax < 0.16 || ay < 0.16) return 'A';
+    return (ax > 0.45 && ay > 0.45) ? 'C' : 'B';
+  }, false) },
+  memling: { id: 'memling', name: 'Memling gul', kind: 'field', rows: quarter(['..O..O', '..O.OA', 'OOOOAA', '...OAB', '.OOAB.', 'OAAB.C']) },
+  // --- Moroccan Berber marks ---
+  berberDiamond: { id: 'berberDiamond', name: 'Berber diamond', kind: 'field', rows: shaped(11, 11, (x, y) => {
+    const d = Math.abs(x) + Math.abs(y);
+    if (d > 1) return null;
+    if (d > 0.78 || Math.abs(x - y) < 0.12 || Math.abs(x + y) < 0.12) return 'O';
+    return null;
+  }, false) },
+  berberCross: { id: 'berberCross', name: 'Berber cross', kind: 'field', rows: quarter(['O...', '.O..', '..O.', 'OOOO']) },
+  mihrabLamp: { id: 'mihrabLamp', name: 'Mosque lamp', kind: 'field', rows: halfX(['...O', '...O', '..OA', '..OB', '.OAA', 'OAAB', 'OABC', 'OAAB', '.OAA', '..OO', '...O']) },
+
+  // Border units (rows run across the band, from the outer edge in).
+  kufic: { id: 'kufic', name: 'Pseudo-Kufic', kind: 'border', rows: [
+    'AA.....AA.',
+    'AA.....AA.',
+    'AA..A..AA.',
+    'AA.AAA.AA.',
+    'AA..A..AA.',
+    'AAAAAAAAAA',
+    '..........',
+    '.B...B...B',
+  ] },
+  cloudBand: { id: 'cloudBand', name: 'Cloud band', kind: 'border', rows: shaped(16, 7, (x, y) => {
+    const t = Math.sin(Math.PI * x * 1.5) * 0.55;
+    return Math.abs(y - t) < 0.24 || (Math.abs(x) > 0.6 && Math.abs(y + t * 0.8) < 0.16) ? 'A' : null;
+  }, false) },
+  meander: { id: 'meander', name: 'Meander', kind: 'border', rows: [
+    'AAAAAA.A',
+    'A....A.A',
+    'A.AA.A.A',
+    'A.A..A.A',
+    'A.AAAA.A',
+    'A......A',
+    'AAAAAAAA',
+  ] },
+  crossBand: { id: 'crossBand', name: 'Crosses', kind: 'border', rows: ['........', '...A....', '..ABA...', '.ABCBA..', '..ABA...', '...A....', '........'] },
+  diamondChain: { id: 'diamondChain', name: 'Diamond chain', kind: 'border', rows: ['....A...', '...ABA..', '..ABCBA.', 'AABCDCBA', '..ABCBA.', '...ABA..', '....A...'] },
+  stepsBand: { id: 'stepsBand', name: 'Stepped triangles', kind: 'border', rows: ['A.......', 'AA......', 'AAA....B', 'AAAA..BB', 'AAAAABBB', 'AAAAAAAA'] },
+  braid: { id: 'braid', name: 'Braid', kind: 'border', rows: shaped(12, 7, (x, y) => {
+    const s = Math.sin(Math.PI * (x + 1));
+    const a = Math.abs(y - 0.62 * s) < 0.28, b = Math.abs(y + 0.62 * s) < 0.28;
+    if (a && b) return Math.cos(Math.PI * (x + 1)) > 0 ? 'A' : 'B';
+    return a ? 'A' : b ? 'B' : null;
+  }, false) },
+  waveBand: { id: 'waveBand', name: 'Running wave', kind: 'border', rows: shaped(10, 7, (x, y) => {
+    const r = Math.hypot(x - 0.1, y + 0.05);
+    if (r < 0.7 && r > 0.4 && !(x > 0.1 && y > 0)) return 'A';
+    return y > 0.65 ? 'A' : null;
+  }, false) },
+  tulipVine: { id: 'tulipVine', name: 'Tulip vine', kind: 'border', rows: shaped(16, 11, (x, y) => {
+    if (Math.abs(y - 0.3 * Math.sin(Math.PI * (x + 1))) < 0.12) return 'C';
+    for (const [cx, dir] of [[-0.5, -1], [0.5, 1]]) {
+      const dx = x - cx, dy = (y - 0.3 * Math.sin(Math.PI * (cx + 1))) * dir;
+      if (Math.abs(dx) < 0.07 && dy > 0 && dy < 0.32) return 'C';
+      if (dy >= 0.32 && dy < 0.75 && Math.abs(dx) < 0.32 * Math.sin(Math.PI * Math.min(1, (dy - 0.25) / 0.55))) return dy > 0.64 && Math.abs(dx) < 0.08 ? null : dir < 0 ? 'A' : 'B';
+    }
+    return null;
+  }, false) },
+  eternityBand: { id: 'eternityBand', name: 'Eternity band', kind: 'border', rows: shaped(11, 11, whirl(4, -2.2, 0.62), false) },
+  cintamaniBand: { id: 'cintamaniBand', name: 'Çintamani band', kind: 'border', rows: ['.AA.AA..', '.AA.AA..', '...AA...', '...AA...', '........', 'BB.BB.BB', '.BB.BB.B'] },
+};
+
+export const motifSize = (m) => ({ w: Math.max(...m.rows.map((r) => r.length)), h: m.rows.length });
+export function motifRole(m, x, y) {
+  const r = m.rows[y];
+  if (!r) return null;
+  const c = r[x];
+  return c && c !== '.' ? CHAR_ROLE[c] || null : null;
+}
+export const mirrorMotif = (m, axis = 'x') => ({ ...m, rows: axis === 'x' ? m.rows.map((r) => r.split('').reverse().join('')) : m.rows.slice().reverse() });
+export function rotateMotif(m) {
+  const { w, h } = motifSize(m);
+  const rows = [];
+  for (let x = 0; x < w; x++) { let s = ''; for (let y = h - 1; y >= 0; y--) s += (m.rows[y] || '')[x] || '.'; rows.push(s); }
+  return { ...m, rows };
+}
+// User motifs are untrusted: at most 64 x 64, unknown characters become transparent, rows padded to a rectangle so
+// motifSize and rotateMotif can assume equal row lengths.
+export function normMotif(raw) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const rows = (Array.isArray(r.rows) ? r.rows : []).slice(0, 64).map((s) => String(s).slice(0, 64).replace(/[^.ABCDOGFRL]/g, '.'));
+  const w = Math.max(1, ...rows.map((s) => s.length));
+  return {
+    id: String(r.id || 'm' + Date.now().toString(36)).slice(0, 40), name: String(r.name || 'Motif').slice(0, 60),
+    kind: ['field', 'border', 'corner'].includes(r.kind) ? r.kind : 'field', rows: rows.length ? rows.map((s) => s.padEnd(w, '.')) : ['A'],
+  };
+}

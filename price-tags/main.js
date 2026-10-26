@@ -1,0 +1,412 @@
+// price-tags/main.js - the products page: the product table (names in Georgian / Russian / English, EAN with a check
+// digit test, price, the price in effect today with the struck base price and the badge, pack size, unit price,
+// category, origin, expiry with its markdown), product and promotion dialogs, markdown rules for expiring stock,
+// CSV / XLSX / ODS import with column mapping, CSV export, the demo shop, and a live preview of the selected
+// product's tag in the current design.
+//
+// Architecture: one module-level `data` object (loaded once, mutated in place, saved whole on every change) and a
+// small view state S (selected row, search query). Rendering is "paint functions over current state": render() builds
+// the static frame once per language, paintAll() recomputes prices and repaints each region. Why recompute prices on
+// every paint: pricing depends on today's date, promotions and markdown rules together, and caching it invites
+// stale badges; at shop sizes the full recompute is milliseconds.
+// Dialogs edit a structuredClone and write back only on Save, so Cancel never needs undo logic.
+import { LANGS, LANG_NAMES, catPath, categoryNodes, dayText, demoData, group, loadData, loadDesign, minorToInput, moneyCur, newId, notePriceChange, pageHref, parseMinor, pricesFor, saveData, startShell, tagData, today, uiName, unitPriceOf, unitText, validDay } from './common.js';
+import { badgeText, tagSVG } from './tag.js';
+import { exportCSV, importFile, promoDefaults } from './io.js';
+import { button, card, dropZone, field, seg, t, textInput, toast } from '../ui/app.js';
+import { $, $$, debounce, h, lsGet, lsSet } from '../ui/dom.js';
+import { icon } from '../ui/icons.js';
+import { pickFiles } from '../ui/files.js';
+import { confirmDialog, openDialog } from '../ui/overlays.js';
+import { UI_STATE } from '../ui/i18n.js';
+import { promotionState } from '../receipt/price.js';
+import { inspectGtin } from '../barcode/gtin.js';
+
+const data = loadData();
+// Persist the demo on first visit: the designer page reads the same key, and its tags must match what is shown here.
+if (lsGet('pt-data', null) == null) saveData(data);
+const D = loadDesign();
+const S = { sel: lsGet('pt-sel', null), q: '' };
+let prices = new Map();
+const save = () => saveData(data);
+const uiLang = () => (LANGS.includes(UI_STATE.lang) ? UI_STATE.lang : 'en');
+// Rendered rows cap: 500 rows x 10 cells is the point where DOM rebuild on each keystroke starts to lag; past it the
+// user is told to narrow the search (no virtual scrolling: a plain table keeps native find, selection and printing).
+const ROW_LIMIT = 500;
+
+const main = $('#main');
+main.classList.add('pt-products');
+const els = {};
+
+function btn(label, ic, fn, kind = '', id = null) {
+  const b = button(label, ic, fn, kind);
+  if (id) b.id = id;
+  return b;
+}
+// Icon-only button: aria-label gives it an accessible name (the SVG has none), title a tooltip for mouse users.
+// stopPropagation: these sit inside a clickable row; without it, "delete" would also select the row being deleted.
+const iconBtn = (ic, label, fn) => h('button', { type: 'button', class: 'ed-iconbtn', title: label, 'aria-label': label, html: icon(ic), onclick: (e) => { e.stopPropagation(); fn(); } });
+
+// Builds the page frame. Called at start and on UI language change (all labels are t() at build time, so a full
+// rebuild is the simplest correct relabel). Search input debounced 120ms: fast enough to feel live, avoids rebuilding
+// up to 500 rows per keystroke. The summary is an aria-live region so counts are announced after filtering.
+function render() {
+  main.textContent = '';
+  const search = h('input', { type: 'search', class: 'ed-input pt-search', placeholder: t('pt.p.search'), 'aria-label': t('pt.p.search'), value: S.q });
+  search.addEventListener('input', debounce(() => { S.q = search.value; paintTable(); }, 120));
+  const tools = h('div', { class: 'ap-actions pt-tools' },
+    btn('pt.p.add', 'plus', () => editProduct(null), 'primary', 'pt-add'),
+    btn('pt.p.import', 'upload', pickImport, '', 'pt-import'),
+    btn('pt.p.export', 'download', () => exportCSV(data, D), '', 'pt-export'),
+    btn('pt.p.demo', 'refresh', loadDemo, '', 'pt-demo'),
+    btn('pt.p.clear', 'trash', clearAll, '', 'pt-clear'));
+  els.summary = h('div', { class: 'pt-summary', role: 'status', 'aria-live': 'polite' });
+  els.table = h('div', { class: 'ap-table-wrap pt-table-wrap' });
+  const products = card('pt.p.title', tools, h('div', { class: 'ap-row pt-searchrow' }, search, els.summary), els.table);
+
+  els.preview = h('div', { class: 'pt-preview', id: 'pt-preview' });
+  els.previewMeta = h('div', { class: 'ed-hint' });
+  const design = h('a', { class: 'ed-btn', href: pageHref('pg-design') }, h('span', { class: 'ed-ic', html: icon('palette') }), t('pt.p.toDesign'));
+  const prevCard = card('pt.p.preview', els.preview, els.previewMeta, h('div', { class: 'ap-actions' }, design));
+
+  els.promos = h('div', { class: 'pt-promos' });
+  const promoCard = card('pt.pr.title', els.promos, h('div', { class: 'ap-actions' }, btn('pt.pr.add', 'plus', () => editPromo(null), '', 'pt-add-promo')));
+  els.md = h('div', { class: 'pt-md' });
+  const mdCard = card('pt.md.title', h('p', { class: 'ed-hint' }, t('pt.md.hint')), els.md);
+  const importCard = card('pt.io.card',
+    dropZone({ onFiles: (f) => doImport(f[0]), accept: '.csv,.tsv,.txt,.xlsx,.xlsm,.ods', label: 'pt.io.drop' }),
+    h('p', { class: 'ed-hint' }, t('pt.io.hint')));
+  main.append(h('div', { class: 'pt-work' },
+    h('div', { class: 'pt-col pt-maincol' }, products),
+    h('div', { class: 'pt-col pt-sidecol' }, prevCard, promoCard, mdCard, importCard)));
+  paintAll();
+}
+
+function paintAll() {
+  prices = pricesFor(data);
+  paintTable();
+  paintPreview();
+  paintPromos();
+  paintMarkdown();
+}
+
+// --- table --------------------------------------------------------------------------------------------------------
+
+// Weighed goods already carry a per-kg/l price, so the "unit price" is the price itself; packaged goods derive it
+// from the pack size. The amount is omitted when it is 1 ("/ kg", not "/ 1 kg").
+function unitPriceText(p, price) {
+  if (p.unit === 'kg' || p.unit === 'l') return `${moneyCur(price, D)} / ${unitText(p.unit, uiLang())}`;
+  const up = unitPriceOf(p, price, D.basis);
+  return up ? `${moneyCur(up.price, D)} / ${up.amount === 1 ? '' : up.amount + ' '}${unitText(up.per, uiLang())}` : '—';
+}
+
+function nowCell(pr) {
+  if (pr.price == null) return '—';
+  if (!pr.kind) return h('b', { class: 'pt-now' }, moneyCur(pr.price, D));
+  return h('span', { class: 'pt-now' },
+    h('s', { class: 'pt-was' }, moneyCur(pr.base, D)), ' ', h('b', { class: 'pt-best' }, moneyCur(pr.price, D)), ' ',
+    h('span', { class: 'pt-chip ' + (pr.kind === 'markdown' ? 'pt-chip-md' : 'pt-chip-promo'), title: pr.kind === 'markdown' ? t('pt.md.title') : pr.promo?.name || t('pt.f.promoPrice') }, badgeText(pr.pct)));
+}
+
+// Table repaint. Search is a case-insensitive substring over all three names, EAN, code and category: shop staff
+// search by whatever is in hand (a scanned code or a partial name in any language).
+// Keyboard model (row = tabindex 0, aria-selected): Space selects, Enter edits, Up/Down move focus and selection,
+// Delete deletes. The e.target check ignores keys bubbling from the row's own buttons (Enter on "edit" must not
+// double-fire). Rows are rebuilt on each paint, so listeners are attached per row rather than delegated: rows are
+// discarded with their listeners, no leak.
+function paintTable() {
+  const q = S.q.trim().toLowerCase();
+  const list = data.products.filter((p) => !q || [p.name.ka, p.name.ru, p.name.en, p.ean, p.code, p.category].some((x) => String(x || '').toLowerCase().includes(q)));
+  const onPromo = data.products.filter((p) => prices.get(p.id)?.kind).length;
+  els.summary.textContent = t('pt.p.count', { n: data.products.length }) + ' · ' + t('pt.p.onPromo', { n: onPromo });
+  els.table.textContent = '';
+  if (!data.products.length) { els.table.append(h('div', { class: 'ap-empty pt-empty' }, t('pt.p.empty'))); return; }
+  if (!list.length) { els.table.append(h('div', { class: 'ap-empty pt-empty' }, t('pt.p.noMatch'))); return; }
+  const cols = ['name', 'barcode', 'price', 'now', 'size', 'unitPrice', 'category', 'origin', 'expires'];
+  const tbody = h('tbody');
+  for (const p of list.slice(0, ROW_LIMIT)) {
+    const pr = prices.get(p.id);
+    const others = LANGS.filter((l) => l !== uiLang() && p.name[l] && p.name[l] !== uiName(p)).map((l) => p.name[l]);
+    const md = pr.markdown;
+    const tr = h('tr', { class: 'pt-row' + (p.id === S.sel ? ' pt-on' : ''), tabindex: '0', 'aria-selected': String(p.id === S.sel), dataset: { id: p.id } },
+      h('td', { class: 'pt-namecell' }, h('div', { class: 'pt-nm' }, uiName(p) || '—'), others.length ? h('div', { class: 'ed-hint' }, others.join(' · ')) : null),
+      h('td', { class: 'pt-mono' }, p.ean || '—'),
+      h('td', { class: 'pt-num' }, moneyCur(p.price, D)),
+      h('td', { class: 'pt-num pt-nowcell' }, nowCell(pr)),
+      h('td', {}, p.unit === 'pcs' ? p.size || '—' : unitText(p.unit, uiLang())),
+      h('td', { class: 'pt-num' }, pr.price == null ? '—' : unitPriceText(p, pr.price)),
+      h('td', {}, p.category || '—'),
+      h('td', {}, p.origin || '—'),
+      h('td', {}, p.expires ? h('span', { class: md?.expired ? 'pt-bad' : '' }, dayText(p.expires), md?.expired ? ' · ' + t('pt.md.expired') : '') : '—'),
+      h('td', { class: 'pt-acts' }, iconBtn('edit', t('pt.p.edit'), () => editProduct(p)), iconBtn('trash', t('pt.p.delete'), () => deleteProduct(p))));
+    tr.addEventListener('click', () => select(p.id));
+    tr.addEventListener('dblclick', () => editProduct(p));
+    tr.addEventListener('keydown', (e) => {
+      if (e.target !== tr) return;
+      if (e.key === 'Enter') { e.preventDefault(); editProduct(p); }
+      else if (e.key === ' ') { e.preventDefault(); select(p.id); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const n = e.key === 'ArrowDown' ? tr.nextElementSibling : tr.previousElementSibling;
+        if (n) { n.focus(); select(n.dataset.id); }
+      } else if (e.key === 'Delete') { e.preventDefault(); deleteProduct(p); }
+    });
+    tbody.append(tr);
+  }
+  els.table.append(h('table', { class: 'ap-table pt-table' },
+    h('thead', {}, h('tr', {}, cols.map((c) => h('th', { scope: 'col' }, t('pt.col.' + c))), h('th', {}, h('span', { class: 'pt-sr' }, t('pt.col.actions'))))), tbody));
+  if (list.length > ROW_LIMIT) els.table.append(h('div', { class: 'ed-hint pt-more' }, t('pt.p.more', { n: list.length - ROW_LIMIT })));
+}
+
+// Selection updates classes in place instead of repainting the table: keeps focus on the row and scroll position.
+// Persisted so a reload (or coming back from the designer) shows the same product.
+function select(id) {
+  S.sel = id;
+  lsSet('pt-sel', id);
+  for (const tr of $$('.pt-row', els.table)) { const on = tr.dataset.id === id; tr.classList.toggle('pt-on', on); tr.setAttribute('aria-selected', String(on)); }
+  paintPreview();
+}
+
+// --- preview ------------------------------------------------------------------------------------------------------
+
+// Preview uses the exact same tagSVG as printing, so what is seen is what prints. innerHTML of our own SVG string is
+// safe only because tag.js escapes every text it interpolates (names come from imports). unit:'' renders the SVG
+// without mm width/height so CSS can scale it; --ar keeps the aspect ratio meanwhile.
+function paintPreview() {
+  const p = data.products.find((x) => x.id === S.sel) || data.products[0];
+  els.preview.textContent = '';
+  els.previewMeta.textContent = '';
+  if (!p) { els.preview.append(h('div', { class: 'ap-empty' }, t('pt.p.noPreview'))); return; }
+  const [tg] = tagData([p], prices, D);
+  els.preview.innerHTML = tagSVG(tg, D, { unit: '' }).svg;
+  els.preview.style.setProperty('--ar', `${D.w} / ${D.h}`);
+  els.previewMeta.textContent = `${t('pt.tpl.' + D.template)} · ${D.w} × ${D.h} mm · ${LANG_NAMES[D.lang]}`;
+}
+
+// --- promotions ---------------------------------------------------------------------------------------------------
+
+// Promotions sorted active -> planned -> finished, then by start date: what affects shelves today comes first.
+// Targets list shows at most 3 product names plus "and N more" to keep each card to a few lines.
+function paintPromos() {
+  const box = els.promos, at = today();
+  box.textContent = '';
+  if (!data.promotions.length) { box.append(h('div', { class: 'ap-empty' }, t('pt.pr.none'))); return; }
+  const ul = h('ul', { class: 'pt-plist' });
+  const order = { active: 0, planned: 1, finished: 2 };
+  const list = [...data.promotions].sort((a, b) => order[promotionState(a, at)] - order[promotionState(b, at)] || a.from.localeCompare(b.from));
+  for (const pr of list) {
+    const st = promotionState(pr, at);
+    const value = pr.kind === 'percent' ? badgeText(pr.value) : t('pt.pr.fixedTo', { p: moneyCur(pr.value, D) });
+    const names = pr.items.map((id) => data.products.find((x) => x.id === id)).filter(Boolean).map(uiName);
+    const targets = [...pr.categories, ...names.slice(0, 3)].join(', ') + (names.length > 3 ? ' ' + t('pt.pr.andMore', { n: names.length - 3 }) : '');
+    ul.append(h('li', { class: 'pt-promo pt-st-' + st, dataset: { id: pr.id } },
+      h('div', { class: 'pt-promo-h' }, h('b', {}, pr.name || t('pt.pr.untitled')), h('span', { class: 'pt-chip pt-chip-' + st }, t('pt.pr.st.' + st)), h('span', { class: 'ed-spacer' }),
+        iconBtn('edit', t('pt.pr.edit'), () => editPromo(pr)), iconBtn('trash', t('pt.pr.delete'), () => deletePromo(pr))),
+      h('div', { class: 'pt-promo-v' }, h('span', { class: 'pt-promo-val' }, value), ' · ', `${dayText(pr.from)} – ${dayText(pr.to)}`),
+      h('div', { class: 'ed-hint' }, targets || '—')));
+  }
+  box.append(ul);
+}
+
+function dateInput(value, name) {
+  return h('input', { type: 'date', class: 'ed-input', value: value || '', name });
+}
+
+// Promotion dialog. Value semantics depend on kind: percent is a plain number (10 = 10 %), fixed is a target price
+// in minor units. Switching kind therefore cannot convert the number meaningfully: fixed clears the field, percent
+// keeps the old number only if it looks like a percentage (< 100), else falls back to 10.
+// Item filter toggles [hidden] on labels (pre-lowercased haystack in data-q) instead of rebuilding: checked states
+// survive filtering. Validation runs in the Save button's onClick; returning false keeps the dialog open.
+function editPromo(pr) {
+  const x = pr ? structuredClone(pr) : { id: newId('pr'), name: '', kind: 'percent', value: 10, items: [], categories: [], ...promoDefaults() };
+  const name = textInput(x.name, (v) => { x.name = v; }, { name: 'name', placeholder: t('pt.pr.namePh') });
+  const valueIn = h('input', { class: 'ed-input pt-num', name: 'value', inputmode: 'decimal', value: x.kind === 'percent' ? String(x.value) : minorToInput(x.value, D) });
+  const unit = h('span', { class: 'ed-unit' }, x.kind === 'percent' ? '%' : D.symbol);
+  const kind = seg([{ v: 'percent', l: 'pt.pr.percent' }, { v: 'fixed', l: 'pt.pr.fixed' }], x.kind, (v) => {
+    const cur = x.kind === 'percent' ? Number(valueIn.value.replace(',', '.')) : parseMinor(valueIn.value, D);
+    x.kind = v;
+    unit.textContent = v === 'percent' ? '%' : D.symbol;
+    if (v === 'fixed') valueIn.value = '';
+    else valueIn.value = cur && cur < 100 ? String(cur) : '10';
+  }, 'pt.pr.kind');
+  const from = dateInput(x.from, 'from'), to = dateInput(x.to, 'to');
+  const cats = [...categoryNodes(data.products).keys()].sort();
+  const catBox = h('div', { class: 'pt-pick pt-pick-cats', role: 'group', 'aria-label': t('pt.pr.categories') }, cats.length ? cats.map((c) => h('label', { class: 'pt-check' },
+    h('input', { type: 'checkbox', checked: x.categories.includes(c), dataset: { cat: c } }), h('span', {}, c))) : h('div', { class: 'ed-hint' }, '—'));
+  const itemSearch = h('input', { type: 'search', class: 'ed-input', placeholder: t('pt.p.search'), 'aria-label': t('pt.pr.findItems') });
+  const itemBox = h('div', { class: 'pt-pick pt-pick-items', role: 'group', 'aria-label': t('pt.pr.items') }, data.products.map((p) => h('label', { class: 'pt-check', dataset: { q: [p.name.ka, p.name.ru, p.name.en, p.ean].join(' ').toLowerCase() } },
+    h('input', { type: 'checkbox', checked: x.items.includes(p.id), dataset: { id: p.id } }), h('span', {}, uiName(p)), h('span', { class: 'ed-hint' }, moneyCur(p.price, D)))));
+  itemSearch.addEventListener('input', () => { const q = itemSearch.value.trim().toLowerCase(); for (const l of itemBox.children) l.hidden = !!q && !l.dataset.q.includes(q); });
+  const body = h('div', { class: 'ed-fields pt-promo-dlg' },
+    field('pt.pr.name', name),
+    group('pt.pr.kind', kind),
+    field('pt.pr.value', h('div', { class: 'ed-num-wrap' }, valueIn, unit)),
+    h('div', { class: 'ed-grid2' }, field('pt.pr.from', from), field('pt.pr.to', to)),
+    h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('pt.pr.categories')), catBox, h('div', { class: 'ed-hint' }, t('pt.pr.catHint'))),
+    h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('pt.pr.items')), itemSearch, itemBox));
+  const ok = () => {
+    x.name = name.value.trim();
+    x.value = x.kind === 'percent' ? Number(valueIn.value.replace(',', '.')) : parseMinor(valueIn.value, D);
+    x.from = from.value; x.to = to.value;
+    x.categories = $$('input[data-cat]', catBox).filter((c) => c.checked).map((c) => c.dataset.cat);
+    x.items = $$('input[data-id]', itemBox).filter((c) => c.checked).map((c) => c.dataset.id);
+    if (!(x.value > 0) || (x.kind === 'percent' && x.value >= 100)) { toast(t('pt.pr.badValue'), 'warn'); valueIn.focus(); return false; }
+    if (!validDay(x.from) || !validDay(x.to) || x.from > x.to) { toast(t('pt.pr.badDates'), 'warn'); return false; }
+    if (!x.items.length && !x.categories.length) { toast(t('pt.pr.noTargets'), 'warn'); return false; }
+    return true;
+  };
+  openDialog({ title: t(pr ? 'pt.pr.edit' : 'pt.pr.add'), body, wide: true, className: 'pt-dlg', buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('ap.save'), value: 'ok', primary: true, onClick: ok }] }).then((v) => {
+    if (v !== 'ok') return;
+    const i = data.promotions.findIndex((p) => p.id === x.id);
+    if (i >= 0) data.promotions[i] = x; else data.promotions.push(x);
+    save(); paintAll();
+    toast(t('pt.pr.saved'), 'ok');
+  });
+}
+
+async function deletePromo(pr) {
+  if (!(await confirmDialog(t('pt.pr.delete'), t('pt.pr.deleteQ', { name: pr.name || t('pt.pr.untitled') }), t('dlg.delete'), true))) return;
+  data.promotions = data.promotions.filter((x) => x.id !== pr.id);
+  save(); paintAll();
+}
+
+// --- markdown rules -----------------------------------------------------------------------------------------------
+
+// Markdown rules editor: "N days left -> P % off". Inputs save on a 250ms debounce and repaint only table + preview
+// (not this editor), so the input being typed into keeps focus. Invalid intermediate text ('', '1,') is ignored
+// rather than saved.
+// KNOWN DEFECT: accepts pct up to 99.99 while cleanData clamps to 95 on next load, so a saved 99 silently becomes 95
+// after reload. Fix: use the same bound (p <= 95) here.
+function paintMarkdown() {
+  const box = els.md;
+  box.textContent = '';
+  const rows = h('div', { class: 'pt-mdrows' });
+  data.markdown.forEach((r, i) => {
+    const days = h('input', { class: 'ed-input pt-num pt-mdin', inputmode: 'numeric', value: String(r.days), 'aria-label': t('pt.md.days') });
+    const pct = h('input', { class: 'ed-input pt-num pt-mdin', inputmode: 'decimal', value: String(r.pct), 'aria-label': t('pt.md.pct') });
+    const upd = debounce(() => {
+      const d = parseInt(days.value, 10), p = Number(pct.value.replace(',', '.'));
+      if (!(d >= 0) || !(p >= 0 && p < 100)) return;
+      data.markdown[i] = { days: d, pct: p };
+      save(); prices = pricesFor(data); paintTable(); paintPreview();
+    }, 250);
+    days.addEventListener('input', upd); pct.addEventListener('input', upd);
+    rows.append(h('div', { class: 'pt-mdrow' }, h('span', {}, t('pt.md.left')), days, h('span', {}, t('pt.md.daysWord')), h('span', { class: 'pt-arrow', 'aria-hidden': 'true' }, '→'), pct, h('span', {}, '%'),
+      iconBtn('trash', t('pt.md.remove'), () => { data.markdown.splice(i, 1); save(); paintAll(); })));
+  });
+  const add = btn('pt.md.add', 'plus', () => { data.markdown.push({ days: 5, pct: 10 }); save(); paintAll(); });
+  add.classList.add('ed-sm');
+  const n = data.products.filter((p) => prices.get(p.id)?.kind === 'markdown').length;
+  box.append(rows, h('div', { class: 'ap-row' }, add, h('span', { class: 'ed-hint' }, t('pt.md.now', { n }))));
+}
+
+// --- products -----------------------------------------------------------------------------------------------------
+
+const ORIGINS = ['GE', 'AM', 'AZ', 'TR', 'UA', 'RU', 'DE', 'IT', 'FR', 'ES', 'NL', 'PL', 'CN', 'US'];
+
+// Product dialog. Notable choices:
+// - lang + dir=auto on each name input: correct spell-check dictionary and bidi handling per language.
+// - EAN hint live-validates the GS1 check digit and, for an all-digit wrong code, shows the expected digit (the most
+//   common typo); non-digit codes are accepted as Code 128 content rather than rejected.
+// - datalists offer existing categories and common origins without restricting free text.
+// - A promo price is kept only when below the price; empty promo dates mean "from today, open-ended" as in import.
+// - A price-history entry is written for new products and when price/promo fields changed (drives "changed tags").
+function editProduct(p) {
+  const x = p ? structuredClone(p) : { id: newId(), name: { ka: '', ru: '', en: '' }, ean: '', code: '', price: 0, promoPrice: null, promoFrom: '', promoTo: '', unit: 'pcs', size: '', category: '', origin: 'GE', expires: '', qty: 0 };
+  const names = Object.fromEntries(LANGS.map((l) => [l, h('input', { class: 'ed-input', lang: l, dir: 'auto', name: 'name-' + l, value: x.name[l] })]));
+  const ean = h('input', { class: 'ed-input pt-mono', inputmode: 'numeric', name: 'ean', value: x.ean, autocomplete: 'off' });
+  const eanHint = h('div', { class: 'ed-hint' });
+  const paintEan = () => {
+    const v = ean.value.replace(/\s/g, '');
+    if (!v) { eanHint.textContent = t('pt.f.eanHint'); eanHint.className = 'ed-hint'; return; }
+    const g = inspectGtin(v);
+    eanHint.textContent = g.valid ? `${g.kind} ✓` : /^\d+$/.test(v) && g.expected != null ? t('pt.f.eanCheck', { d: g.expected }) : t('pt.f.eanCode128');
+    eanHint.className = 'ed-hint' + (g.valid ? '' : ' pt-warn');
+  };
+  ean.addEventListener('input', paintEan);
+  paintEan();
+  const code = h('input', { class: 'ed-input', name: 'code', value: x.code });
+  const price = h('input', { class: 'ed-input pt-num', inputmode: 'decimal', name: 'price', value: minorToInput(x.price, D) });
+  const unit = seg(['pcs', 'kg', 'l'].map((u) => ({ v: u, l: 'pt.unit.' + u })), x.unit, (v) => { x.unit = v; }, 'pt.f.unit');
+  const size = h('input', { class: 'ed-input', name: 'size', value: x.size, placeholder: '500 g · 0.75 l' });
+  const cats = [...categoryNodes(data.products).keys()].sort();
+  const catList = h('datalist', { id: 'pt-cat-list' }, cats.map((c) => h('option', { value: c })));
+  const category = h('input', { class: 'ed-input', name: 'category', value: x.category, list: 'pt-cat-list', placeholder: 'Dairy / Cheese' });
+  const orgList = h('datalist', { id: 'pt-org-list' }, ORIGINS.map((c) => h('option', { value: c }, (() => { try { return new Intl.DisplayNames([uiLang()], { type: 'region' }).of(c); } catch { return c; } })())));
+  const origin = h('input', { class: 'ed-input', name: 'origin', value: x.origin, list: 'pt-org-list' });
+  const promo = h('input', { class: 'ed-input pt-num', inputmode: 'decimal', name: 'promo', value: minorToInput(x.promoPrice, D) });
+  const pf = dateInput(x.promoFrom, 'promoFrom'), pt = dateInput(x.promoTo === '9999-12-31' ? '' : x.promoTo, 'promoTo');
+  const exp = dateInput(x.expires, 'expires');
+  const qty = h('input', { class: 'ed-input pt-num', inputmode: 'decimal', name: 'qty', value: x.qty ? String(x.qty) : '' });
+  const body = h('div', { class: 'ed-fields pt-prod-dlg' }, catList, orgList,
+    h('div', { class: 'pt-grid3' }, ...LANGS.map((l) => field('=' + t('pt.f.name') + ' · ' + LANG_NAMES[l], names[l]))),
+    h('div', { class: 'ed-grid2' }, field('pt.f.barcode', ean), field('pt.f.code', code)), eanHint,
+    h('div', { class: 'ed-grid2' }, field('=' + t('pt.f.price') + ', ' + D.symbol, price), group('pt.f.unit', unit)),
+    h('div', { class: 'ed-grid2' }, field('pt.f.size', size, 'pt.f.sizeHint'), field('pt.f.origin', origin)),
+    field('pt.f.category', category, 'pt.f.catHint'),
+    h('fieldset', { class: 'pt-fs' }, h('legend', {}, t('pt.f.promoBlock')),
+      h('div', { class: 'pt-grid3' }, field('=' + t('pt.f.promoPrice') + ', ' + D.symbol, promo), field('pt.f.promoFrom', pf), field('pt.f.promoTo', pt))),
+    h('fieldset', { class: 'pt-fs' }, h('legend', {}, t('pt.f.stockBlock')),
+      h('div', { class: 'ed-grid2' }, field('pt.f.expires', exp), field('pt.f.quantity', qty)), h('div', { class: 'ed-hint' }, t('pt.f.stockHint'))));
+  const ok = () => {
+    for (const l of LANGS) x.name[l] = names[l].value.trim();
+    if (!LANGS.some((l) => x.name[l])) { toast(t('pt.f.needName'), 'warn'); names.ka.focus(); return false; }
+    const pr = parseMinor(price.value, D);
+    if (pr == null) { toast(t('pt.f.badPrice'), 'warn'); price.focus(); return false; }
+    const before = [x.price, x.promoPrice, x.promoFrom, x.promoTo].join('|');
+    x.price = pr;
+    x.ean = ean.value.replace(/\s/g, ''); x.code = code.value.trim(); x.size = size.value.trim();
+    x.category = catPath(category.value); x.origin = origin.value.trim();
+    const pp = parseMinor(promo.value, D);
+    if (pp != null && pp < pr) { x.promoPrice = pp; x.promoFrom = pf.value || today(); x.promoTo = pt.value || '9999-12-31'; }
+    else { x.promoPrice = null; x.promoFrom = ''; x.promoTo = ''; }
+    x.expires = exp.value;
+    x.qty = Number(qty.value.replace(',', '.')) || 0;
+    if (!p || before !== [x.price, x.promoPrice, x.promoFrom, x.promoTo].join('|')) notePriceChange(data, x.id);
+    return true;
+  };
+  openDialog({ title: t(p ? 'pt.p.edit' : 'pt.p.add'), body, wide: true, className: 'pt-dlg', buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('ap.save'), value: 'ok', primary: true, onClick: ok }] }).then((v) => {
+    if (v !== 'ok') return;
+    const i = data.products.findIndex((q) => q.id === x.id);
+    if (i >= 0) data.products[i] = x; else data.products.push(x);
+    save();
+    S.sel = x.id; lsSet('pt-sel', x.id);
+    paintAll();
+  });
+}
+
+// Also removes the product from promotion item lists: a dangling id would be harmless for pricing but would keep
+// a promotion "targeted" with nothing visible behind it.
+async function deleteProduct(p) {
+  if (!(await confirmDialog(t('pt.p.delete'), t('pt.p.deleteQ', { name: uiName(p) }), t('dlg.delete'), true))) return;
+  data.products = data.products.filter((x) => x.id !== p.id);
+  for (const pr of data.promotions) pr.items = pr.items.filter((id) => id !== p.id);
+  save(); paintAll();
+}
+
+async function loadDemo() {
+  if (!(await confirmDialog(t('pt.p.demo'), t('pt.p.demoQ'), t('pt.p.demoGo')))) return;
+  // Object.assign, not reassignment: `data` is a module const captured by every closure; replace its contents.
+  Object.assign(data, demoData());
+  S.sel = null; lsSet('pt-sel', null);
+  save(); paintAll();
+  toast(t('pt.p.demoDone', { n: data.products.length }), 'ok');
+}
+
+async function clearAll() {
+  if (!(await confirmDialog(t('pt.p.clear'), t('pt.p.clearQ'), t('pt.p.clear'), true))) return;
+  data.products = []; data.promotions = []; data.history = [];
+  save(); paintAll();
+}
+
+async function pickImport() {
+  const [f] = await pickFiles({ accept: '.csv,.tsv,.txt,.xlsx,.xlsm,.ods' });
+  if (f) doImport(f);
+}
+async function doImport(file) {
+  const r = await importFile(file, data, D);
+  if (r) { save(); paintAll(); }
+}
+
+startShell('products', () => render());
+render();

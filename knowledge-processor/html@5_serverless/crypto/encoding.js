@@ -1,0 +1,8 @@
+import{b64encode,b64decode}from"../codec/base64.js";const enc=new TextEncoder();const dec=new TextDecoder('utf-8');const decStrict=new TextDecoder('utf-8',{fatal:true});const utf8ToBytes=(s)=>enc.encode(String(s));const bytesToUtf8=(b,fatal=false)=>(fatal?decStrict:dec).decode(b);function toBytes(data){if(data instanceof Uint8Array)return data.constructor===Uint8Array?data:new Uint8Array(data.buffer,data.byteOffset,data.byteLength);if(typeof data==='string')return enc.encode(data);if(data instanceof ArrayBuffer)return new Uint8Array(data);if(ArrayBuffer.isView(data))return new Uint8Array(data.buffer,data.byteOffset,data.byteLength);if(data==null)return new Uint8Array(0);throw new TypeError('bytes expected');}
+const bytesToBase64=(b)=>b64encode(b);const bytesToBase64Url=(b)=>b64encode(b).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');function base64ToBytes(s){const t=String(s).replace(/\s+/g,'');if(!/^[A-Za-z0-9+/_-]*={0,2}$/.test(t)||t.replace(/=+$/,'').length%4===1)throw new Error('invalid base64');return b64decode(t);}
+function concatBytes(...parts){let n=0;for(const p of parts)n+=p.length;const out=new Uint8Array(n);let o=0;for(const p of parts){out.set(p,o);o+=p.length;}
+return out;}
+function equalBytes(a,b){if(!a||!b||a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a[i]^b[i];return d===0;}
+function wipe(...arrays){for(const a of arrays)if(a&&typeof a.fill==='function')a.fill(0);}
+function writeU32LE(b,o,v){b[o]=v;b[o+1]=v>>>8;b[o+2]=v>>>16;b[o+3]=v>>>24;}
+export{toBytes,wipe,concatBytes,writeU32LE,equalBytes,utf8ToBytes,base64ToBytes,bytesToBase64Url,bytesToBase64,bytesToUtf8};

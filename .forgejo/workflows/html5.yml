@@ -1,0 +1,155 @@
+# Builds every application into its artifacts and publishes the single-file pages:
+#   <app>/html@5-singlefile/<page>.html   one self-contained file per page
+#   <app>/html@5/                          multi-file deployment copy (pages, app modules, used libraries)
+# 1. build: builds both targets, verifies that a second build changes nothing (reproducible output), runs the
+#    repository checks (module links, unit tests of the libraries, network policy of the artifacts) and commits
+#    changed artifacts back to the pushed branch. Pull requests only report artifacts that are out of date.
+# 2. publish: on the default branch, writes the single-file pages under their publishing names (LANDING.html,
+#    RESUME.html, CRYPTO.hashing.html, …) into the Pages repository and pushes them when they changed. Applications
+#    with a DEMO_NOTICE.md are also built as offline single-file demos into demo/<slug>.html of the Pages repository
+#    (slug from the notice's first line: '# RESUME BUILDER' -> demo/resume-builder.html); demos are never committed
+#    here, and a demo whose notice is gone is removed from Pages.
+#
+# 3. courses (course.js): LEARN_*_COURSE.md at the top level and in .t9n/<lang>/ are published as
+#    course/in-html/<slug>.html and <lang>/course/in-html/<slug>.html (every example block also as
+#    <slug>/example-<n>.html, shown live through <object>). The build job checks that the preview links inside the .md
+#    sources are current (node course.js --fix rewrites them) and reports links to courses not written yet.
+#
+# Loop protection: a push that only touches artifact directories (depth > 1, directory name contains '@') is not
+# rebuilt; the bot commit is such a push.
+#
+# Codeberg setup: enable Actions in the repository settings. Pushing back uses the automatic token; if the repository
+# restricts it, add a secret CI_TOKEN (access token with write access to this repository). Publishing needs a secret
+# PAGES_TOKEN (access token with write access to the Pages repository); the target is the variable PAGES_REPO
+# (default slnknrr/pages) and PAGES_BRANCH (default main). Without PAGES_TOKEN the publish job only reports.
+
+name: html@5
+
+on:
+  push:
+    paths-ignore:
+      - '*/*@*/**'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: codeberg-tiny
+    container:
+      image: node:24-bookworm
+    outputs:
+      skip: ${{ steps.guard.outputs.skip }}
+    steps:
+      - name: Checkout
+        uses: https://code.forgejo.org/actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.CI_TOKEN || github.token }}
+
+      - name: Skip artifact-only pushes
+        id: guard
+        shell: bash
+        run: |
+          before='${{ github.event.before }}'
+          changed=''
+          if [ -n "$before" ] && [ "$before" != '0000000000000000000000000000000000000000' ] && git cat-file -e "$before" 2>/dev/null; then
+            changed=$(git diff --name-only "$before" "$GITHUB_SHA")
+          fi
+          if [ -n "$changed" ] && ! printf '%s\n' "$changed" | grep -qvE '^[^/]+/[^/]*@[^/]*/'; then
+            echo 'Only artifact directories changed; nothing to build.'
+            echo 'skip=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Artifacts out of date (pull requests)
+        if: steps.guard.outputs.skip != 'true' && github.event_name == 'pull_request'
+        shell: bash
+        run: node singlefile.js --check || echo '::warning::Artifacts are out of date; they are rebuilt after merging.'
+
+      # A failing page does not stop the others: their artifacts are still committed, the job fails at the end.
+      - name: Build artifacts
+        id: build
+        if: steps.guard.outputs.skip != 'true'
+        shell: bash
+        run: node singlefile.js || echo 'failed=true' >> "$GITHUB_OUTPUT"
+
+      - name: Verify reproducible output
+        if: steps.guard.outputs.skip != 'true' && steps.build.outputs.failed != 'true'
+        shell: bash
+        run: node singlefile.js --check --quiet
+
+      - name: Repository checks
+        if: steps.guard.outputs.skip != 'true'
+        shell: bash
+        run: node check.js
+
+      - name: Course sources
+        if: steps.guard.outputs.skip != 'true'
+        shell: bash
+        run: node course.js --check || echo '::warning::Course preview links are stale (run node course.js --fix) or link to unwritten courses.'
+
+      - name: Commit artifacts
+        if: steps.guard.outputs.skip != 'true' && github.event_name == 'push'
+        shell: bash
+        run: |
+          git config user.name 'html@5 bot'
+          git config user.email 'html5-bot@noreply.codeberg.org'
+          git add -A -- ':(glob)*/*@*/**'
+          if git diff --cached --quiet; then
+            echo 'Artifacts are up to date.'
+            exit 0
+          fi
+          git commit -m 'html@5: rebuild artifacts [skip ci]'
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then exit 0; fi
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+          done
+          exit 1
+
+      - name: Fail on build errors
+        if: steps.build.outputs.failed == 'true'
+        run: exit 1
+
+  publish:
+    needs: build
+    if: needs.build.outputs.skip != 'true' && github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+    runs-on: codeberg-tiny
+    container:
+      image: node:24-bookworm
+    env:
+      PAGES_REPO: ${{ vars.PAGES_REPO || 'slnknrr/pages' }}
+      PAGES_BRANCH: ${{ vars.PAGES_BRANCH || 'main' }}
+      PAGES_TOKEN: ${{ secrets.PAGES_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: https://code.forgejo.org/actions/checkout@v4
+
+      - name: Publish single-file pages
+        shell: bash
+        run: |
+          if [ -z "$PAGES_TOKEN" ]; then
+            echo "::notice::PAGES_TOKEN is not set: building the published pages without pushing them."
+            mkdir -p pages-out && node singlefile.js --target singlefile --publish pages-out --quiet
+            node singlefile.js --target demo --demo pages-out/demo --quiet
+            node course.js --out pages-out
+            ls -R pages-out
+            exit 0
+          fi
+          host="${GITHUB_SERVER_URL#https://}"
+          git clone --depth 1 --branch "$PAGES_BRANCH" "https://oauth2:${PAGES_TOKEN}@${host}/${PAGES_REPO}.git" pages-repo
+          node singlefile.js --target singlefile --publish pages-repo --quiet
+          node singlefile.js --target demo --demo pages-repo/demo --quiet
+          node course.js --out pages-repo
+          cd pages-repo
+          git config user.name 'html@5 bot'
+          git config user.email 'html5-bot@noreply.codeberg.org'
+          git add -A -- '*.html'
+          if git diff --cached --quiet; then
+            echo 'Published pages are up to date.'
+            exit 0
+          fi
+          git commit -m "html@5: publish from ${GITHUB_REPOSITORY}@${GITHUB_SHA::12}"
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:${PAGES_BRANCH}"; then exit 0; fi
+            git pull --rebase origin "$PAGES_BRANCH"
+          done
+          exit 1

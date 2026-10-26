@@ -1,0 +1,16 @@
+const asBytes=(b)=>(b instanceof Uint8Array?b:ArrayBuffer.isView(b)?new Uint8Array(b.buffer,b.byteOffset,b.byteLength):new Uint8Array(b));function slice(b,offset,length){const s=Math.max(0,Math.min(b.length,Math.floor(offset)));const e=Math.max(s,Math.min(b.length,Math.floor(offset+length)));return b.subarray(s,e);}
+function bytesSource(input){const b=asBytes(input);return{size:b.length,bytes:b,read:async(offset,length)=>slice(b,offset,length)};}
+function blobSource(blob){return{size:blob.size,blob,async read(offset,length){const s=Math.max(0,Math.min(blob.size,Math.floor(offset)));const e=Math.max(s,Math.min(blob.size,Math.floor(offset+length)));if(e<=s)return new Uint8Array(0);return new Uint8Array(await blob.slice(s,e).arrayBuffer());},};}
+function asSource(x){if(x==null)throw new TypeError('mediatags: no input');if(x instanceof Uint8Array||ArrayBuffer.isView(x)||x instanceof ArrayBuffer)return bytesSource(x);if(typeof x.read==='function'&&typeof x.size==='number')return x;if(typeof x.slice==='function'&&typeof x.size==='number'&&typeof x.arrayBuffer==='function')return blobSource(x);throw new TypeError('mediatags: not a byte source');}
+function concat(parts){if(parts.length===1)return parts[0];let n=0;for(const x of parts)n+=x.length;const out=new Uint8Array(n);let o=0;for(const x of parts){out.set(x,o);o+=x.length;}
+return out;}
+function cachedSource(src,{block=65536,blocks=64}={}){if(src.cached||src.bytes)return src;const cache=new Map();const put=(i,p)=>{cache.delete(i);cache.set(i,p);while(cache.size>Math.max(blocks,4))cache.delete(cache.keys().next().value);};async function read(offset,length){const start=Math.max(0,Math.floor(offset));const end=Math.min(src.size,Math.floor(offset+length));if(end<=start)return new Uint8Array(0);if(end-start>block*4)return asBytes(await src.read(start,end-start));const first=Math.floor(start/block),last=Math.floor((end-1)/block);const wanted=[];for(let i=first;i<=last;){if(cache.has(i)){const p=cache.get(i);put(i,p);wanted.push(p);i++;continue;}
+let j=i;while(j+1<=last&&!cache.has(j+1))j++;const runFirst=i,runStart=i*block;const run=Promise.resolve(src.read(runStart,Math.min(src.size,(j+1)*block)-runStart)).then(asBytes);for(let k=i;k<=j;k++){const p=run.then((b)=>b.subarray((k-runFirst)*block,(k-runFirst+1)*block));p.catch(()=>{if(cache.get(k)===p)cache.delete(k);});put(k,p);wanted.push(p);}
+i=j+1;}
+const parts=await Promise.all(wanted);const all=concat(parts);return all.subarray(start-first*block,end-first*block);}
+return{size:src.size,cached:true,source:src,read};}
+function runSync(flow,bytes){const b=asBytes(bytes);let r=flow.next();while(!r.done)r=flow.next(slice(b,r.value[0],r.value[1]));return r.value;}
+async function runAsync(flow,src){let r=flow.next();while(!r.done){const[offset,length]=r.value;let b;try{const s=Math.max(0,Math.floor(offset));const n=Math.max(0,Math.min(src.size,Math.floor(offset+length))-s);b=n?asBytes(await src.read(s,n)):new Uint8Array(0);if(b.length>n)b=b.subarray(0,n);}catch(e){flow.return();throw e;}
+r=flow.next(b);}
+return r.value;}
+export{asSource,runAsync,cachedSource,asBytes,runSync,blobSource};

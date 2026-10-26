@@ -1,0 +1,1 @@
+const httpFetch=(url,init)=>fetch(url,init);export{httpFetch};

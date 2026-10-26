@@ -1,0 +1,3 @@
+import"../ui/strings.js";import"./i18n-en.js";import"./i18n-ru.js";import"./i18n-uk.js";import"./i18n-de.js";import"./i18n-fr.js";import"./i18n-es.js";import"./i18n-ka.js";import{lsSet}from"../ui/dom.js";import{UI_STATE,applyStaticI18n}from"../ui/i18n.js";import{renderCanvas}from"./canvas.js";import{renderShell,refreshPanels}from"./shell.js";import{rtInit}from"../richtext/input.js";import{tblInit}from"../richtext/table-ui.js";function setUILang(code){UI_STATE.lang=code;lsSet(UI_STATE.storageKey,code);document.documentElement.lang=code;applyStaticI18n();renderShell();try{rtInit();tblInit();}catch(e){console.error(e);}
+renderCanvas();refreshPanels(true);document.dispatchEvent(new CustomEvent('ed-uilang',{detail:code}));}
+export{setUILang};

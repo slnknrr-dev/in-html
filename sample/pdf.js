@@ -1,0 +1,150 @@
+// sample/pdf.js - sample PDF generator (valid PDF 1.4, Helvetica, ASCII text).
+//
+// Why hand-written PDF: the 14 standard fonts need no embedding, so a valid PDF is a few kilobytes of plain text
+// objects plus a cross-reference table of byte offsets. The cost is ASCII-only text (WinAnsi without a font
+// program), handled by transliteration below. Content is uncompressed so tests can grep it.
+import { tplLatin1 } from './bytes.js';
+import { b64encode } from '../codec/base64.js';
+
+/** Reduce any text to printable ASCII (PDF standard fonts + our ASCII-only rule). */
+// Typographic punctuation is mapped to ASCII look-alikes first, then NFKD + combining-mark removal turns accented
+// letters into their base letters; anything still outside printable ASCII becomes '?'. Ensures the stream is
+// single-byte, which the offset arithmetic below depends on.
+function tplPdfText(s) {
+  return String(s ?? '')
+    .replace(/[‘’‚′]/g, "'")
+    .replace(/[“”„«»″]/g, '"')
+    .replace(/[‐-―−]/g, '-')
+    .replace(/…/g, '...')
+    .replace(/[   \t]/g, ' ')
+    .replace(/·|•/g, '-')
+    .replace(/€/g, 'EUR ')
+    .normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^\x20-\x7e]/g, '?');
+}
+
+/** PDF literal string with escaped delimiters. */
+// Literal strings delimit with parentheses; backslash, '(' and ')' must be escaped (unbalanced parens would end
+// the string early).
+function tplPdfStr(s) {
+  return '(' + tplPdfText(s).replace(/[\\()]/g, (m) => '\\' + m) + ')';
+}
+
+/** Greedy word wrap by character count (Helvetica average widths are close enough). */
+function tplWrap(text, max) {
+  const words = tplPdfText(text).split(/ +/).filter(Boolean);
+  const lines = [];
+  let cur = '';
+  for (let w of words) {
+    while (w.length > max) { // hard-split very long tokens (URLs)
+      if (cur) { lines.push(cur); cur = ''; }
+      lines.push(w.slice(0, max));
+      w = w.slice(max);
+    }
+    if (!cur) cur = w;
+    else if (cur.length + 1 + w.length <= max) cur += ' ' + w;
+    else { lines.push(cur); cur = w; }
+  }
+  if (cur) lines.push(cur);
+  return lines.length ? lines : [''];
+}
+
+/**
+ * Build a small but valid multi-page PDF 1.4 and return it as base64.
+ * `lines`: strings; '' = blank line, '# Heading' = bold heading, '- item' = bullet,
+ * '> text' = muted small text. Non-ASCII characters are transliterated or replaced.
+ * opts: accent ('#rrggbb' band colour), band (small caps label above the title), producer / creator (Info).
+ */
+function tplMakePDF(title, lines = [], opts = {}) {
+  const PW = 595, PH = 842, X = 56, BOTTOM = 72;
+  const ACC = /^#[0-9a-f]{6}$/i.test(opts.accent || '')
+    ? [1, 3, 5].map((i) => (parseInt(opts.accent.slice(i, i + 2), 16) / 255).toFixed(3)).join(' ') : '0.059 0.463 0.431';
+  const titleLines = tplWrap(title || 'Document', 40).slice(0, 3);
+  // 1) Layout pass: flatten into positioned rows, paginating as needed.
+  // Two passes: layout first (positions and page breaks), then content streams. The page count must be known before
+  // writing footers ('1 / 3').
+  const rows = []; // { page, y, font, size, color, text, x }
+  let page = 0;
+  let y = PH - 110 - 26 * titleLines.length - 18;
+  const put = (font, size, lead, text, x = X, color = '0.13 0.15 0.18') => {
+    if (y - lead < BOTTOM) { page++; y = PH - 72; }
+    y -= lead;
+    rows.push({ page, y, font, size, color, text, x });
+  };
+  for (const raw of lines) {
+    const s = String(raw ?? '');
+    if (!s.trim()) { y -= 8; continue; }
+    if (s.startsWith('# ')) {
+      y -= 6;
+      tplWrap(s.slice(2), 64).forEach((t) => put('F2', 13, 18, t, X, ACC));
+    } else if (s.startsWith('- ')) {
+      tplWrap(s.slice(2), 82).forEach((t, i) => put('F1', 11, 15, (i ? '' : '- ') + t, i ? X + 9 : X));
+    } else if (s.startsWith('> ')) {
+      tplWrap(s.slice(2), 100).forEach((t) => put('F1', 9, 13, t, X, '0.42 0.45 0.50'));
+    } else {
+      tplWrap(s, 86).forEach((t) => put('F1', 11, 15, t));
+    }
+  }
+  const pageCount = page + 1;
+  // 2) Content streams.
+  const streams = [];
+  for (let p = 0; p < pageCount; p++) {
+    const ops = [];
+    if (p === 0) {
+      ops.push(ACC + ' rg 0 ' + (PH - 96 - 26 * titleLines.length) + ' ' + PW + ' ' + (96 + 26 * titleLines.length) + ' re f');
+      ops.push('BT /F1 9 Tf 1 1 1 rg ' + X + ' ' + (PH - 52) + ' Td ' + tplPdfStr(opts.band || 'SAMPLE DOCUMENT') + ' Tj ET');
+      titleLines.forEach((t, i) => {
+        ops.push('BT /F2 22 Tf 1 1 1 rg ' + X + ' ' + (PH - 86 - 26 * i) + ' Td ' + tplPdfStr(t) + ' Tj ET');
+      });
+    } else {
+      ops.push(ACC + ' RG 1.5 w ' + X + ' ' + (PH - 52) + ' m ' + (PW - X) + ' ' + (PH - 52) + ' l S');
+    }
+    for (const r of rows) {
+      if (r.page !== p) continue;
+      ops.push('BT /' + r.font + ' ' + r.size + ' Tf ' + r.color + ' rg ' + r.x + ' ' + r.y + ' Td ' + tplPdfStr(r.text) + ' Tj ET');
+    }
+    ops.push('0.80 0.83 0.86 RG 0.6 w ' + X + ' 52 m ' + (PW - X) + ' 52 l S');
+    ops.push('BT /F1 8 Tf 0.42 0.45 0.50 rg ' + X + ' 38 Td ' + tplPdfStr(titleLines.join(' ')) + ' Tj ET');
+    ops.push('BT /F1 8 Tf 0.42 0.45 0.50 rg ' + (PW - X - 40) + ' 38 Td ' + tplPdfStr((p + 1) + ' / ' + pageCount) + ' Tj ET');
+    streams.push(ops.join('\n'));
+  }
+  // 3) Objects: 1 catalog, 2 pages, 3 F1, 4 F2, 5 info, then (page, contents) pairs.
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  // The creation date is the only non-deterministic byte in the output: callers comparing generated PDFs must mask
+  // /CreationDate.
+  const pdfDate = 'D:' + d.getUTCFullYear() + pad(d.getUTCMonth() + 1) + pad(d.getUTCDate()) +
+    pad(d.getUTCHours()) + pad(d.getUTCMinutes()) + pad(d.getUTCSeconds()) + 'Z';
+  const objs = [];
+  const kids = [];
+  for (let p = 0; p < pageCount; p++) kids.push((6 + p * 2) + ' 0 R');
+  objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+  objs[2] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pageCount + ' >>';
+  objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+  objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+  objs[5] = '<< /Title ' + tplPdfStr(title || 'Document') + ' /Producer ' + tplPdfStr(opts.producer || 'sample generator') + ' /Creator ' + tplPdfStr(opts.creator || 'sample generator') +
+    ' /CreationDate (' + pdfDate + ') >>';
+  streams.forEach((s, p) => {
+    const pn = 6 + p * 2;
+    objs[pn] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + PW + ' ' + PH + ']' +
+      ' /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ' + (pn + 1) + ' 0 R >>';
+    objs[pn + 1] = '<< /Length ' + s.length + ' >>\nstream\n' + s + '\nendstream';
+  });
+  // 4) Serialize with exact byte offsets (everything is single-byte, so index === byte offset).
+  // The second header line holds bytes above 127 so transfer tools detect the file as binary (PDF spec recommendation).
+  let out = '%PDF-1.4\n%âãÏÓ\n';
+  const offsets = [];
+  for (let n = 1; n < objs.length; n++) {
+    offsets[n] = out.length;
+    out += n + ' 0 obj\n' + objs[n] + '\nendobj\n';
+  }
+  const xref = out.length;
+  out += 'xref\n0 ' + objs.length + '\n0000000000 65535 f \n';
+  for (let n = 1; n < objs.length; n++) out += String(offsets[n]).padStart(10, '0') + ' 00000 n \n';
+  out += 'trailer\n<< /Size ' + objs.length + ' /Root 1 0 R /Info 5 0 R >>\nstartxref\n' + xref + '\n%%EOF\n';
+  return b64encode(tplLatin1(out));
+}
+
+export {
+  tplMakePDF
+};

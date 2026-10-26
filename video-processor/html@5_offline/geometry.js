@@ -1,0 +1,3 @@
+function fmtTime(sec,frac=2){if(!Number.isFinite(sec))return'--:--';const neg=sec<0;let s=Math.abs(sec);const h=Math.floor(s/3600);s-=h*3600;const m=Math.floor(s/60);s-=m*60;let ss=s.toFixed(frac);if(parseFloat(ss)>=60)ss=(59.99).toFixed(frac);const sPart=(s<10&&!ss.startsWith('10')?'0':'')+ss;return(neg?'-':'')+(h?`${h}:${String(m).padStart(2,'0')}:${sPart}`:`${m}:${sPart}`);}
+function videoBitrate(w,h,fps,quality,codec){const bpp={low:0.05,med:0.09,high:0.16}[quality]||0.09;const eff=/^av01/.test(codec)?0.6:/^vp09|^hvc1/.test(codec)?0.7:/^vp8/.test(codec)?1.15:1;return Math.round(Math.min(60e6,Math.max(150e3,w*h*fps*bpp*eff)));}
+export{fmtTime,videoBitrate};

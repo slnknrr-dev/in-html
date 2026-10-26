@@ -1,0 +1,239 @@
+// prosody/phon-ru.js - Russian words: stress, phonemes and syllables.
+//
+//   analyzeRu(word, { overrides }) -> W          stressRu(word, { overrides }) -> { i, src, alt }
+//   transcribeRu(word, stressedVowelNo) -> segments per letter        RU_CLITICS
+//   wordsRu() -> the known forms (dictionary + frequent monosyllables)   knownRu(norm)   lookupRu(norm) -> [{ i, yo }] | null
+//
+// W = { text, norm, lang: 'ru', syl: [{ t, ph, v, st }], stress, src, alt, fn, elide: [] }: t the letters of the
+// syllable, ph its segments (IPA), v the index of its vowel in ph, st 0 / 1 primary / 2 secondary; stress the index of
+// the stressed syllable (-1 without a vowel); src where the stress comes from: 'user' (overrides: Map norm -> syllable
+// index), 'yo' (the letter ё), 'mono' (one syllable), 'dict' (dict-ru.js), 'guess' (by analogy with dictionary words
+// of the same ending), 'none'; alt: other stresses the dictionary knows (за́мок / замо́к); fn: a clitic (в, на, не, же…).
+//
+// Phonetics: softness before е ё и ю я ь (ж ш ц always hard, ч щ й always soft), iotation of е ё ю я, akanye
+// (unstressed о / а → ɐ right before the stress and at the start of the word, ə elsewhere), ikanye (е / я → ɪ after
+// soft consonants, ə at the end of the word after the stress), final devoicing and voicing assimilation, -ого / -его
+// with в, что / конечно with ш, -тся / -ться, silent consonants (честный, поздно, солнце, чувство, сердце), сч → щ.
+import { RU_DICT, RU_MONO } from './dict-ru.js';
+import { decodeFront } from './frontcode.js';
+
+export const RU_VOWELS = 'аеёиоуыэюя';
+const isV = (c) => RU_VOWELS.includes(c);
+const CONS = { б: 'b', в: 'v', г: 'ɡ', д: 'd', ж: 'ʐ', з: 'z', к: 'k', л: 'l', м: 'm', н: 'n', п: 'p', р: 'r', с: 's', т: 't', ф: 'f', х: 'x', ц: 'ts', ч: 'tɕ', ш: 'ʂ', щ: 'ɕː', й: 'j' };
+const SOFTENERS = 'еёиюяь';
+const HARD_ALWAYS = 'жшц';
+
+export const RU_CLITICS = new Set('и а но да в во на с со к ко у о об обо от ото до по за из изо без под подо над при про для не ни же ж ли ль бы б то-то ка'.split(' '));
+
+let DICT = null, ENDINGS = null;
+// Lazy decoding: the 30 000-entry dictionary is unpacked into a Map only on the first lookup, so importing the module
+// (or using only English) costs nothing. Payload = stressed vowel numbers as chars from '1', '!' marking ё.
+function dict() {
+  if (!DICT) DICT = decodeFront(RU_DICT, (rest) => { const m = /^([а-яё-]*)(.*)$/.exec(rest); return [m[1], m[2]]; });
+  return DICT;
+}
+// payload -> [{ i (0-based vowel), yo }]
+const readStress = (p) => { const out = []; for (let k = 0; k < p.length; k++) { if (p[k] === '!') { out[out.length - 1].yo = true; continue; } out.push({ i: p.charCodeAt(k) - 49, yo: false }); } return out; };
+
+export const normRu = (w) => String(w || '').toLowerCase().replace(/[^а-яё-]/g, '').replace(/^-+|-+$/g, '');
+const vowelsOf = (w) => [...w].reduce((n, c) => n + (isV(c) ? 1 : 0), 0);
+
+let MONO = null, ALL = null;
+const monos = () => MONO || (MONO = new Set(decodeFront(RU_MONO, (rest) => [rest, '']).keys()));
+// every word form the module knows: the dictionary and the frequent monosyllables
+export const wordsRu = () => ALL || (ALL = [...dict().keys(), ...monos()]);
+export const knownRu = (norm) => dict().has(norm) || monos().has(norm);
+
+export function lookupRu(norm) {
+  const p = dict().get(norm);
+  return p ? readStress(p) : null;
+}
+
+// Stress by analogy: dictionary words with the longest common ending vote for the stress counted from the end.
+function guess(norm) {
+  if (!ENDINGS) {
+    ENDINGS = new Map();
+    for (const [w, p] of dict()) {
+      const s = readStress(p)[0];
+      const fromEnd = vowelsOf(w) - s.i;
+      const k = w.slice(-3);
+      (ENDINGS.get(k) || ENDINGS.set(k, []).get(k)).push([w, fromEnd]);
+    }
+  }
+  const list = ENDINGS.get(norm.slice(-3)) || [];
+  const n = vowelsOf(norm);
+  for (let k = Math.min(norm.length - 1, 9); k >= 3; k--) {
+    const end = norm.slice(-k);
+    const votes = new Map();
+    let total = 0;
+    for (const [w, fe] of list) if (w.length > k && w.endsWith(end) && fe <= n) { votes.set(fe, (votes.get(fe) || 0) + 1); total++; }
+    if (total >= (k >= 5 ? 1 : 2)) {
+      const [fe] = [...votes].sort((a, b) => b[1] - a[1])[0];
+      return n - fe;
+    }
+  }
+  // no analogy: Russian words of three and more syllables are most often stressed on the penultimate
+  return n >= 3 ? n - 2 : 0;
+}
+
+export function stressRu(word, { overrides = null } = {}) {
+  const norm = normRu(word);
+  const n = vowelsOf(norm);
+  if (!n) return { i: -1, src: 'none', alt: [], yo: false };
+  if (overrides && overrides.has(norm)) return { i: Math.min(n - 1, overrides.get(norm)), src: 'user', alt: [], yo: false };
+  const yoAt = norm.indexOf('ё');
+  if (yoAt >= 0) return { i: vowelsOf(norm.slice(0, yoAt)), src: 'yo', alt: [], yo: false };
+  if (n === 1) { const d = lookupRu(norm); return { i: 0, src: d ? 'dict' : 'mono', alt: [], yo: !!(d && d[0].yo) }; }
+  const d = lookupRu(norm);
+  if (d) return { i: d[0].i, src: 'dict', alt: d.slice(1).map((x) => x.i), yo: d[0].yo };
+  return { i: guess(norm), src: 'guess', alt: [], yo: false };
+}
+
+const VOICELESS = { b: 'p', v: 'f', ɡ: 'k', d: 't', z: 's', ʐ: 'ʂ', ɣ: 'x' };
+const VOICED = { p: 'b', f: 'v', k: 'ɡ', t: 'd', s: 'z', ʂ: 'ʐ', x: 'ɣ' };
+const base = (s) => s.replace(/[ʲː]/g, '');
+const isObstruent = (s) => s && (base(s) in VOICELESS || base(s) in VOICED || ['ts', 'tɕ', 'ɕ'].includes(base(s)));
+const isVoicelessObs = (s) => s && (base(s) in VOICED || ['ts', 'tɕ', 'ɕ'].includes(base(s)));
+const swap = (s, map) => { const b = base(s); return map[b] ? map[b] + s.slice(b.length) : s; };
+
+const SILENT = [['стн', 1], ['здн', 1], ['лнц', 0], ['вств', 0], ['рдц', 1], ['стл', 1], ['ндск', 1], ['нтск', 1]];
+const CHN_SH = new Set(['конечно', 'скучно', 'нарочно', 'яичница', 'скворечник', 'прачечная', 'пустячный', 'девичник']);
+const GO_KEEP = new Set(['много', 'немного', 'строго', 'нестрого', 'убого', 'полого', 'дорого', 'недорого', 'отлого', 'пологого']);
+
+// Segments of every letter of a word (one hyphen-free part) with the stressed vowel number (0-based).
+export function transcribeRu(norm, stressV, yo = false) {
+  const L = [...norm];
+  const vIdx = L.map((c, i) => (isV(c) ? i : -1)).filter((i) => i >= 0);
+  const sAt = stressV >= 0 ? vIdx[stressV] : -1;
+  const segs = L.map(() => []);
+  const silent = new Set();
+  for (const [pat, off] of SILENT) { let k = norm.indexOf(pat); while (k >= 0) { silent.add(k + off); k = norm.indexOf(pat, k + 1); } }
+  const tsya = /ть?ся$/.test(norm) && norm.length > 4;
+  for (let i = 0; i < L.length; i++) {
+    const c = L[i], prev = L[i - 1], next = L[i + 1];
+    if (c === 'ъ' || c === 'ь') continue;
+    if (CONS[c]) {
+      if (silent.has(i)) continue;
+      let s = CONS[c];
+      const soft = c === 'ч' || c === 'щ' ? false : c === 'й' ? false : !HARD_ALWAYS.includes(c) && next && SOFTENERS.includes(next);
+      if (c === 'л') s = soft ? 'lʲ' : 'ɫ';
+      else if (soft) s += 'ʲ';
+      // сч, зч, жч -> щ
+      if ((c === 'с' || c === 'з' || c === 'ж') && next === 'ч') continue;
+      if (c === 'ч' && (prev === 'с' || prev === 'з' || prev === 'ж')) s = 'ɕː';
+      if (c === 'ч' && ((next === 'т' && /^(ни)?чт/.test(norm.slice(Math.max(0, i - 2)))) || (next === 'н' && CHN_SH.has(norm)))) s = 'ʂ';
+      if (c === 'г' && i === L.length - 2 && /[ое]го$/.test(norm) && norm.length > 3 && !GO_KEEP.has(norm)) s = 'v';
+      if (c === 'г' && /^(се|е)го/.test(norm) && i === norm.indexOf('го')) s = 'v';
+      if (tsya && c === 'т' && (i === L.length - 3 || i === L.length - 4)) { s = 'ts'; }
+      if (tsya && c === 'с' && i === L.length - 2) continue;
+      segs[i].push(s);
+      continue;
+    }
+    if (!isV(c)) continue;
+    const iot = 'еёюя'.includes(c) && (i === 0 || isV(prev) || prev === 'ъ' || prev === 'ь') || (c === 'и' && prev === 'ь');
+    if (iot) segs[i].push('j');
+    const prevSoft = iot || (prev && CONS[prev] && !HARD_ALWAYS.includes(prev) && (SOFTENERS.includes(c) || prev === 'ч' || prev === 'щ' || prev === 'й'));
+    const prevHard = prev && HARD_ALWAYS.includes(prev);
+    const stressed = i === sAt;
+    let q;
+    if (stressed) {
+      q = { а: 'a', я: 'a', о: 'o', ё: 'o', е: yo ? 'o' : 'e', э: 'e', у: 'u', ю: 'u', ы: 'ɨ', и: prevHard ? 'ɨ' : 'i' }[c];
+    } else {
+      const pretonic = sAt >= 0 && i < sAt && !vIdx.some((j) => j > i && j < sAt);
+      const initial = i === vIdx[0] && !L.slice(0, i).some((x) => CONS[x]);
+      const final = i === L.length - 1;
+      const post = sAt >= 0 && i > sAt;
+      if (c === 'а' || c === 'о') q = prevSoft && !prevHard ? 'ɪ' : pretonic || initial ? 'ɐ' : 'ə';
+      else if (c === 'я') q = post && final ? 'ə' : 'ɪ';
+      else if (c === 'е' || c === 'ё') q = prevHard ? 'ɨ' : post && final && !iot ? 'ɪ' : 'ɪ';
+      else if (c === 'э') q = 'ɪ';
+      else if (c === 'и') q = prevHard ? 'ɨ' : 'ɪ';
+      else if (c === 'ы') q = 'ɨ';
+      else q = 'ʊ';
+      if (tsya && i === L.length - 1) q = 'ə';
+    }
+    segs[i].push(q);
+  }
+  // voicing: final devoicing and assimilation to the next obstruent (в does not voice what is before it)
+  const flat = [];
+  segs.forEach((ss, li) => ss.forEach((s, k) => flat.push([li, k])));
+  for (let f = flat.length - 1; f >= 0; f--) {
+    const [li, k] = flat[f];
+    const s = segs[li][k];
+    if (!isObstruent(s)) continue;
+    const nx = f + 1 < flat.length ? segs[flat[f + 1][0]][flat[f + 1][1]] : null;
+    if (!nx) segs[li][k] = swap(s, VOICELESS);
+    else if (isVoicelessObs(nx)) segs[li][k] = swap(s, VOICELESS);
+    else if (isObstruent(nx) && base(nx) !== 'v') segs[li][k] = swap(s, VOICED);
+  }
+  return segs;
+}
+
+// Letter groups of the syllables: one vowel each; between two vowels й and a sonorant before another consonant
+// close the syllable (кар-та, сой-ти), a double consonant is split (ван-на), the rest opens the next one.
+export function syllableSplit(norm) {
+  const L = [...norm];
+  const vIdx = L.map((c, i) => (isV(c) ? i : -1)).filter((i) => i >= 0);
+  if (!vIdx.length) return [[0, L.length]];
+  const cuts = [0];
+  for (let k = 0; k + 1 < vIdx.length; k++) {
+    const a = vIdx[k], b = vIdx[k + 1];
+    let cut = a + 1;
+    const cl = L.slice(a + 1, b);
+    if (cl.length >= 2) {
+      const first = cl[0];
+      if (first === 'й' || ('рлмн'.includes(first) && cl[1] !== 'ь' && !isV(cl[1])) || (cl.length >= 2 && cl[0] === cl[1])) cut = a + 2;
+      else if ('рлмн'.includes(first) && cl[1] === 'ь' && cl.length > 2) cut = a + 3;
+      if (cl[0] === 'й' && cl[1] === 'ь') cut = a + 3;
+    } else if (cl.length === 1 && (cl[0] === 'й')) cut = a + 2;
+    while (cut < b && (L[cut] === 'ь' || L[cut] === 'ъ')) cut++;
+    cuts.push(cut);
+  }
+  cuts.push(L.length);
+  return cuts.slice(0, -1).map((c, k) => [c, cuts[k + 1]]);
+}
+
+function analyzePart(norm, st) {
+  const segs = transcribeRu(norm, st.i, st.yo);
+  const ranges = syllableSplit(norm);
+  const L = [...norm];
+  const syl = ranges.map(([a, b], k) => {
+    const ph = segs.slice(a, b).flat();
+    const vk = ph.findIndex((s) => /^[aeiouɐəɪʊɨ]/.test(s));
+    return { t: L.slice(a, b).join(''), ph, v: vk, st: k === st.i ? 1 : 0 };
+  }).filter((s) => s.v >= 0 || ranges.length === 1);
+  return syl;
+}
+
+export function analyzeRu(word, { overrides = null } = {}) {
+  const text = String(word || '');
+  const norm = normRu(text);
+  const parts = norm.split('-').filter(Boolean);
+  const W = { text, norm, lang: 'ru', syl: [], stress: -1, src: 'none', alt: [], fn: RU_CLITICS.has(norm), elide: [] };
+  if (!parts.length) return W;
+  if (parts.length === 1) {
+    const st = stressRu(norm, { overrides });
+    W.src = st.src; W.alt = st.alt;
+    if (st.i < 0) { W.syl = [{ t: norm, ph: transcribeRu(norm, -1).flat(), v: -1, st: 0 }]; return W; }
+    W.syl = analyzePart(norm, st);
+    W.stress = W.syl.findIndex((s) => s.st === 1);
+    if (W.fn) { W.syl.forEach((s) => { s.st = 0; }); W.stress = -1; }
+    return W;
+  }
+  // a hyphenated word: the last part carries the main stress, the others a secondary one
+  const ovr = overrides && overrides.has(norm) ? overrides.get(norm) : null;
+  let all = [];
+  parts.forEach((p, k) => {
+    const st = stressRu(p, { overrides });
+    if (st.i < 0) { all.push({ t: p, ph: transcribeRu(p, -1).flat(), v: -1, st: 0, clitic: true }); return; }
+    const syl = analyzePart(p, st);
+    if (k < parts.length - 1) syl.forEach((s) => { if (s.st) s.st = 2; });
+    all = all.concat(syl);
+    if (k === parts.length - 1) W.src = st.src;
+  });
+  all = all.filter((s) => !s.clitic);
+  if (ovr !== null) { all.forEach((s, k) => { s.st = k === ovr ? 1 : 0; }); W.src = 'user'; }
+  W.syl = all;
+  W.stress = all.findIndex((s) => s.st === 1);
+  return W;
+}

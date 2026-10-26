@@ -1,0 +1,260 @@
+// language-studio/tools.js - the constructors and analysers of each course: Georgian splitter, verb and noun
+// constructors and numbers; Sanskrit transliteration, sandhi, compounds and meter scanner; the character constructor;
+// kana and pinyin converters; the Russian morpheme analyser; the English etymology explorer.
+//
+//   TOOLS: { id: { title: key, render(C, arg) -> element } }  (the Georgian workbench and text analysis: text-tools.js)
+import { h } from '../ui/dom.js';
+import { t } from '../ui/i18n.js';
+import { select } from '../ui/app.js';
+import { fromDeva, toDeva } from '../lingua/iast.js';
+import { RULES, join, joinAll } from '../lingua/sandhi.js';
+import { METERS } from '../lingua/meter.js';
+import { ROLES, SCREEVES, VERSIONS, PERSONS, analyze, numberWords, translit, verbForm } from '../lingua/kartuli.js';
+import { toKana, toRomaji, toKatakana } from '../lingua/kana.js';
+import { marked, numbered, parse as parsePinyin, toneSandhi, TONES } from '../lingua/pinyin.js';
+import { split } from '../lingua/russian.js';
+import { COMPOSE } from './courses/cjk.js';
+import { EXPRESSIONS, NOUNS, VERBS } from './courses/ka.js';
+import { NEUTRAL } from './courses/ru.js';
+import { declineEl, paradigmEl, partsEl, scanEl, speakBtn, X } from './views.js';
+import { TEXT_TOOLS } from './text-tools.js';
+import { MORPH_TOOLS } from './morph-tools.js';
+import { XMF_TOOLS } from './xmf-tools.js';
+import { KO_TOOLS } from './ko-tools.js';
+import { XL_TOOLS } from './xl-tools.js';
+import { RHYME_TOOLS } from './rhyme-tools.js';
+
+// Tool pattern: every tool is a function (C) -> element registered by id in TOOLS (merged with the tool tables of
+// the per-language modules at the bottom); a course lists the ids it offers. Tools are live: input events re-run a
+// pure analysis and replace the output (live()), no "Analyse" button, because analyses here take milliseconds.
+// spellcheck and autocomplete are off: inputs hold transliterations and foreign words the browser would "correct".
+// `multiline: null` after the spread removes the helper flag so h() does not emit it as an attribute.
+const input = (value, onInput, attrs = {}) => {
+  const i = h(attrs.multiline ? 'textarea' : 'input', { class: 'ed-input' + (attrs.multiline ? ' ed-textarea' : ''), value, spellcheck: 'false', autocomplete: 'off', ...attrs, multiline: null });
+  i.addEventListener('input', () => onInput(i.value));
+  return i;
+};
+const live = (initial, render) => { const out = h('div', { class: 'ls-out' }); const run = (v) => out.replaceChildren(...[].concat(render(v)).filter(Boolean)); run(initial); return { out, run }; };
+const field = (label, control) => h('label', { class: 'ed-field' }, h('span', { class: 'ed-label' }, label), control);
+
+function kaSplit(C) {
+  const { out, run } = live('დავუწერ', (w) => {
+    w = w.trim();
+    if (!w) return null;
+    const fixed = EXPRESSIONS.find((e) => e.w === w);
+    const res = [];
+    if (fixed) res.push(h('div', { class: 'ls-parse' }, h('p', null, h('b', null, X(C, fixed.m))), partsEl(C, fixed.parts), h('p', null, h('b', null, t('ls.literally') + ' '), X(C, fixed.lit)), h('p', { class: 'ls-note' }, X(C, fixed.note))));
+    // readings that split the same way (an O3 object has no prefix: 3sg and 3pl look alike) are shown once
+    const seen = new Map();
+    for (const a of analyze(w, { verbs: VERBS, nouns: NOUNS })) {
+      const k = a.parts.map((p) => p.s + p.role).join('|') + a.screeve + a.s + a.version + (a.verb || a.noun || '');
+      if (seen.has(k)) { if (a.o) seen.get(k).o += '/' + a.o; } else seen.set(k, { ...a });
+    }
+    const an = [...seen.values()];
+    for (const a of an.slice(0, 4)) {
+      if (fixed && a.source === 'unknown') continue;
+      const v = a.verb ? VERBS.find((x) => x.id === a.verb) : null;
+      const head = v ? `${X(C, v.m)} · ${X(C, SCREEVES.find((s) => s.id === a.screeve))} · ${a.s}${a.o ? ' → ' + a.o : ''} · ${X(C, VERSIONS.find((x) => x.id === a.version))}`
+        : a.source === 'noun' ? `${a.noun} · ${a.form}` : t('ls.ka.guess');
+      const extra = [];
+      if (v) {
+        // the same person in every version, and the analogues with other preverbs
+        const versions = ['neutral', 'subjective', 'objective'].map((ver) => verbForm(v, { screeve: a.screeve, s: a.s, o: ver === 'objective' ? (a.o || '3sg') : '3sg', version: ver })).filter(Boolean);
+        extra.push(h('div', { class: 'ls-also' }, h('b', null, t('ls.ka.versions') + ' '), versions.map((f) => h('span', { class: 'ed-chip', lang: 'ka' }, f.form))));
+        extra.push(h('div', { class: 'ls-also' }, h('b', null, t('ls.ka.analogues') + ' '), v.pvs.map(([pv, m]) => h('span', { class: 'ed-chip', title: m, lang: 'ka' }, verbForm({ ...v, pv }, { screeve: 'future', s: '3sg', version: 'neutral' }).form + ' — ' + m))));
+      }
+      res.push(h('div', { class: 'ls-parse' + (a.source.startsWith('guess') ? ' ls-guess' : '') }, h('p', null, h('b', null, head)), partsEl(C, a.parts, ROLES), ...extra));
+    }
+    res.push(h('p', { class: 'ls-tr' }, translit(w, C.lang === 'ru' ? 'ru' : 'lat')));
+    return res;
+  });
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('ls.tool.kaSplitHint')),
+    h('div', { class: 'ed-chips' }, ['დავუწერ', 'გამიკეთებს', 'ნახვამდის', 'გენაცვალე', 'ქალაქიდან', 'მეგობრებთან', 'იწერდა', 'სადღეგრძელო'].map((x) => h('button', { type: 'button', class: 'ed-chip', lang: 'ka', onclick: () => { inp.value = x; run(x); } }, x))),
+    field(t('ls.tool.word'), inp = input('დავუწერ', run, { lang: 'ka' })), out);
+}
+let inp;
+
+function kaVerb(C) {
+  const S = { verb: 'write', screeve: 'present', version: 'neutral', o: '3sg' };
+  const out = h('div', { class: 'ls-out' });
+  const draw = () => {
+    const v = VERBS.find((x) => x.id === S.verb);
+    out.replaceChildren(paradigmEl(C, v, S.screeve, S.version, S.o),
+      h('div', { class: 'ls-also' }, h('b', null, t('ls.ka.analogues') + ' '), v.pvs.map(([pv, m]) => { const f = verbForm({ ...v, pv }, { screeve: 'future', s: '3sg', version: 'neutral' }); return h('span', { class: 'ed-chip', lang: 'ka', title: m }, `${f.form} — ${m}`); })));
+  };
+  const objSel = select(PERSONS.map((p) => ({ v: p, l: '=' + p })), S.o, (v) => { S.o = v; draw(); });
+  const objWrap = field(t('ls.ka.object'), objSel);
+  objWrap.hidden = true;
+  const ctl = h('div', { class: 'ls-ctl' },
+    field(t('ls.ka.verb'), select(VERBS.map((v) => ({ v: v.id, l: '=' + v.root + (v.ts ? '-' + v.ts : '') + ' · ' + X(C, v.m) })), S.verb, (v) => { S.verb = v; draw(); })),
+    field(t('ls.ka.screeve'), select(SCREEVES.map((s) => ({ v: s.id, l: '=' + X(C, s) + ' (' + s.ka + ')' })), S.screeve, (v) => { S.screeve = v; draw(); })),
+    field(t('ls.ka.version'), select(VERSIONS.map((s) => ({ v: s.id, l: '=' + X(C, s) })), S.version, (v) => { S.version = v; objWrap.hidden = v !== 'objective'; draw(); })),
+    objWrap);
+  draw();
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('ls.tool.kaVerbHint')), ctl, out);
+}
+
+function kaNoun(C) {
+  const { out, run } = live('მეგობარი', (w) => (w.trim() ? declineEl(C, w.trim()) : null));
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('ls.tool.kaNounHint')),
+    h('div', { class: 'ed-chips' }, NOUNS.slice(0, 12).map((n) => h('button', { type: 'button', class: 'ed-chip', lang: 'ka', onclick: () => { nounIn.value = n.word; run(n.word); } }, n.word))),
+    field(t('ls.tool.word'), nounIn = input('მეგობარი', run, { lang: 'ka' })), out);
+}
+let nounIn;
+
+function kaNumber(C) {
+  const { out, run } = live('1987', (v) => {
+    const n = Math.max(0, Math.min(999999, Math.floor(Number(v) || 0)));
+    const r = numberWords(n);
+    return [h('div', { class: 'ls-big', lang: 'ka' }, r.text, speakBtn(C, r.text)), h('div', { class: 'ls-tr' }, translit(r.text, C.lang === 'ru' ? 'ru' : 'lat')),
+      h('div', { class: 'ls-parts' }, r.parts.map((p) => h('span', { class: 'ls-part' }, h('b', { lang: 'ka' }, p.s), h('small', null, p.note))))];
+  });
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('ls.tool.kaNumberHint')), field(t('ls.tool.number'), input('1987', run, { type: 'number', min: 0, max: 999999 })), out);
+}
+
+function saTranslit(C) {
+  const deva = h('div', { class: 'ls-big ls-deva', lang: 'sa' });
+  const back = h('div', { class: 'ls-tr' });
+  const run = (v) => { const d = toDeva(v); deva.replaceChildren(d, speakBtn(C, d) || ''); };
+  const runBack = (v) => { back.textContent = fromDeva(v); };
+  const start = 'agním īḷe puróhitaṃ yajñásya devám ṛtvíjam';
+  run(start);
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('ls.tool.saTranslitHint')),
+    field('IAST', input(start, run, { multiline: true, rows: 3 })), deva,
+    field(t('ls.tool.devaToIast'), input('', runBack, { multiline: true, rows: 2, lang: 'sa', placeholder: 'सत्यमेव जयते' })), back);
+}
+
+function saSandhi(C) {
+  const { out, run } = live('deva indra iti asti', (v) => {
+    const words = v.split(/[\s+]+/).filter(Boolean);
+    if (words.length < 2) return h('p', { class: 'ed-hint' }, t('ls.tool.saSandhiNeed'));
+    const r = joinAll(words);
+    return [h('div', { class: 'ls-big', lang: 'sa' }, toDeva(r.text)), h('div', { class: 'ls-iast' }, r.text),
+      h('ol', { class: 'ls-steps' }, r.steps.map((s) => h('li', null, h('b', null, s.text), ' — ', X(C, RULES[s.rule]))))];
+  });
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('ls.tool.saSandhiHint')),
+    h('div', { class: 'ed-chips' }, ['deva indra', 'mahā ṛṣi', 'iti api', 'rāmaḥ gacchati', 'tat ca', 'sat ānanda', 'naraḥ asti', 'vāk mayī'].map((x) => h('button', { type: 'button', class: 'ed-chip', onclick: () => { sIn.value = x; run(x); } }, x))),
+    field(t('ls.tool.words'), sIn = input('deva indra iti asti', run)), out);
+}
+let sIn;
+
+const COMPOUND_TYPES = {
+  tatpurusha: { ru: 'татпуруша: «X-а Y» — второе определяется первым (rājaputra «сын царя»)', en: 'tatpuruṣa: "the Y of X" (rājaputra "king\'s son")' },
+  karmadharaya: { ru: 'кармадхарая: «Y, который X» — первое описывает второе (nīlotpala «синий лотос»)', en: 'karmadhāraya: "Y that is X" (nīlotpala "blue lotus")' },
+  dvandva: { ru: 'двандва: «X и Y» (mitrāvaruṇau «Митра и Варуна»)', en: 'dvandva: "X and Y"' },
+  bahuvrihi: { ru: 'бахуврихи: «тот, у кого X Y» — описывает третье лицо (bahuvrīhi «у кого много риса»)', en: 'bahuvrīhi: "one who has X Y" — describes someone else' },
+};
+function saCompound(C) {
+  const S = { a: 'mahā', b: 'ṛṣi', type: 'karmadharaya' };
+  const out = h('div', { class: 'ls-out' });
+  const draw = () => {
+    const r = join(S.a, S.b);
+    const text = r.text.replace(/\s+/g, '').replace("'", '');
+    out.replaceChildren(h('div', { class: 'ls-big', lang: 'sa' }, toDeva(text)), h('div', { class: 'ls-iast' }, text),
+      h('p', null, X(C, RULES[r.rule])), h('p', { class: 'ls-note' }, X(C, COMPOUND_TYPES[S.type])));
+  };
+  draw();
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('ls.tool.saCompoundHint')),
+    h('div', { class: 'ls-ctl' }, field(t('ls.tool.first'), input(S.a, (v) => { S.a = v.trim(); draw(); })), field(t('ls.tool.second'), input(S.b, (v) => { S.b = v.trim(); draw(); })),
+      field(t('ls.tool.type'), select(Object.keys(COMPOUND_TYPES).map((k) => ({ v: k, l: '=' + k })), S.type, (v) => { S.type = v; draw(); }))), out);
+}
+
+function saMeter(C) {
+  const start = 'tát savitúr váreṇyam\nbhárgo devásya dhīmahi\ndhíyo yó naḥ pracodáyāt';
+  const { out, run } = live(start, (v) => {
+    const box = scanEl(C, v);
+    return [box, h('div', { class: 'ap-table-wrap' }, h('table', { class: 'ap-table ls-table' }, h('tbody', null, Object.values(METERS).map((m) => h('tr', null, h('th', null, m.name), h('td', null, m.padas.join(' + ')), h('td', null, m.cadence || ''))))))];
+  });
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('ls.tool.saMeterHint')), field(t('ls.tool.verse'), input(start, run, { multiline: true, rows: 4 })), out);
+}
+
+function cjkCompose(C) {
+  const parts = [...new Set(COMPOSE.flatMap((c) => c[1].split(' ')))];
+  const sel = [];
+  const out = h('div', { class: 'ls-out' });
+  const picked = h('div', { class: 'ls-picked' });
+  const draw = () => {
+    picked.textContent = sel.length ? sel.join(' + ') : t('ls.tool.pickParts');
+    const key = (arr) => [...arr].sort().join(' ');
+    const exact = COMPOSE.filter((c) => key(c[1].split(' ')) === key(sel));
+    const partial = sel.length ? COMPOSE.filter((c) => !exact.includes(c) && sel.every((p) => c[1].split(' ').filter((x) => x === p).length >= sel.filter((x) => x === p).length)) : [];
+    const card = ([r, comp, ru, zh, ja, note]) => h('div', { class: 'ls-card ls-compose' }, h('div', { class: 'ls-formula', lang: C.course.id }, comp.split(' ').join(' + '), ' = ', h('b', null, r)), h('div', { class: 'ls-m' }, X(C, { ru, zh, ja })), h('p', { class: 'ls-note' }, note));
+    out.replaceChildren(exact.length ? h('div', { class: 'ls-cards' }, exact.map(card)) : sel.length ? h('p', { class: 'ed-hint' }, t('ls.tool.noExact')) : '',
+      partial.length ? h('h3', null, t('ls.tool.containing')) : '', partial.length ? h('div', { class: 'ls-cards' }, partial.map(card)) : '');
+  };
+  draw();
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('ls.tool.composeHint')),
+    h('div', { class: 'ls-keys' }, parts.map((p) => h('button', { type: 'button', class: 'ls-key', lang: C.course.id, onclick: () => { sel.push(p); draw(); } }, p))),
+    h('div', { class: 'ls-ctl' }, picked, h('button', { type: 'button', class: 'ed-btn', onclick: () => { sel.pop(); draw(); } }, t('ls.undo')), h('button', { type: 'button', class: 'ed-btn', onclick: () => { sel.length = 0; draw(); } }, t('ls.clear'))), out);
+}
+
+function jaKana(C) {
+  const out = h('div', { class: 'ls-out' });
+  const run = (v) => { const hira = toKana(v, 'h'); out.replaceChildren(h('div', { class: 'ls-big', lang: 'ja' }, hira, speakBtn(C, hira)), h('div', { class: 'ls-big', lang: 'ja' }, toKatakana(hira))); };
+  const back = h('div', { class: 'ls-tr' });
+  run('arigatou');
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('ls.tool.kanaHint')),
+    field(t('ls.tool.romaji'), input('arigatou', run)), out,
+    field(t('ls.tool.kanaToRomaji'), input('', (v) => { back.textContent = toRomaji(v); }, { lang: 'ja', placeholder: 'こんにちは' })), back);
+}
+
+function zhPinyin(C) {
+  const { out, run } = live('ni3 hao3 zhong1 guo2', (v) => {
+    const m = marked(v);
+    const syl = numbered(m).split(/\s+/).filter(Boolean).map(parsePinyin);
+    const sandhi = toneSandhi(syl.map((s) => s.tone));
+    return [h('div', { class: 'ls-big' }, m, speakBtn(C, m)),
+      h('div', { class: 'ap-table-wrap' }, h('table', { class: 'ap-table ls-table' },
+        h('thead', null, h('tr', null, [t('ls.zh.syllable'), t('ls.zh.initial'), t('ls.zh.final'), t('ls.zh.tone'), t('ls.zh.spoken')].map((x) => h('th', null, x)))),
+        h('tbody', null, syl.map((s, i) => h('tr', null, h('td', null, marked(s.plain + s.tone)), h('td', null, s.initial || '∅'), h('td', null, s.final + (s.sound !== s.final ? ` (= ${s.sound})` : '')),
+          h('td', null, s.tone + ' · ' + (C.lang === 'ja' ? TONES[s.tone - 1].ja : TONES[s.tone - 1].ru)), h('td', null, sandhi[i] !== s.tone ? `→ ${sandhi[i]}` : ''))))))];
+  });
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('ls.tool.pinyinHint')), field(t('ls.tool.pinyin'), input('ni3 hao3 zhong1 guo2', run)), out);
+}
+
+function ruSplit(C) {
+  const { out, run } = live('сочувствую', (w) => {
+    w = w.trim().toLowerCase();
+    if (!w) return null;
+    const known = NEUTRAL.find((n) => n.w === w);
+    const res = [];
+    if (known) res.push(h('div', { class: 'ls-parse' }, partsEl(C, known.parts), h('p', null, h('b', null, t('ls.literally') + ' '), X(C, known.lit)), h('p', null, h('b', null, t('ls.narrowed') + ' '), X(C, known.now)), h('p', { class: 'ls-orig' }, h('b', null, t('ls.original') + ' '), X(C, known.orig))));
+    for (const r of split(w).slice(0, known ? 2 : 4)) res.push(h('div', { class: 'ls-parse ls-guess' }, partsEl(C, r.parts.map((p) => ({ s: p.s, role: p.role, gloss: p.gloss })))));
+    return res;
+  });
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('ls.tool.ruSplitHint')),
+    h('div', { class: 'ed-chips' }, NEUTRAL.slice(0, 10).map((n) => h('button', { type: 'button', class: 'ed-chip', lang: 'ru', onclick: () => { rIn.value = n.w; run(n.w); } }, n.w))),
+    field(t('ls.tool.word'), rIn = input('сочувствую', run, { lang: 'ru' })), out);
+}
+let rIn;
+
+function enEtym(C) {
+  const { out, run } = live('', (q) => {
+    q = q.trim().toLowerCase();
+    const list = C.course.etym.filter((e) => !q || e.w.toLowerCase().includes(q) || e.path.toLowerCase().includes(q) || X(C, e.m).toLowerCase().includes(q));
+    return h('div', { class: 'ls-cards' }, list.map((e) => h('div', { class: 'ls-card' }, h('div', { class: 'ls-word-main' }, h('span', { class: 'ls-w', lang: 'en' }, e.w), h('span', { class: 'ls-tr' }, e.tr), speakBtn(C, e.w)), h('div', { class: 'ls-m' }, X(C, e.m)), h('div', { class: 'ls-path' }, e.path), h('p', { class: 'ls-note' }, X(C, e.note)))));
+  });
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('ls.tool.etymHint')), field(t('ls.tool.search'), input('', run, { type: 'search', placeholder: 'лат., disaster…' })), out);
+}
+
+export const TOOLS = {
+  'ka-split': { title: 'ls.tool.kaSplit', render: kaSplit },
+  'ka-verb': { title: 'ls.tool.kaVerb', render: kaVerb },
+  'ka-noun': { title: 'ls.tool.kaNoun', render: kaNoun },
+  'ka-number': { title: 'ls.tool.kaNumber', render: kaNumber },
+  'sa-translit': { title: 'ls.tool.saTranslit', render: saTranslit },
+  'sa-sandhi': { title: 'ls.tool.saSandhi', render: saSandhi },
+  'sa-compound': { title: 'ls.tool.saCompound', render: saCompound },
+  'sa-meter': { title: 'ls.tool.saMeter', render: saMeter },
+  'cjk-compose': { title: 'ls.tool.compose', render: cjkCompose },
+  'ja-kana': { title: 'ls.tool.kana', render: jaKana },
+  'zh-pinyin': { title: 'ls.tool.pinyin', render: zhPinyin },
+  'ru-split': { title: 'ls.tool.ruSplit', render: ruSplit },
+  'en-etym': { title: 'ls.tool.etym', render: enEtym },
+  ...TEXT_TOOLS,
+  ...MORPH_TOOLS,
+  ...XMF_TOOLS,
+  ...KO_TOOLS,
+  ...XL_TOOLS,
+  ...RHYME_TOOLS,
+};

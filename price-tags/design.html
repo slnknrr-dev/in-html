@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- price-tags/design.html - designer page (templates, sizes, true-size preview, tag list, A4 sheets, print).
+     Same shell as index.html (see the comments there); only the title and the entry module differ. Printing does not
+     open a new window: design.js appends #pt-print to <body> and app.css @media print hides everything else. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Price Tags — Designer</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23d61f26'/%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.4' stroke-linejoin='round' d='M6 15V7h8l12 12-8 8z'/%3E%3Ccircle cx='10.5' cy='11' r='1.8' fill='%23fff'/%3E%3C/svg%3E">
+<!-- Stylesheet order: base, shell, app (later wins on equal specificity). -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- Both anchors on both pages: the shell nav needs every page href, whichever page is open. -->
+<a id="pg-products" href="index.html" hidden></a>
+<a id="pg-design" href="design.html" hidden></a>
+<main class="ap-main" id="main"></main>
+<script type="module" src="./design.js"></script>
+</body>
+</html>

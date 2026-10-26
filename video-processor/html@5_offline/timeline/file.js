@@ -1,0 +1,7 @@
+import{writeZip,readZip}from"../zip/zip.js";import{PROJECT_TYPE,normalizeProject}from"./model.js";function parseProject(text){let raw;try{raw=JSON.parse(text);}catch{throw new Error('not a project file (invalid JSON)');}
+if(!raw||typeof raw!=='object'||raw.type!==PROJECT_TYPE)throw new Error('not a video project');if(Number(raw.version)>1)throw new Error('the project was saved by a newer version');return normalizeProject(raw);}
+const isZip=(b)=>b&&b.length>4&&b[0]===0x50&&b[1]===0x4b&&b[2]===0x03&&b[3]===0x04;const safeName=(s)=>String(s||'media').replace(/[\\/:*?"<>|\u0000-\u001f]+/g,'_').slice(0,120)||'media';async function packProject(p,files){const proj=normalizeProject(p);const entries=[{name:'project.json',data:JSON.stringify(proj,null,1)}];for(const m of proj.media){const data=files.get(m.id);if(data)entries.push({name:`media/${m.id}/${safeName(m.name)}`,data,store:true});}
+return writeZip(entries);}
+async function unpackProject(bytes){const entries=readZip(bytes);const pj=entries.find((e)=>e.name==='project.json');if(!pj)throw new Error('not a video project archive (no project.json)');const project=parseProject(await pj.text());const files=new Map();for(const e of entries){const m=/^media\/([^/]+)\/(.+)$/.exec(e.name);if(!m||e.dir||!project.media.some((x)=>x.id===m[1]))continue;files.set(m[1],{name:m[2],bytes:await e.data()});}
+return{project,files};}
+export{isZip,unpackProject,parseProject,packProject};

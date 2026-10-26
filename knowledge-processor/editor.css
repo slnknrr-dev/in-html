@@ -1,0 +1,379 @@
+/* knowledge-processor/editor.css - the editor: full-height shell (header tools, three columns: pages / media / base
+   settings, page editor, live preview; one column at a time with a tab bar on phones), page tree, block cards and
+   forms, markup fields, media library, diagram editor, export and base dialogs. Needs ui/base.css and ui/app.css. */
+
+/* CONTRACT
+   - Namespace: every class starts with `kp-`. Shared primitives are `ed-` (ui/base.css), shell is `ap-` (ui/app.css).
+     Rules here may restyle `ed-`/`ap-` only when scoped under a `kp-` ancestor or on this app's own page.
+   - Specificity budget: one class (0,1,0); two for state/context (`.kp-tr.kp-on`, `.kp-ed.kp-no-preview .kp-ed-right`).
+     No ids. Equal low weights let source order (this file loads last) decide.
+   - State classes are reused adjectives: .kp-on (selected/active), .kp-sel (selected block card), .kp-off (disabled),
+     .kp-over (drag hover), .kp-empty. Meaning comes from the compound selector.
+   - Colours via tokens (--ed-*). Deliberate exceptions: the 451 (secret) red #b91c1c / #991b1b is a fixed signal of
+     "encrypted", identical in both themes on purpose; the diagram stage uses fixed light colours because it previews
+     the published reader, which the editor theme does not style; template icons use per-template brand colours.
+   - !important: one use (.kp-ins:hover), commented at the rule.
+
+   LAYOUT
+   - The editor is an app, not a document: the body is a fixed-height flex column with overflow hidden, and every
+     column scrolls on its own. `min-height: 0` on flex/grid children is what makes inner overflow:auto work
+     (default min-height:auto = content height, so the child would grow instead of scrolling).
+   - Desktop: 3-column grid. Phones (max-width 900px): one column, chosen by [data-pane] on .kp-ed (set by main.js),
+     plus a bottom tab bar. Pane switching is pure CSS: no re-render, editor state survives. */
+
+/* height:100% needs a sized html element (shared base); overflow:hidden kills page scroll, columns scroll instead. */
+body.kp-body { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+/* Thin scrollbars (Firefox; Chromium 121+): three scrolling columns side by side waste width with fat bars. */
+body.kp-body * { scrollbar-width: thin; }
+/* Shell header override: nowrap keeps the toolbar on one line on desktop; the 640px query re-enables wrap. */
+.ap-top { min-height: 52px; padding: 6px 12px; flex-wrap: nowrap; gap: 8px; }
+.ap-top .ap-name { font-size: 15px; }
+/* Toolbar fills the header slot left by the removed spacer (main.js mountBar). min-width:0 lets it shrink and the
+   children ellipsize instead of pushing the header wider than the viewport. */
+.kp-tools { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.kp-base-btn { max-width: 260px; min-width: 0; }
+.kp-base-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kp-status { color: var(--ed-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* Fixed 451 red (see CONTRACT): the lock button means "encrypted pages are open", a signal, not a theme accent. */
+.kp-lock-btn { color: #b91c1c; }
+/* Styled from aria-pressed, not a class: visual state and its accessible announcement cannot diverge. */
+.kp-pv-btn[aria-pressed="true"] { color: var(--ed-accent); background: var(--ed-accent-weak); }
+
+/* Takes the rest of the body below the header; min-height:0 so the grid inside can be shorter than its content. */
+.kp-ed { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* Columns: tree 230..280px, editor fluid (minmax(0,1fr): 1fr alone = minmax(auto,1fr) and a long word would widen
+   it), preview at least 360px (a phone-width reader) or 44% of the screen. */
+.kp-ed-main { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(230px, 280px) minmax(0, 1fr) minmax(360px, 44%); }
+/* Preview off: the template drops the third track and the column is hidden ((0,2,0)/(0,3,0) beat the base rules). */
+.kp-ed.kp-no-preview .kp-ed-main { grid-template-columns: minmax(230px, 280px) minmax(0, 1fr); }
+.kp-ed.kp-no-preview .kp-ed-right { display: none; }
+.kp-ed-left { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--ed-border); background: var(--ed-panel); }
+.kp-ed-ltabs { display: flex; gap: 2px; padding: 6px 6px 0; border-bottom: 1px solid var(--ed-border); }
+.kp-ltab { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 7px 4px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--ed-muted); font-weight: 550; font-size: 12.5px; }
+.kp-ltab.kp-on { color: var(--ed-accent); border-bottom-color: var(--ed-accent); }
+.kp-ltab .ed-ic, .kp-ltab svg { width: 16px; height: 16px; }
+.kp-ed-lpanel { flex: 1; overflow: auto; padding: 10px; }
+.kp-ed-center { min-height: 0; overflow: auto; padding: 16px 22px 80px; background: var(--ed-bg); }
+/* Readable width for forms; the column itself stays full width so its scrollbar sits at the column edge. */
+.kp-ed-center > * { max-width: 860px; margin-left: auto; margin-right: auto; }
+.kp-ed-right { min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--ed-border); background: var(--ed-stage); }
+/* The pane tab bar is always in the DOM; shown only in the phone query below. */
+.kp-ed-tabs { display: none; }
+.kp-pad { padding: 16px; }
+.kp-panel-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 2px 2px 10px; }
+.kp-panel-h h2 { font-size: 15px; }
+.kp-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.kp-tiny { font-size: 12px; color: var(--ed-muted); gap: 6px; }
+
+/* Laptop widths: narrower tree and preview before giving up on three columns. */
+@media (max-width: 1180px) { .kp-ed-main { grid-template-columns: minmax(210px, 240px) minmax(0, 1fr) minmax(320px, 40%); } }
+/* Phones/tablets portrait: one column chosen by data-pane. Specificity: `.kp-ed[data-pane=x] .kp-ed-y` (0,3,0)
+   comes after `.kp-ed.kp-no-preview .kp-ed-right` (0,3,0) above, so equal weight + later source shows the preview
+   pane even when the desktop preview toggle is off; the toggle button itself is hidden here. */
+@media (max-width: 900px) {
+  .kp-ed-main, .kp-ed.kp-no-preview .kp-ed-main { grid-template-columns: minmax(0, 1fr); }
+  .kp-ed-left, .kp-ed-center, .kp-ed-right { display: none; }
+  .kp-ed[data-pane="pages"] .kp-ed-left, .kp-ed[data-pane="edit"] .kp-ed-center, .kp-ed[data-pane="preview"] .kp-ed-right { display: flex; }
+  .kp-ed[data-pane="edit"] .kp-ed-center { display: block; padding: 12px 12px 90px; }
+  /* KNOWN DEFECT: dead selector. It needs a .kp-ed nested inside another .kp-ed, which never exists. Harmless, since
+     the [data-pane] rule above already wins by source order. Fix: delete it, or write
+     `.kp-ed.kp-no-preview[data-pane="preview"] .kp-ed-right`. */
+  .kp-ed.kp-no-preview .kp-ed[data-pane="preview"] .kp-ed-right { display: flex; }
+  /* env(safe-area-inset-bottom) keeps the tabs above the iPhone home indicator; needs viewport-fit=cover (index.html). */
+  .kp-ed-tabs { display: flex; border-top: 1px solid var(--ed-border); background: var(--ed-panel); padding-bottom: env(safe-area-inset-bottom); }
+  .kp-ptab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 7px 4px 8px; border: 0; background: none; color: var(--ed-muted); font-size: 11.5px; font-weight: 550; }
+  .kp-ptab.kp-on { color: var(--ed-accent); }
+  .kp-pv-btn { display: none; }
+  .kp-ed-right { border-left: 0; }
+}
+/* Narrow phones: the toolbar moves to its own full-width row (order:9 + flex-basis 100% in a wrapping header);
+   app name, status text and the export label are dropped, icons remain. */
+@media (max-width: 640px) {
+  .ap-top { flex-wrap: wrap; }
+  .ap-top .ap-brand { flex: 0 1 auto; }
+  .ap-top .ap-name { display: none; }
+  .kp-tools { order: 9; flex: 1 0 100%; }
+  .kp-status { display: none; }
+  .kp-export-btn span:last-child { display: none; }
+  .kp-base-btn { max-width: 52vw; }
+}
+
+/* page tree */
+.kp-pages-act { margin-bottom: 8px; }
+.kp-pages-act .ed-btn { flex: 1; }
+/* Nested <ul> tree: no bullets and no list padding; indentation is supplied by the tree renderer. */
+.kp-tree, .kp-tree ul { list-style: none; margin: 8px 0 0; padding: 0; }
+.kp-tree ul { margin: 0; }
+.kp-tr { display: flex; align-items: center; gap: 2px; border-radius: var(--ed-radius-sm); padding-right: 4px; min-height: 30px; }
+.kp-tr:hover { background: var(--ed-hover); }
+.kp-tr.kp-on { background: var(--ed-accent-weak); }
+.kp-tr.kp-on .kp-tl { color: var(--ed-accent); font-weight: 600; }
+/* Expand/collapse twisty: fixed 20px box (flex:none) so labels of leaf and branch rows line up. */
+.kp-tw { width: 20px; height: 20px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: 0; background: none; color: var(--ed-faint); padding: 0; }
+.kp-tw .ed-ic, .kp-tw svg { width: 14px; height: 14px; }
+/* Label is a button filling the row: min-width:0 + .kp-tl-t ellipsis keep long titles on one line. */
+.kp-tl { flex: 1; min-width: 0; text-align: left; border: 0; background: none; padding: 5px 2px; color: var(--ed-text); font-size: 13px; }
+.kp-tl-t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 451 pages show a placeholder title in italic red: the real title is encrypted and must not leak into the tree. */
+.kp-tl-secret { font-style: italic; color: #b91c1c; }
+.kp-tb { flex: none; display: inline-flex; align-items: center; gap: 2px; padding: 0 4px; height: 18px; border-radius: 4px; font-size: 10.5px; font-weight: 600; color: var(--ed-muted); background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.kp-tb .ed-ic, .kp-tb svg { width: 12px; height: 12px; }
+.kp-tb-s { color: #b91c1c; border-color: color-mix(in srgb, #b91c1c 40%, var(--ed-border)); }
+/* Touch: rows grow to 40px. pointer:coarse, not width: a tablet with a mouse keeps the dense tree. */
+@media (pointer: coarse) { .kp-tr { min-height: 40px; } .kp-tl { padding: 9px 2px; font-size: 14px; } }
+
+/* page editor */
+.kp-pe-head { margin-bottom: 10px; }
+.kp-pe-tr { flex-wrap: nowrap; }
+/* Title edited in place: looks like a heading, borders appear on hover/focus. margin-left:-8px cancels the padding
+   so the text aligns with content below. The `font` shorthand also resets line-height (1.25 for a heading). */
+.kp-pe-title { flex: 1; min-width: 0; font: 650 24px/1.25 var(--ed-font); border: 1px solid transparent; border-radius: var(--ed-radius-sm); background: transparent; padding: 4px 8px; margin-left: -8px; color: var(--ed-text); }
+.kp-pe-title:hover { border-color: var(--ed-border); }
+/* outline replaced by the shared focus ring token, never removed without a substitute. */
+.kp-pe-title:focus { outline: none; border-color: var(--ed-accent); background: var(--ed-panel); box-shadow: var(--ed-focus); }
+.kp-pe-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
+.kp-pe-route { font: 12px var(--ed-mono); color: var(--ed-muted); background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: 4px; padding: 1px 6px; }
+.kp-badge { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; color: var(--ed-muted); background: var(--ed-panel); border: 1px solid var(--ed-border); }
+.kp-badge .ed-ic, .kp-badge svg { width: 13px; height: 13px; }
+.kp-badge-s { color: #fff; background: #991b1b; border-color: #991b1b; }
+.kp-badge-off { color: var(--ed-warn); }
+.kp-secret-hint { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid color-mix(in srgb, #b91c1c 35%, var(--ed-border)); background: color-mix(in srgb, #b91c1c 6%, var(--ed-panel)); border-radius: var(--ed-radius-sm); color: var(--ed-text); }
+.kp-secret-hint .ed-ic { color: #b91c1c; }
+.kp-pset { margin: 10px 0 14px; background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: var(--ed-radius); }
+/* Custom summary row: list-style:none removes the marker in Firefox/Chromium; Safari ignores it on summary, hence
+   the ::-webkit-details-marker rule below. */
+.kp-pset > summary { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; font-weight: 600; list-style: none; }
+.kp-pset > summary::-webkit-details-marker { display: none; }
+/* Two-column field grid; .kp-f-wide and nested rows span both columns (1 / -1 = first to last grid line). */
+.kp-pset-g { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; padding: 4px 14px 14px; }
+.kp-pset-g > .kp-f-wide, .kp-pset-g > .kp-pset-row { grid-column: 1 / -1; }
+.kp-pset-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+@media (max-width: 640px) { .kp-pset-g, .kp-pset-row { grid-template-columns: 1fr; } }
+.kp-f { margin: 4px 0; min-width: 0; }
+.kp-f .ed-label { display: block; margin-bottom: 3px; font-weight: 600; font-size: 12px; color: var(--ed-muted); }
+.kp-f.ed-field-check { display: flex; align-items: center; gap: 8px; }
+.kp-f.ed-field-check .ed-label { margin: 0; }
+.kp-f .ed-hint { margin: 3px 0 0; font-size: 11.5px; }
+/* Variants bar and versions bar: pill tabs. The variants bar gets a dashed rule because versions belong to the
+   selected variant (hierarchy shown by order). */
+.kp-varbar, .kp-verbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 10px 0 8px; }
+.kp-varbar { padding-bottom: 8px; border-bottom: 1px dashed var(--ed-border); }
+.kp-vtab { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 12px; border: 1px solid var(--ed-border); border-radius: 999px; background: var(--ed-panel); color: var(--ed-text); font-weight: 550; }
+.kp-vtab:hover { border-color: var(--ed-border-strong); }
+.kp-vtab.kp-on { background: var(--ed-accent); border-color: var(--ed-accent); color: var(--ed-accent-text); }
+.kp-vtab-s { border-color: color-mix(in srgb, #b91c1c 40%, var(--ed-border)); }
+.kp-vtab-s.kp-on { background: #991b1b; border-color: #991b1b; color: #fff; }
+.kp-vtab .ed-ic, .kp-vtab svg { width: 14px; height: 14px; }
+.kp-vadd { border-style: dashed; border-radius: 999px; }
+.kp-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.kp-chip-x { border: 0; background: none; color: inherit; padding: 0 0 0 4px; font-size: 14px; line-height: 1; }
+.kp-layers-ed .kp-row { margin-bottom: 4px; flex-wrap: nowrap; }
+.kp-layers-ed .ed-input { flex: 1; min-width: 0; }
+.kp-code-id { font: 11px var(--ed-mono); color: var(--ed-muted); }
+.kp-backlinks { margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--ed-border); }
+.kp-backlinks h3 { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 6px; }
+/* Placeholder card for a 451 page that is not unlocked: the editor shows nothing of its content. */
+.kp-locked { text-align: center; padding: 40px 16px; background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: var(--ed-radius); margin-top: 14px; }
+.kp-locked .kp-row { justify-content: center; margin-top: 14px; }
+.kp-locked-i { display: inline-grid; place-items: center; width: 56px; height: 56px; border-radius: 50%; background: #991b1b; color: #fff; margin-bottom: 10px; }
+.kp-locked-i .ed-ic, .kp-locked-i svg { width: 26px; height: 26px; }
+.kp-locked h2 { font-size: 17px; margin-bottom: 6px; }
+.kp-locked-note { font-style: italic; color: var(--ed-muted); }
+.kp-progress { width: 100%; height: 8px; }
+
+/* blocks */
+.kp-blocks { display: flex; flex-direction: column; }
+.kp-blocks-nested { padding: 4px; border: 1px dashed var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel-2); }
+.kp-bc { background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: var(--ed-radius); box-shadow: var(--ed-shadow-sm); }
+/* Selected block: accent border + 2px ring as an extra box-shadow layer (no layout shift, unlike a thicker border). */
+.kp-bc.kp-sel { border-color: var(--ed-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ed-accent) 25%, transparent), var(--ed-shadow-sm); }
+.kp-bc.kp-off { opacity: .6; }
+/* Block header is the click target that selects the block; 40px min-height for touch. */
+.kp-bh { display: flex; align-items: center; gap: 7px; padding: 6px 6px 6px 10px; cursor: pointer; min-height: 40px; border-radius: var(--ed-radius); }
+.kp-bh:hover { background: var(--ed-hover); }
+.kp-bh > .ed-ic { color: var(--ed-accent); }
+.kp-bh-t { font-weight: 600; white-space: nowrap; }
+.kp-bh-s { flex: 1; min-width: 0; color: var(--ed-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kp-bh-a { margin-left: auto; display: flex; gap: 2px; flex: none; }
+.kp-sel .kp-bh { border-bottom: 1px solid var(--ed-border); border-radius: var(--ed-radius) var(--ed-radius) 0 0; }
+.kp-bf { padding: 8px 12px 12px; }
+/* auto-fill + minmax(150px,1fr): as many small fields per row as fit, no media query needed. */
+.kp-bf-compact { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 12px; margin-top: 6px; padding-top: 8px; border-top: 1px dashed var(--ed-border); }
+/* "Insert block here" button between cards: invisible (color: transparent) until the list is hovered or it is
+   keyboard-focused. It stays in tab order (not display:none), so keyboard users can still reach it. */
+.kp-ins { align-self: center; width: 26px; height: 14px; border: 0; background: none; color: transparent; display: flex; align-items: center; justify-content: center; padding: 0; margin: 1px 0; border-radius: 999px; }
+.kp-ins .ed-ic, .kp-ins svg { width: 13px; height: 13px; }
+.kp-blocks:hover > .kp-ins, .kp-ins:focus-visible { color: var(--ed-faint); }
+/* !important: `.kp-blocks:hover > .kp-ins` is (0,3,0) and outranks `.kp-ins:hover` (0,2,0); without it the hovered
+   button would stay faint. */
+.kp-ins:hover { color: var(--ed-accent) !important; background: var(--ed-accent-weak); }
+/* Touch has no hover: insert buttons are always visible and taller. */
+@media (pointer: coarse) { .kp-ins { color: var(--ed-faint); height: 22px; } }
+.kp-add-block { align-self: flex-start; margin-top: 10px; border-style: dashed; }
+.kp-list { display: flex; flex-direction: column; gap: 4px; }
+.kp-li { border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel-2); }
+/* List items are <details>; summary marker removed in both engines (see .kp-pset > summary). */
+.kp-li-h { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 8px; cursor: pointer; list-style: none; }
+.kp-li-h::-webkit-details-marker { display: none; }
+.kp-li-n { flex: none; display: inline-grid; place-items: center; min-width: 20px; height: 20px; border-radius: 999px; background: var(--ed-border); font-size: 11px; font-weight: 700; }
+.kp-li-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kp-li-a { display: flex; gap: 1px; }
+.kp-li-f { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 2px 10px; padding: 4px 10px 10px; }
+.kp-li-f > .kp-f-wide { grid-column: 1 / -1; }
+.kp-add-item { align-self: flex-start; }
+.kp-tiers { display: flex; flex-direction: column; gap: 2px; }
+.kp-cols-ed { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.kp-col-h { font-size: 11.5px; font-weight: 700; color: var(--ed-muted); margin: 2px 0 4px; text-transform: uppercase; letter-spacing: .04em; }
+.kp-palette { display: flex; flex-direction: column; gap: 14px; }
+.kp-pal-h { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-muted); margin-bottom: 6px; }
+.kp-pal-g { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px; }
+.kp-pal-b { display: flex; align-items: flex-start; gap: 8px; text-align: left; padding: 8px 10px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel); }
+.kp-pal-b:hover { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.kp-pal-b > .ed-ic { color: var(--ed-accent); margin-top: 1px; }
+.kp-pal-b span { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.kp-pal-b small { color: var(--ed-muted); font-size: 11.5px; line-height: 1.3; }
+
+/* fields */
+/* Markup field: position:relative anchors the autocomplete list (.kp-ac) under the textarea. */
+.kp-mk { position: relative; }
+.kp-mk-tb { display: flex; flex-wrap: wrap; gap: 1px; padding: 2px; border: 1px solid var(--ed-border); border-bottom: 0; border-radius: var(--ed-radius-sm) var(--ed-radius-sm) 0 0; background: var(--ed-panel-2); }
+/* Toolbar glued on top of the textarea: the adjacent-sibling rule squares the top corners only when a toolbar
+   precedes it. */
+.kp-mk-tb + .ed-textarea { border-top-left-radius: 0; border-top-right-radius: 0; }
+.kp-mk-b { min-width: 26px; height: 24px; padding: 0 5px; border: 0; border-radius: 4px; background: none; color: var(--ed-muted); font: 12px var(--ed-mono); }
+.kp-mk-b:hover { background: var(--ed-hover); color: var(--ed-text); }
+.kp-markup { width: 100%; min-height: 64px; resize: vertical; line-height: 1.5; font-size: 13px; }
+/* Autocomplete popup: absolute under the field, z-index above the following cards. */
+.kp-ac { position: absolute; left: 0; right: 0; z-index: 20; margin: 2px 0 0; padding: 3px; list-style: none; background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); box-shadow: var(--ed-shadow); max-height: 240px; overflow: auto; }
+.kp-ac li { display: flex; justify-content: space-between; gap: 10px; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
+.kp-ac li small { color: var(--ed-muted); font-family: var(--ed-mono); }
+.kp-ac li.kp-on, .kp-ac li:hover { background: var(--ed-accent-weak); }
+.kp-num { max-width: 120px; }
+.kp-color { display: inline-flex; align-items: center; gap: 4px; }
+.kp-color-in { width: 40px; height: 30px; padding: 2px; border: 1px solid var(--ed-border-strong); border-radius: var(--ed-radius-sm); background: var(--ed-panel); }
+.kp-color.kp-empty .kp-color-in { opacity: .35; }
+/* Table field editor scrolls horizontally inside its card instead of widening the column. */
+.kp-grid-wrap { overflow-x: auto; }
+.kp-grid-t { border-collapse: collapse; }
+.kp-grid-t td { padding: 1px; }
+.kp-grid-t .ed-input { min-width: 110px; height: 28px; }
+.kp-grid-ctl { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.kp-rows { display: flex; flex-direction: column; gap: 4px; }
+.kp-rowitem { display: grid; grid-template-columns: 1fr 1fr auto; gap: 4px; align-items: start; }
+.kp-rowitem .kp-mk { grid-column: 1 / -2; }
+.kp-row-a { display: flex; }
+
+/* media */
+/* Upload drop zone; .kp-over is the drag-hover state. */
+.kp-drop { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 14px; border: 2px dashed var(--ed-border-strong); border-radius: var(--ed-radius); background: var(--ed-panel-2); color: var(--ed-muted); font-weight: 550; margin-bottom: 10px; }
+.kp-drop:hover, .kp-drop.kp-over { border-color: var(--ed-accent); color: var(--ed-accent); background: var(--ed-accent-weak); }
+.kp-media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.kp-media-pick { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); max-height: 60vh; overflow: auto; }
+.kp-media-it { display: flex; flex-direction: column; gap: 3px; padding: 4px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel); text-align: left; min-width: 0; }
+.kp-media-it:hover { border-color: var(--ed-accent); }
+/* Checkerboard (repeating-conic-gradient) behind contain-fitted thumbnails: transparent PNG/SVG stay visible. */
+.kp-thumb { width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: repeating-conic-gradient(var(--ed-panel-2) 0 25%, var(--ed-bg) 0 50%) 0 0 / 14px 14px; border-radius: 4px; display: block; }
+.kp-thumb-i { display: grid; place-items: center; color: var(--ed-muted); }
+.kp-media-n { display: flex; align-items: center; gap: 3px; font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ed-muted); }
+.kp-media-n .ed-ic, .kp-media-n svg { width: 12px; height: 12px; color: #b91c1c; }
+.kp-media-edit .kp-media-big { display: grid; place-items: center; background: var(--ed-panel-2); border-radius: var(--ed-radius); padding: 8px; margin-bottom: 8px; }
+.kp-media-big img, .kp-media-big video { max-width: 100%; max-height: 40vh; }
+.kp-mpick { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.kp-mpick-t { width: 48px; height: 36px; flex: none; object-fit: contain; border-radius: 4px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.kp-mpick-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ed-muted); font-size: 12px; }
+
+/* base settings */
+.kp-themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 6px; margin-bottom: 8px; }
+.kp-theme { display: flex; flex-direction: column; gap: 4px; align-items: center; padding: 6px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel); font-size: 11.5px; }
+.kp-theme.kp-on { border-color: var(--ed-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ed-accent) 30%, transparent); }
+/* Theme swatch: colours come inline from each theme's data; the left <i> stripe shows a second colour. */
+.kp-theme-sw { position: relative; width: 100%; height: 38px; border-radius: 4px; border: 2px solid; display: flex; align-items: center; justify-content: center; font: 700 15px Georgia, serif; overflow: hidden; }
+.kp-theme-sw i { position: absolute; left: 0; top: 0; bottom: 0; width: 8px; }
+.kp-feats { display: grid; grid-template-columns: 1fr; gap: 4px; margin-bottom: 8px; }
+
+/* preview */
+.kp-pv-bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px; background: var(--ed-panel); border-bottom: 1px solid var(--ed-border); }
+.kp-pv-addr { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--ed-mono); color: var(--ed-muted); padding: 5px 8px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); border-radius: 999px; }
+.kp-pv-mode { width: auto; height: 28px; font-size: 12px; }
+.kp-pv-dev .ed-seg-btn { padding: 0 6px; }
+/* Preview stage: in device mode the iframe is scaled with transform (origin top left); overflow:hidden clips the
+   unscaled layout box, which transform does not shrink. */
+.kp-pv-stage { flex: 1; min-height: 0; position: relative; overflow: hidden; display: flex; justify-content: center; }
+/* White fallback while the reader document loads; the reader paints its own theme. */
+.kp-pv-frame { border: 0; width: 100%; height: 100%; background: #fff; transform-origin: top left; }
+.kp-pv-dev-on { padding: 0; }
+.kp-pv-dev-on .kp-pv-frame { box-shadow: var(--ed-shadow); }
+@media (max-width: 640px) { .kp-pv-mode, .kp-pv-dev { display: none; } }
+
+/* diagram editor */
+/* Diagram editor dialog: wider than the shared dialog cap (max-width:none lifts it). */
+.kp-dg-dlg { width: min(1180px, 96vw); max-width: none; }
+.kp-dg-dlg .ed-dlg-body { max-height: calc(100vh - 160px); overflow: auto; }
+.kp-dg-tools { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-bottom: 8px; }
+.kp-dg-help { margin: 0 0 0 6px; }
+.kp-dg-main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; align-items: start; }
+@media (max-width: 860px) { .kp-dg-main { grid-template-columns: 1fr; } }
+/* Side padding: labels are positioned around points and may stick out of the picture. */
+.kp-dg-wrap { padding: 18px 40px; background: var(--ed-stage); border-radius: var(--ed-radius); }
+/* Pointer-drawn area: touch-action:none stops the browser from scrolling/zooming during a drag (it would cancel
+   the pointer stream); user-select:none stops text selection while dragging. */
+.kp-dg-stage { position: relative; width: 100%; touch-action: none; user-select: none; -webkit-user-select: none; }
+/* object-fit:fill: the picture is stretched to the stage box, so coordinates in percent map 1:1 onto it.
+   pointer-events:none lets clicks reach the SVG layer above. */
+.kp-dg-img, .kp-dg-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; border-radius: 6px; pointer-events: none; }
+.kp-dg-bg { background: #f1f5f9; border: 1px solid var(--ed-border); }
+/* overflow:visible: handles and strokes at the picture edge are not clipped by the SVG viewport. */
+.kp-dg-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+/* --c: per-item colour custom property, overridable inline; every shape derives fill/stroke from it.
+   vector-effect: non-scaling-stroke keeps strokes constant although the SVG is stretched to the stage. */
+.kp-dg-it { --c: #2563eb; cursor: move; }
+.kp-dg-it rect:not(.kp-dg-handle), .kp-dg-it circle, .kp-dg-it polygon { fill: color-mix(in srgb, var(--c) 18%, transparent); stroke: var(--c); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.kp-dg-it .kp-dg-dot { fill: var(--c); stroke: #fff; }
+.kp-dg-it.kp-on rect:not(.kp-dg-handle), .kp-dg-it.kp-on circle, .kp-dg-it.kp-on polygon { stroke-width: 3; fill: color-mix(in srgb, var(--c) 32%, transparent); stroke-dasharray: 6 3; }
+.kp-dg-lead { stroke: var(--c); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.kp-dg-handle { fill: #fff; stroke: var(--c); stroke-width: 1.5; vector-effect: non-scaling-stroke; cursor: nwse-resize; }
+.kp-dg-draft { fill: none; stroke: #dc2626; stroke-width: 2; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.kp-dg-edge { stroke: #64748b; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+/* Labels are HTML, not SVG text: wrapping and fonts match the reader. translate(-50%,-50%) centres them on their
+   anchor point. */
+.kp-dg-lbl { --c: #2563eb; position: absolute; transform: translate(-50%, -50%); display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px 2px 3px; border-radius: 999px; background: #fff; color: #111; border: 1.5px solid var(--c); font-size: 12px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; cursor: grab; box-shadow: 0 1px 4px rgba(0,0,0,.2); }
+.kp-dg-lbl.kp-on { background: var(--c); color: #fff; }
+.kp-dg-lbl.kp-node { border-radius: 6px; padding: 4px 10px; font-weight: 600; }
+.kp-dg-n { display: inline-grid; place-items: center; min-width: 18px; height: 18px; border-radius: 999px; background: var(--c); color: #fff; font-size: 10.5px; font-weight: 700; }
+.kp-dg-lbl.kp-on .kp-dg-n { background: #fff; color: var(--c); }
+.kp-dg-side { display: flex; flex-direction: column; gap: 8px; }
+.kp-dg-sec { border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); padding: 6px 8px; }
+.kp-dg-sec summary { cursor: pointer; font-weight: 600; }
+.kp-dg-list { margin: 0; padding-left: 24px; max-height: 180px; overflow: auto; }
+.kp-dg-list button { border: 0; background: none; padding: 2px 0; text-align: left; color: var(--ed-text); }
+.kp-dg-list li.kp-on button { color: var(--ed-accent); font-weight: 600; }
+.kp-dg-props h3 { font-size: 13px; margin-bottom: 4px; }
+.kp-dg-edge-row { display: grid; grid-template-columns: 1fr auto 1fr; gap: 4px; align-items: center; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px dashed var(--ed-border); }
+/* Note: span 1 is already the default placement; this rule has no visible effect. */
+.kp-dg-edge-row > :nth-child(n+4) { grid-column: span 1; }
+
+/* dialogs: export, bases, templates */
+.kp-ex-dlg { width: min(1000px, 96vw); max-width: none; }
+.kp-ex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.kp-ex-card { border: 1px solid var(--ed-border); border-radius: var(--ed-radius); padding: 12px; background: var(--ed-panel-2); display: flex; flex-direction: column; gap: 6px; }
+/* margin-top:auto in a flex column pushes the action to the card bottom: buttons align across a grid row. */
+.kp-ex-card > .ed-btn, .kp-ex-card > .kp-row { margin-top: auto; align-self: flex-start; }
+.kp-ex-h { display: flex; align-items: center; gap: 6px; }
+.kp-ex-h h3 { font-size: 14px; }
+.kp-ex-h .ed-ic { color: var(--ed-accent); }
+.kp-ex-card .ed-hint { margin: 0; }
+.kp-bases-dlg { display: flex; flex-direction: column; gap: 16px; }
+.kp-bases-dlg h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-muted); margin-bottom: 6px; }
+.kp-bases { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.kp-bases li { display: flex; align-items: center; gap: 6px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); padding: 2px 6px 2px 2px; background: var(--ed-panel); }
+.kp-bases li.kp-on { border-color: var(--ed-accent); }
+.kp-base-open { flex: 1; min-width: 0; display: flex; flex-direction: column; text-align: left; border: 0; background: none; padding: 6px 8px; color: var(--ed-text); }
+.kp-base-open small { color: var(--ed-muted); }
+.kp-tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+.kp-tpl { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px; text-align: left; border: 1px solid var(--ed-border); border-radius: var(--ed-radius); background: var(--ed-panel); }
+.kp-tpl:hover { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.kp-tpl small { color: var(--ed-muted); font-size: 11.5px; line-height: 1.35; }
+/* Template icon tiles: fixed brand colours per template id (.kp-tpl-<id>), not tokens. */
+.kp-tpl-i { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; color: #fff; background: #3366cc; }
+.kp-tpl-fandom { background: #b45309; } .kp-tpl-news { background: #be123c; } .kp-tpl-songs { background: #7c3aed; } .kp-tpl-gaudiya { background: #c2410c; }
+.kp-tpl-japanese { background: #be123c; } .kp-tpl-georgian { background: #b91c1c; } .kp-tpl-blank { background: #64748b; }

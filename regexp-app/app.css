@@ -1,0 +1,539 @@
+/* regexp-app/app.css — Regex Studio: pattern bar with highlighted editor, flags, warnings, test text with match
+   marks, views (tables, tree, railroad diagram, code), dialogs and the match tooltip. Loaded after ui/base.css + ui/app.css.
+   
+   CONTRACT
+   - Namespace: every class starts with `rx-`; shared primitives are `ed-` (ui/base.css), shell `ap-` (ui/app.css).
+     State classes come from the shared vocabulary (.ed-on = selected) so JS toggles one name in every app.
+   - Specificity budget: one class (0,1,0); two for state/context (.rx-flag.ed-on, .rx-ed-pattern .rx-ta). Compound
+     colour selectors (.rx-t-grp.rx-c0) are (0,2,0) on purpose: they must beat the plain token colour (.rx-t-grp)
+     regardless of source order.
+   - Tokens: the app palette lives as custom properties on .rx-main (--rx-t-* syntax, --rx-c0..5 group colours, --rx-m*
+     match marks, --rx-dg-* diagram). Declared on .rx-main, not :root: scoped to this app and inherited by every
+     descendant, including the inline SVG diagram whose markup uses var().
+   - Dark mode is declared twice (media query guarded by :not([data-theme="light"]) and an explicit [data-theme="dark"]
+     block): the user can force either scheme against the OS setting. One block alone would miss one of the cases.
+   - !important: once (.rx-part-cap), commented at the rule.
+   
+   THE OVERLAY EDITOR (the hardest part of this sheet)
+   A transparent <textarea> (.rx-ta) sits on top of a <div> mirror (.rx-mirror) that renders the same text with
+   coloured spans. Caret and selection come from the native textarea; colours from the mirror. This only works when
+   both boxes lay out glyphs identically: same font, size, line-height, padding, wrapping, tab-size, no ligatures, no
+   weight changes inside spans. Any mismatch drifts the colours away from the caret by a growing offset per line.
+   Alternative contenteditable fails differently: caret handling, IME, undo and paste sanitising all become ours. */
+
+/* max-width 1480px: wider than the shell default (ui/app.css 1280px) because the work area is two columns of
+   monospace text. Light palette below; dark overrides follow. */
+.rx-main {
+  max-width: 1480px;
+  /* Monospace stack: system ui-monospace first (no download), named fallbacks for platforms without it. */
+  --rx-mono: ui-monospace, "Cascadia Code", "JetBrains Mono", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  /* syntax colours */
+  --rx-t-esc: #0f766e; --rx-t-set: #7c3aed; --rx-t-cls: #c2410c; --rx-t-clsch: #9a3412; --rx-t-op: #be123c; --rx-t-quant: #db2777;
+  --rx-t-alt: #dc2626; --rx-t-anchor: #b45309; --rx-t-look: #059669; --rx-t-mod: #0d9488; --rx-t-grp: #475569; --rx-t-err: #dc2626;
+  /* group colours (pattern parens, chips, underlines in the text) */
+  /* Six group colours cycle (group index mod 6, set in JS). Six: distinguishable hues; more blur together. */
+  --rx-c0: #2563eb; --rx-c1: #d97706; --rx-c2: #16a34a; --rx-c3: #db2777; --rx-c4: #7c3aed; --rx-c5: #0891b2;
+  /* match marks */
+  /* Translucent marks: the text stays readable through them; two alternating hues separate adjacent matches. */
+  --rx-m0: rgba(250, 204, 21, .38); --rx-m1: rgba(56, 189, 248, .32); --rx-rep: rgba(34, 197, 94, .22);
+  --rx-hot: rgba(244, 63, 94, .16);
+  /* railroad diagram */
+  --rx-dg-paper: #ffffff; --rx-dg-bg: #ffffff; --rx-dg-line: #8a94a6;
+  --rx-dg-lit: #e3f0ff; --rx-dg-lit-b: #3b82f6; --rx-dg-lit-t: #1e3a8a;
+  --rx-dg-set: #f1e8ff; --rx-dg-set-b: #8b5cf6; --rx-dg-set-t: #4c1d95;
+  --rx-dg-anc: #fff4dc; --rx-dg-anc-b: #d97706; --rx-dg-anc-t: #7c4a03;
+  --rx-dg-ref: #ffe7ee; --rx-dg-ref-b: #e11d48; --rx-dg-ref-t: #881337;
+  --rx-dg-grp: rgba(59, 130, 246, .05); --rx-dg-grp-b: #94a3b8; --rx-dg-look: rgba(16, 185, 129, .07); --rx-dg-look-b: #10b981; --rx-dg-cap: #64748b;
+  --rx-dg-hot: #f43f5e;
+}
+/* Dark palette (follows the system unless the light scheme is forced, or the dark scheme is chosen). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .rx-main {
+    --rx-t-esc: #2dd4bf; --rx-t-set: #c4b5fd; --rx-t-cls: #fb923c; --rx-t-clsch: #fdba74; --rx-t-op: #fb7185; --rx-t-quant: #f472b6;
+    --rx-t-alt: #f87171; --rx-t-anchor: #fbbf24; --rx-t-look: #34d399; --rx-t-mod: #5eead4; --rx-t-grp: #94a3b8; --rx-t-err: #f87171;
+    --rx-c0: #60a5fa; --rx-c1: #fbbf24; --rx-c2: #4ade80; --rx-c3: #f472b6; --rx-c4: #a78bfa; --rx-c5: #22d3ee;
+    --rx-m0: rgba(250, 204, 21, .26); --rx-m1: rgba(56, 189, 248, .26); --rx-rep: rgba(74, 222, 128, .2); --rx-hot: rgba(251, 113, 133, .22);
+    --rx-dg-paper: #161a21; --rx-dg-bg: #1b1f26; --rx-dg-line: #6b7686;
+    --rx-dg-lit: #172a4a; --rx-dg-lit-b: #5b8cff; --rx-dg-lit-t: #c7dbff;
+    --rx-dg-set: #2a1f47; --rx-dg-set-b: #a78bfa; --rx-dg-set-t: #e4d9ff;
+    --rx-dg-anc: #3a2a0c; --rx-dg-anc-b: #fbbf24; --rx-dg-anc-t: #fde7b0;
+    --rx-dg-ref: #3d1522; --rx-dg-ref-b: #fb7185; --rx-dg-ref-t: #ffd1db;
+    --rx-dg-grp: rgba(91, 140, 255, .06); --rx-dg-grp-b: #556070; --rx-dg-look: rgba(52, 211, 153, .08); --rx-dg-look-b: #34d399; --rx-dg-cap: #9aa3b2;
+  }
+}
+:root[data-theme="dark"] .rx-main {
+  --rx-t-esc: #2dd4bf; --rx-t-set: #c4b5fd; --rx-t-cls: #fb923c; --rx-t-clsch: #fdba74; --rx-t-op: #fb7185; --rx-t-quant: #f472b6;
+  --rx-t-alt: #f87171; --rx-t-anchor: #fbbf24; --rx-t-look: #34d399; --rx-t-mod: #5eead4; --rx-t-grp: #94a3b8; --rx-t-err: #f87171;
+  --rx-c0: #60a5fa; --rx-c1: #fbbf24; --rx-c2: #4ade80; --rx-c3: #f472b6; --rx-c4: #a78bfa; --rx-c5: #22d3ee;
+  --rx-m0: rgba(250, 204, 21, .26); --rx-m1: rgba(56, 189, 248, .26); --rx-rep: rgba(74, 222, 128, .2); --rx-hot: rgba(251, 113, 133, .22);
+  --rx-dg-paper: #161a21; --rx-dg-bg: #1b1f26; --rx-dg-line: #6b7686;
+  --rx-dg-lit: #172a4a; --rx-dg-lit-b: #5b8cff; --rx-dg-lit-t: #c7dbff;
+  --rx-dg-set: #2a1f47; --rx-dg-set-b: #a78bfa; --rx-dg-set-t: #e4d9ff;
+  --rx-dg-anc: #3a2a0c; --rx-dg-anc-b: #fbbf24; --rx-dg-anc-t: #fde7b0;
+  --rx-dg-ref: #3d1522; --rx-dg-ref-b: #fb7185; --rx-dg-ref-t: #ffd1db;
+  --rx-dg-grp: rgba(91, 140, 255, .06); --rx-dg-grp-b: #556070; --rx-dg-look: rgba(52, 211, 153, .08); --rx-dg-look-b: #34d399; --rx-dg-cap: #9aa3b2;
+}
+
+/* Second .rx-main rule: layout split from the token block above for readability; same specificity, merged by cascade. */
+.rx-main { display: flex; flex-direction: column; gap: 16px; }
+.rx-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; min-height: 30px; }
+.rx-h { margin: 0; }
+.rx-hbtn { gap: 6px; }
+.rx-hbtn .ed-ic { width: 16px; height: 16px; }
+
+/* --- pattern bar -------------------------------------------------------------------------------------------- */
+/* Accent glow from the top-left corner: color-mix with transparent keeps it a tint of the theme accent in both schemes. */
+.rx-top { padding: 14px 16px 12px; background:
+  radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--ed-accent) 7%, transparent), transparent 60%), var(--ed-panel); }
+.rx-pat-row {
+  display: flex; align-items: flex-start; gap: 4px; padding: 9px 14px; border: 1.5px solid var(--ed-border-strong); border-radius: 14px;
+  background: var(--ed-panel); box-shadow: inset 0 1px 2px rgba(16, 24, 40, .04); transition: border-color .15s, box-shadow .15s;
+}
+/* :focus-within: the focus ring belongs to the visual field (row); the real focus is on the textarea inside. */
+.rx-pat-row:focus-within { border-color: var(--ed-accent); box-shadow: var(--ed-focus); }
+/* Decorative /…/flags delimiters. user-select:none: copying never picks up the slashes. Line-height 32px equals the editor line. */
+.rx-slash { font: 400 22px/32px var(--rx-mono); color: var(--ed-faint); user-select: none; flex: none; }
+.rx-flagtxt { font: 700 18px/32px var(--rx-mono); color: var(--ed-accent); min-width: 1ch; flex: none; letter-spacing: .02em; }
+
+/* Positioning context for the absolute mirror. min-width:0 lets the flex item shrink below its longest unbroken token. */
+.rx-ed { position: relative; flex: 1 1 auto; min-width: 0; }
+/* Identical box model for both layers: every property here neutralises a default that differs between <div> and
+   <textarea> (UA margins, borders, letter-spacing, ligatures). overflow-wrap:anywhere breaks long regexes the same way in
+   both. text-rendering:optimizeSpeed disables kerning, which could otherwise differ between the two elements. */
+.rx-mirror, .rx-ta {
+  display: block; width: 100%; margin: 0; border: 0; border-radius: 0; box-sizing: border-box;
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; tab-size: 4; letter-spacing: 0; text-transform: none;
+  font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; text-rendering: optimizeSpeed;
+}
+/* Mirror under the textarea, clipped: it follows the textarea height, never grows the box itself. */
+.rx-mirror { position: absolute; inset: 0; overflow: hidden; }
+/* Textarea on top (z-index 1), transparent so the mirror shows through; height set by JS (auto-grow), hence overflow:hidden and no resize. */
+.rx-ta { position: relative; z-index: 1; background: transparent; resize: none; overflow: hidden; outline: none; }
+/* The shared focus ring would outline the inner textarea; the row (.rx-pat-row:focus-within) draws it instead. */
+.rx-ta:focus-visible { box-shadow: none; }
+
+.rx-ed-pattern .rx-mirror, .rx-ed-pattern .rx-ta { font: 500 18px/32px var(--rx-mono); padding: 0 2px; min-height: 32px; }
+.rx-ed-pattern .rx-mirror { color: var(--ed-text); }
+/* Same glyph advances as the textarea above: colours only, no weight changes inside the editor. */
+.rx-ed-pattern .rx-mirror span { font-weight: inherit; }
+/* Text invisible, caret visible. -webkit-text-fill-color too: WebKit/Blink paint glyphs with it when it is set
+   (autofill styles do), so color:transparent alone can leave ghost glyphs. */
+.rx-ed-pattern .rx-ta { color: transparent; -webkit-text-fill-color: transparent; caret-color: var(--ed-text); }
+.rx-ed-pattern .rx-ta::placeholder { color: var(--ed-faint); -webkit-text-fill-color: var(--ed-faint); font-weight: 400; }
+.rx-ed-pattern .rx-ta::selection { background: color-mix(in srgb, var(--ed-accent) 32%, transparent); }
+
+/* syntax tokens */
+/* Token classes emitted by the highlighter. Inside the pattern editor the weights below are neutralised by
+   .rx-ed-pattern .rx-mirror span { font-weight: inherit } (0,2,1) > (0,1,0); they apply where highlighted sources are shown
+   outside the editor (library, dialogs). */
+.rx-t-esc { color: var(--rx-t-esc); }
+.rx-t-set { color: var(--rx-t-set); font-weight: 600; }
+.rx-t-cls { color: var(--rx-t-cls); font-weight: 700; }
+.rx-t-clsch { color: var(--rx-t-clsch); }
+.rx-t-range { color: var(--rx-t-cls); font-weight: 700; }
+.rx-t-op { color: var(--rx-t-op); font-weight: 700; }
+.rx-t-quant { color: var(--rx-t-quant); font-weight: 700; }
+.rx-t-alt { color: var(--rx-t-alt); font-weight: 700; }
+.rx-t-anchor { color: var(--rx-t-anchor); font-weight: 700; }
+.rx-t-look { color: var(--rx-t-look); font-weight: 700; }
+.rx-t-mod { color: var(--rx-t-mod); font-style: italic; }
+.rx-t-grp { color: var(--rx-t-grp); font-weight: 700; }
+.rx-t-name { font-style: italic; }
+.rx-t-ref { text-decoration: underline dotted; text-underline-offset: 3px; font-weight: 600; }
+.rx-t-err { color: var(--rx-t-err); }
+/* Nesting depth tints for group parens without a capture colour: deeper = mixed further toward accent / look hue. */
+.rx-d1.rx-t-grp { color: color-mix(in srgb, var(--rx-t-grp) 70%, var(--ed-accent)); }
+.rx-d2.rx-t-grp { color: color-mix(in srgb, var(--rx-t-grp) 55%, var(--rx-t-look)); }
+.rx-t-grp.rx-c0, .rx-t-name.rx-c0, .rx-t-ref.rx-c0 { color: var(--rx-c0); }
+.rx-t-grp.rx-c1, .rx-t-name.rx-c1, .rx-t-ref.rx-c1 { color: var(--rx-c1); }
+.rx-t-grp.rx-c2, .rx-t-name.rx-c2, .rx-t-ref.rx-c2 { color: var(--rx-c2); }
+.rx-t-grp.rx-c3, .rx-t-name.rx-c3, .rx-t-ref.rx-c3 { color: var(--rx-c3); }
+.rx-t-grp.rx-c4, .rx-t-name.rx-c4, .rx-t-ref.rx-c4 { color: var(--rx-c4); }
+.rx-t-grp.rx-c5, .rx-t-name.rx-c5, .rx-t-ref.rx-c5 { color: var(--rx-c5); }
+/* Syntax error span: wavy underline + tint. skip-ink:none: the wave must not break around descenders of short tokens. */
+.rx-bad { text-decoration: underline wavy var(--rx-t-err); text-decoration-skip-ink: none; text-underline-offset: 4px; background: color-mix(in srgb, var(--rx-t-err) 12%, transparent); border-radius: 3px; }
+/* Lint findings: dotted underline only (no background), so they combine with syntax colours and .rx-bad. */
+.rx-w-danger, .rx-w-warn { text-decoration: underline dotted 2px; text-underline-offset: 6px; text-decoration-skip-ink: none; }
+.rx-w-danger { text-decoration-color: var(--ed-danger); }
+.rx-w-warn { text-decoration-color: var(--ed-warn); }
+.rx-hot { background: var(--rx-hot); border-radius: 3px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--rx-dg-hot) 45%, transparent); }
+/* Matching bracket highlight. outline (not border): no box size change, so the overlay stays aligned. */
+.rx-pair { background: color-mix(in srgb, var(--ed-accent) 22%, transparent); border-radius: 3px; outline: 1px solid color-mix(in srgb, var(--ed-accent) 55%, transparent); }
+
+/* flags */
+.rx-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+/* Pill toggles for regex flags; 28px keeps the row compact while the hit area stays usable. */
+.rx-flag {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px 0 8px; border: 1px solid var(--ed-border-strong);
+  border-radius: 999px; background: var(--ed-panel); color: var(--ed-muted); font-size: 12.5px;
+}
+.rx-flag b { font: 700 13px var(--rx-mono); display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 6px; background: var(--ed-hover); color: var(--ed-text); }
+.rx-flag:hover { border-color: var(--ed-faint); color: var(--ed-text); }
+.rx-flag.ed-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); color: var(--ed-accent); }
+.rx-flag.ed-on b { background: var(--ed-accent); color: var(--ed-accent-text); }
+
+/* message + warnings */
+.rx-msg { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; color: var(--ed-muted); }
+/* Text span takes the remaining width; :not(.ed-ic) excludes the icon span, which keeps its own size. */
+.rx-msg > span:not(.ed-ic) { flex: 1 1 auto; min-width: 0; }
+.rx-msg > .ed-btn { flex: none; }
+.rx-msg > .ed-ic { color: var(--ed-ok); }
+.rx-msg-err { color: var(--ed-text); }
+.rx-msg-err > .ed-ic { color: var(--ed-danger); }
+.rx-msg-err b { color: var(--ed-danger); }
+.rx-pos { color: var(--ed-muted); font-variant-numeric: tabular-nums; }
+.rx-lint { margin-top: 8px; }
+.rx-lint-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+/* Severity shown by a 3px left border (colour from .rx-sev-*): scannable without reading the label. */
+.rx-lint-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; border: 1px solid var(--ed-border); border-left-width: 3px;
+  border-radius: 8px; background: var(--ed-panel-2); text-align: left; font-size: 12.5px; line-height: 1.4;
+}
+.rx-lint-item:hover { background: var(--ed-hover); }
+.rx-lint-item .ed-ic { width: 16px; height: 16px; }
+.rx-lint-item .ed-ic svg { width: 16px; height: 16px; }
+.rx-sev { font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; flex: none; }
+.rx-lint-txt { flex: 1 1 auto; min-width: 0; }
+/* Offending source snippet, truncated at 40% so the message text always keeps most of the row. */
+.rx-lint-src { font: 12px var(--rx-mono); padding: 1px 6px; border-radius: 5px; background: var(--ed-panel); border: 1px solid var(--ed-border); max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; }
+.rx-sev-danger { border-left-color: var(--ed-danger); }
+.rx-sev-danger .ed-ic, .rx-sev-danger .rx-sev { color: var(--ed-danger); }
+.rx-sev-warn { border-left-color: var(--ed-warn); }
+.rx-sev-warn .ed-ic, .rx-sev-warn .rx-sev { color: var(--ed-warn); }
+.rx-sev-info { border-left-color: var(--ed-accent); }
+.rx-sev-info .ed-ic, .rx-sev-info .rx-sev { color: var(--ed-accent); }
+.rx-more { margin-top: 4px; border: 0; background: none; color: var(--ed-accent); font-weight: 600; font-size: 12.5px; padding: 2px 4px; border-radius: 4px; }
+.rx-more:hover { text-decoration: underline; }
+
+/* --- work area ---------------------------------------------------------------------------------------------- */
+/* .86fr/1.14fr: test text slightly narrower than the views (tables and diagrams need room). minmax(0, …): never min-content. */
+.rx-work { display: grid; grid-template-columns: minmax(0, .86fr) minmax(0, 1.14fr); gap: 16px; align-items: start; }
+.rx-test, .rx-views { min-width: 0; }
+/* The test text stays in view while a long explanation or table scrolls by. */
+@media (min-width: 1081px) { .rx-test { position: sticky; top: 72px; } }
+/* Status pill: count / time / error. min-height reserves space so the bar does not jump between states. */
+.rx-stat { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ed-muted); padding: 2px 10px; border-radius: 999px; background: var(--ed-hover); min-height: 24px; }
+.rx-stat .ed-ic, .rx-stat .ed-ic svg { width: 15px; height: 15px; }
+.rx-stat-ok { background: color-mix(in srgb, var(--ed-ok) 14%, transparent); color: var(--ed-text); }
+.rx-stat-ok b { color: color-mix(in srgb, var(--ed-ok) 75%, var(--ed-text)); }
+.rx-stat-bad { background: var(--ed-danger-weak); color: var(--ed-danger); font-weight: 600; }
+.rx-time { font-variant-numeric: tabular-nums; color: var(--ed-muted); }
+/* Reuses @keyframes ed-spin from ui/base.css: one animation definition for every spinner. */
+.rx-spin { width: 13px; height: 13px; border-radius: 50%; border: 2px solid var(--ed-border-strong); border-top-color: var(--ed-accent); animation: ed-spin .7s linear infinite; }
+
+/* Scroll container of the test text overlay. scrollbar-gutter:stable reserves the scrollbar width: a scrollbar appearing
+   later would re-wrap the text and desynchronise mirror and textarea for a frame. */
+.rx-test-scroll {
+  max-height: min(62vh, 600px); min-height: 220px; overflow: auto; border: 1px solid var(--ed-border); border-radius: 12px; background: var(--ed-panel-2);
+  scrollbar-gutter: stable;
+}
+.rx-test-scroll:focus-within { border-color: var(--ed-accent); box-shadow: var(--ed-focus); }
+.rx-ed-text { min-height: 100%; }
+.rx-ed-text .rx-mirror, .rx-ed-text .rx-ta { font: 14px/1.65 var(--rx-mono); padding: 12px 14px; min-height: 218px; }
+/* Inverse of the pattern editor: here the textarea text is visible and the mirror paints only backgrounds (match marks). */
+.rx-ed-text .rx-mirror, .rx-ed-text .rx-mirror * { color: transparent; }
+.rx-ed-text .rx-ta { color: var(--ed-text); caret-color: var(--ed-accent); }
+.rx-ed-text .rx-ta::placeholder { color: var(--ed-faint); }
+.rx-m { border-radius: 3px; }
+.rx-m0 { background: var(--rx-m0); }
+.rx-m1 { background: var(--rx-m1); }
+/* Group underline via inset box-shadow, not text-decoration: stacks with the mark background, no line-metric change. Colour from --rx-gc. */
+.rx-g { box-shadow: inset 0 -2.5px 0 var(--rx-gc, transparent); }
+.rx-g.rx-c0 { --rx-gc: var(--rx-c0); } .rx-g.rx-c1 { --rx-gc: var(--rx-c1); } .rx-g.rx-c2 { --rx-gc: var(--rx-c2); }
+.rx-g.rx-c3 { --rx-gc: var(--rx-c3); } .rx-g.rx-c4 { --rx-gc: var(--rx-c4); } .rx-g.rx-c5 { --rx-gc: var(--rx-c5); }
+/* A match split into several spans (at group boundaries) gets square inner corners: rounded only at its true start/end. */
+.rx-m:not(.rx-mstart) { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.rx-m:not(.rx-mend) { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.rx-focus.rx-m { outline: 1.5px solid var(--ed-accent); outline-offset: 0; }
+/* Zero-width match marker (^, lookaround, empty match): a 0-width inline-block with a 2px left border; margin-left:-1px centres it. */
+.rx-z { display: inline-block; width: 0; height: 1.3em; vertical-align: text-bottom; border-left: 2px solid var(--rx-t-quant); margin-left: -1px; }
+.rx-z.rx-focus { border-left-color: var(--ed-accent); border-left-width: 3px; }
+
+.rx-banner {
+  display: flex; gap: 10px; align-items: flex-start; margin-bottom: 10px; padding: 10px 12px; border-radius: 10px;
+  background: var(--ed-danger-weak); color: var(--ed-text); border: 1px solid color-mix(in srgb, var(--ed-danger) 40%, transparent);
+}
+.rx-banner > .ed-ic { color: var(--ed-danger); margin-top: 1px; }
+.rx-banner p { margin: 2px 0 0; color: var(--ed-muted); font-size: 12.5px; }
+.rx-info { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-height: 30px; margin-top: 8px; font-size: 12.5px; }
+.rx-info .ed-hint { margin: 0; }
+.rx-info-r { font-variant-numeric: tabular-nums; color: var(--ed-muted); }
+.rx-info-g { display: inline-flex; align-items: center; gap: 4px; font-family: var(--rx-mono); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Group chip: white text on the group colour. Dark schemes switch to dark text (rules below): the dark palette hues are light. */
+.rx-gchip {
+  display: inline-block; padding: 0 6px; border-radius: 5px; font: 600 11.5px/18px var(--rx-mono); color: #fff; background: var(--rx-gc, var(--ed-faint));
+  max-width: 14ch; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; white-space: nowrap;
+}
+.rx-gchip.rx-c0 { --rx-gc: var(--rx-c0); } .rx-gchip.rx-c1 { --rx-gc: var(--rx-c1); } .rx-gchip.rx-c2 { --rx-gc: var(--rx-c2); }
+.rx-gchip.rx-c3 { --rx-gc: var(--rx-c3); } .rx-gchip.rx-c4 { --rx-gc: var(--rx-c4); } .rx-gchip.rx-c5 { --rx-gc: var(--rx-c5); }
+:root[data-theme="dark"] .rx-gchip { color: #0b1220; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .rx-gchip { color: #0b1220; } }
+.rx-unset { color: var(--ed-faint); font-style: italic; }
+
+/* --- views -------------------------------------------------------------------------------------------------- */
+/* container-type:inline-size: the tab strip adapts to the card width (@container), not the viewport. The card is narrow in
+   the two-column desktop layout and wide in the single-column tablet layout, so a media query would pick wrong. */
+.rx-views { padding: 0; overflow: hidden; container-type: inline-size; }
+/* Crowded tab strips drop the icons first, then scroll with a fade that shows there is more. */
+@container (max-width: 760px) { .rx-tab .ed-ic { display: none; } .rx-tab { padding: 0 10px; } }
+/* Scroll fades; JS sets .rx-more-l/.rx-more-r from scrollLeft. mask-image fades the content itself, so it works on any
+   background. The combined rule must exist: two mask-image declarations override each other, they never combine. */
+.rx-main .rx-tabs.rx-more-r { mask-image: linear-gradient(90deg, #000 calc(100% - 36px), transparent); }
+.rx-main .rx-tabs.rx-more-l { mask-image: linear-gradient(90deg, transparent, #000 36px); }
+.rx-main .rx-tabs.rx-more-l.rx-more-r { mask-image: linear-gradient(90deg, transparent, #000 36px, #000 calc(100% - 36px), transparent); }
+/* (0,2,0) via the .rx-main ancestor: defensive weight. scrollbar-width:none + ::-webkit-scrollbar hide the bar in Firefox and Blink/WebKit; the fades replace it. */
+.rx-main .rx-tabs {
+  display: flex; gap: 2px; padding: 6px 6px 0; overflow-x: auto; overflow-y: hidden; border-bottom: 1px solid var(--ed-border); background: var(--ed-panel-2);
+  scrollbar-width: none;
+}
+.rx-tabs::-webkit-scrollbar { display: none; }
+/* top:1px + border-bottom:0: the active tab overlaps the strip border by one pixel, merging with the pane below. */
+.rx-tab {
+  display: inline-flex; align-items: center; gap: 6px; flex: none; height: 36px; padding: 0 11px; border: 1px solid transparent; border-bottom: 0;
+  border-radius: 9px 9px 0 0; background: transparent; color: var(--ed-muted); font-weight: 550; font-size: 13px; position: relative; top: 1px;
+}
+.rx-tab .ed-ic, .rx-tab .ed-ic svg { width: 16px; height: 16px; }
+.rx-tab:hover { color: var(--ed-text); }
+.rx-tab.ed-on { background: var(--ed-panel); border-color: var(--ed-border); color: var(--ed-accent); }
+.rx-pane { padding: 14px 16px 16px; min-height: 380px; outline: none; }
+/* While the worker runs, stale results are dimmed instead of cleared: no flicker on every keystroke. */
+.rx-busy .rx-pane-body, .rx-mirror.rx-busy { opacity: .5; transition: opacity .2s; }
+.rx-pane-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.rx-count { font-weight: 650; }
+.rx-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 44px 16px; text-align: center; color: var(--ed-muted); }
+.rx-empty > .ed-ic { width: 30px; height: 30px; color: var(--ed-faint); margin-bottom: 4px; }
+.rx-empty > .ed-ic svg { width: 30px; height: 30px; }
+.rx-empty p { margin: 0; max-width: 46ch; }
+.rx-empty .ed-hint { margin: 0; }
+
+.rx-table-wrap { max-height: 520px; }
+.rx-table td, .rx-table th { white-space: nowrap; }
+.rx-table tbody tr { cursor: pointer; }
+/* Rows are keyboard-focusable. Negative outline-offset keeps the ring inside the scroll wrapper, which would clip it. */
+.rx-table tbody tr:focus-visible { outline: 2px solid var(--ed-accent); outline-offset: -2px; box-shadow: none; }
+.rx-table tr.rx-row-on td { background: var(--ed-accent-weak); }
+/* width:1% on a table cell = shrink to content: the index column takes the minimum, the others share the rest. */
+.rx-num { color: var(--ed-muted); font-variant-numeric: tabular-nums; width: 1%; }
+.rx-cell { font-family: var(--rx-mono); font-size: 12.5px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.rx-ws { color: var(--ed-faint); font-style: normal; }
+.rx-vis { white-space: pre; }
+
+.rx-mono { font-family: var(--rx-mono); }
+.rx-toks { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0 12px; }
+.rx-tok {
+  height: 26px; padding: 0 8px; border: 1px solid var(--ed-border-strong); border-radius: 6px; background: var(--ed-panel);
+  font: 600 12px var(--rx-mono); color: var(--rx-t-quant);
+}
+.rx-tok:hover { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.rx-tok.rx-c0 { color: var(--rx-c0); } .rx-tok.rx-c1 { color: var(--rx-c1); } .rx-tok.rx-c2 { color: var(--rx-c2); }
+.rx-tok.rx-c3 { color: var(--rx-c3); } .rx-tok.rx-c4 { color: var(--rx-c4); } .rx-tok.rx-c5 { color: var(--rx-c5); }
+/* Replace preview: pre-wrap keeps the user whitespace, overflow-wrap:anywhere breaks long tokens without a scrollbar. */
+.rx-out {
+  margin: 0; padding: 12px 14px; max-height: 420px; overflow: auto; border: 1px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel-2);
+  font: 13.5px/1.65 var(--rx-mono); white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.rx-rep { background: var(--rx-rep); color: inherit; border-radius: 3px; box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--ed-ok) 70%, transparent); }
+
+.rx-split-head { display: grid; grid-template-columns: auto 140px; align-items: center; gap: 6px 10px; margin-bottom: 12px; }
+.rx-split-head .ed-hint { grid-column: 1 / -1; margin: 0; }
+.rx-parts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 460px; overflow: auto; }
+.rx-parts li { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 8px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); font: 13px var(--rx-mono); min-width: 0; }
+.rx-parts li > .rx-vis { overflow: hidden; text-overflow: ellipsis; }
+.rx-part-i { color: var(--ed-faint); font-variant-numeric: tabular-nums; min-width: 2ch; text-align: right; flex: none; }
+/* !important: .rx-parts li (0,1,1) sets the full border and outranks this class (0,1,0). Cleaner: .rx-parts li.rx-part-cap. */
+.rx-part-cap { border-style: dashed !important; }
+
+/* explain tree */
+.rx-ex-flags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
+.rx-flagpill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: 999px; background: var(--ed-accent-weak); color: var(--ed-accent); font-size: 12px; }
+.rx-flagpill b { font-family: var(--rx-mono); }
+/* Dashed left rule = tree indentation guide; margin + padding place it under the parent row. */
+.rx-tree, .rx-tree ul { list-style: none; margin: 0; padding: 0; }
+.rx-tree ul { margin-left: 13px; padding-left: 12px; border-left: 1px dashed var(--ed-border-strong); }
+.rx-ex-row {
+  display: flex; align-items: baseline; gap: 10px; padding: 4px 8px; margin: 1px 0; border-radius: 7px; cursor: pointer; border-left: 3px solid transparent;
+}
+.rx-ex-row:hover, .rx-ex-row:focus-visible { background: var(--ed-hover); box-shadow: none; }
+.rx-ex-row:focus-visible { outline: 2px solid var(--ed-accent); outline-offset: -2px; }
+.rx-ex-row.rx-active { border-left-color: var(--ed-accent); background: var(--ed-accent-weak); }
+/* Source fragment of the node, capped at 48% so the description keeps room; ellipsis for long literals. */
+.rx-ex-src {
+  flex: none; max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 600 13px/20px var(--rx-mono);
+  padding: 0 7px; border-radius: 6px; background: var(--ed-panel-2); border: 1px solid var(--ed-border);
+}
+.rx-ex-grp { border-color: var(--rx-gc, var(--ed-border)); }
+.rx-ex-src.rx-c0 { --rx-gc: var(--rx-c0); } .rx-ex-src.rx-c1 { --rx-gc: var(--rx-c1); } .rx-ex-src.rx-c2 { --rx-gc: var(--rx-c2); }
+.rx-ex-src.rx-c3 { --rx-gc: var(--rx-c3); } .rx-ex-src.rx-c4 { --rx-gc: var(--rx-c4); } .rx-ex-src.rx-c5 { --rx-gc: var(--rx-c5); }
+.rx-ex-txt { min-width: 0; font-size: 13px; }
+.rx-k-alternation > .rx-ex-txt, .rx-k-group > .rx-ex-txt, .rx-k-quantifier > .rx-ex-txt { font-weight: 600; }
+
+/* diagram */
+/* Dotted paper grid from one radial-gradient tile (16px): no image asset, follows the theme border token. */
+.rx-dg-stage {
+  overflow: auto; max-height: 560px; min-height: 260px; padding: 16px; border-radius: 12px; border: 1px solid var(--ed-border); outline: none;
+  background-color: var(--rx-dg-paper);
+  background-image: radial-gradient(color-mix(in srgb, var(--ed-border-strong) 70%, transparent) 1px, transparent 1px); background-size: 16px 16px;
+}
+.rx-dg-stage:focus-visible { box-shadow: var(--ed-focus); }
+/* max-width:none: a wide diagram scrolls at natural size; .rx-fit (toggle) scales it to the stage instead. */
+.rx-dg-stage svg { display: block; max-width: none; margin: 0 auto; }
+.rx-dg-stage.rx-fit svg { width: 100%; height: auto; }
+.rx-dg-fitbtn.ed-on { background: var(--ed-accent-weak); border-color: var(--ed-accent); color: var(--ed-accent); }
+.rx-dg-stage [data-s] { cursor: pointer; }
+.rx-dg-hint { margin: 0; }
+
+/* code */
+.rx-langs { display: flex; flex-wrap: wrap; gap: 2px; padding: 2px; background: var(--ed-hover); border-radius: 8px; }
+.rx-lang { height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--ed-muted); font-size: 12.5px; font-weight: 600; }
+.rx-lang:hover { color: var(--ed-text); }
+.rx-lang.ed-on { background: var(--ed-panel); color: var(--ed-text); box-shadow: var(--ed-shadow-sm); }
+/* Code view is dark in both schemes (raw colours on purpose): reads as a code block; nothing inside it is themed. */
+.rx-code {
+  margin: 0; padding: 14px 16px; border-radius: 12px; background: #0f1623; color: #dbe4f0; font: 13px/1.6 var(--rx-mono);
+  overflow: auto; max-height: 440px; white-space: pre; tab-size: 4; border: 1px solid #1e293b;
+}
+.rx-notes { margin-top: 12px; }
+.rx-notes-h { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-muted); }
+.rx-notes-h .ed-ic, .rx-notes-h svg { width: 15px; height: 15px; }
+.rx-note-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.rx-notes .rx-empty { padding: 24px 8px; }
+
+/* cheat sheet */
+.rx-cs-hint { margin-top: 0; }
+/* auto-fill + minmax(250px,1fr): as many sections per row as fit, no breakpoints. */
+.rx-cheat { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.rx-cs-sec { border: 1px solid var(--ed-border); border-radius: 12px; padding: 10px 12px; background: var(--ed-panel-2); }
+.rx-cs-h { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-muted); }
+.rx-cs-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; margin: 0; align-items: center; }
+.rx-cs-list dd { margin: 0; font-size: 12.5px; color: var(--ed-text); }
+.rx-cs-tok {
+  min-width: 34px; height: 26px; padding: 0 7px; border: 1px solid var(--ed-border-strong); border-radius: 6px; background: var(--ed-panel);
+  font: 600 12.5px var(--rx-mono); white-space: nowrap; text-align: left;
+}
+.rx-cs-tok:hover { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.rx-cs-flag { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 4px; font: 700 10.5px/16px var(--rx-mono); background: var(--ed-accent-weak); color: var(--ed-accent); }
+
+/* --- tooltip ------------------------------------------------------------------------------------------------ */
+/* Tooltip: fixed (positioned by JS near the pointer), pointer-events:none so it never steals the hover it describes. */
+.rx-tip {
+  position: fixed; z-index: 250; max-width: min(380px, calc(100vw - 16px)); padding: 8px 10px; border-radius: 10px; pointer-events: none;
+  background: var(--ed-panel); color: var(--ed-text); border: 1px solid var(--ed-border); box-shadow: var(--ed-shadow-lg); font-size: 12.5px;
+}
+.rx-tip-h { display: flex; justify-content: space-between; gap: 12px; }
+.rx-tip-r { color: var(--ed-muted); font-variant-numeric: tabular-nums; }
+.rx-tip-m { margin: 4px 0; padding: 3px 6px; border-radius: 6px; background: var(--ed-panel-2); font: 13px var(--ui-mono, ui-monospace, Consolas, monospace); white-space: pre-wrap; overflow-wrap: anywhere; }
+.rx-tip-g { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 8px; margin: 0; align-items: center; }
+.rx-tip-g dd { margin: 0; font-family: ui-monospace, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Tooltip chips pin the light-palette hues: white text stays legible on them in both schemes. */
+.rx-tip .rx-gchip { color: #fff; }
+.rx-tip .rx-gchip.rx-c0 { --rx-gc: #2563eb; } .rx-tip .rx-gchip.rx-c1 { --rx-gc: #d97706; } .rx-tip .rx-gchip.rx-c2 { --rx-gc: #16a34a; }
+.rx-tip .rx-gchip.rx-c3 { --rx-gc: #db2777; } .rx-tip .rx-gchip.rx-c4 { --rx-gc: #7c3aed; } .rx-tip .rx-gchip.rx-c5 { --rx-gc: #0891b2; }
+
+/* --- dialogs ------------------------------------------------------------------------------------------------ */
+/* Dialogs are appended outside .rx-main, so tokens declared there are not inherited; the font token is redeclared. */
+.rx-dlg { --rx-mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace; }
+.rx-dlg .ed-dlg-body { padding-bottom: 18px; }
+.rx-lib { display: flex; flex-direction: column; gap: 10px; }
+.rx-lib-cats { gap: 6px; }
+.rx-lib-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
+.rx-lib-item, .rx-sv-open {
+  display: flex; flex-direction: column; align-items: stretch; gap: 4px; min-width: 0; padding: 10px 12px; text-align: left;
+  border: 1px solid var(--ed-border); border-radius: 12px; background: var(--ed-panel-2);
+}
+.rx-lib-item:hover, .rx-sv-open:hover { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.rx-lib-top { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.rx-lib-name { font-size: 13.5px; }
+.rx-lib-cat { font-size: 11px; color: var(--ed-muted); text-transform: uppercase; letter-spacing: .05em; }
+.rx-lib-flags { margin-left: auto; font: 700 12px var(--rx-mono); color: var(--ed-accent); }
+.rx-lib-desc { font-size: 12.5px; color: var(--ed-muted); }
+.rx-lib-src, .rx-sv-open .rx-lib-src {
+  display: block; font: 12.5px/1.5 var(--rx-mono); padding: 4px 8px; border-radius: 7px; background: var(--ed-panel); border: 1px solid var(--ed-border);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* Same reason: syntax tokens redeclared for highlighted sources shown in dialogs. Dark variants follow in both forced and media forms. */
+.rx-lib-src, .rx-dlg .rx-lib-src { --rx-t-esc: #0f766e; --rx-t-set: #7c3aed; --rx-t-cls: #c2410c; --rx-t-clsch: #9a3412; --rx-t-op: #be123c; --rx-t-quant: #db2777;
+  --rx-t-alt: #dc2626; --rx-t-anchor: #b45309; --rx-t-look: #059669; --rx-t-mod: #0d9488; --rx-t-grp: #475569;
+  --rx-c0: #2563eb; --rx-c1: #d97706; --rx-c2: #16a34a; --rx-c3: #db2777; --rx-c4: #7c3aed; --rx-c5: #0891b2; }
+:root[data-theme="dark"] .rx-lib-src { --rx-t-esc: #2dd4bf; --rx-t-set: #c4b5fd; --rx-t-cls: #fb923c; --rx-t-clsch: #fdba74; --rx-t-op: #fb7185; --rx-t-quant: #f472b6;
+  --rx-t-alt: #f87171; --rx-t-anchor: #fbbf24; --rx-t-look: #34d399; --rx-t-mod: #5eead4; --rx-t-grp: #94a3b8;
+  --rx-c0: #60a5fa; --rx-c1: #fbbf24; --rx-c2: #4ade80; --rx-c3: #f472b6; --rx-c4: #a78bfa; --rx-c5: #22d3ee; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .rx-lib-src { --rx-t-esc: #2dd4bf; --rx-t-set: #c4b5fd; --rx-t-cls: #fb923c; --rx-t-clsch: #fdba74; --rx-t-op: #fb7185; --rx-t-quant: #f472b6;
+    --rx-t-alt: #f87171; --rx-t-anchor: #fbbf24; --rx-t-look: #34d399; --rx-t-mod: #5eead4; --rx-t-grp: #94a3b8;
+    --rx-c0: #60a5fa; --rx-c1: #fbbf24; --rx-c2: #4ade80; --rx-c3: #f472b6; --rx-c4: #a78bfa; --rx-c5: #22d3ee; }
+}
+.rx-saved { display: flex; flex-direction: column; gap: 8px; }
+.rx-sv-h { display: flex; align-items: center; gap: 6px; margin: 4px 0 2px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-muted); }
+.rx-sv-h .ed-ic, .rx-sv-h svg { width: 15px; height: 15px; }
+.rx-sv-hrow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+.rx-sv-list { display: flex; flex-direction: column; gap: 6px; }
+.rx-sv-item { display: flex; align-items: center; gap: 6px; }
+.rx-sv-open { flex: 1 1 auto; }
+.rx-sv-name { font-size: 13.5px; }
+.rx-sv-meta { font-size: 11.5px; color: var(--ed-muted); }
+
+/* --- responsive --------------------------------------------------------------------------------------------- */
+/* Single column below 1080px; matches the sticky test-text breakpoint (min-width:1081px) above. */
+@media (max-width: 1080px) {
+  .rx-work { grid-template-columns: minmax(0, 1fr); }
+}
+/* Phones: labels collapse to icons/letters; pattern font 16px, the minimum that stops iOS Safari zooming on focus. */
+@media (max-width: 640px) {
+  .rx-flag-n { display: none; }
+  .rx-flag { padding: 0 6px; }
+  .rx-btn-l { display: none; }
+  .rx-hbtn { padding: 0 9px; }
+  .rx-pat-row { padding: 7px 10px; }
+  .rx-ed-pattern .rx-mirror, .rx-ed-pattern .rx-ta { font-size: 16px; line-height: 28px; min-height: 28px; }
+  .rx-slash { font-size: 19px; line-height: 28px; }
+  .rx-flagtxt { font-size: 16px; line-height: 28px; }
+  .rx-pane { padding: 12px; }
+  .rx-tab { padding: 0 10px; }
+  .rx-ex-src { max-width: 42%; }
+  .rx-lint-src { display: none; }
+  .rx-split-head { grid-template-columns: auto 1fr; }
+}
+
+/* --- library: tabs, validators, generators ------------------------------------------------------------------ */
+.rx-lib-tabs { align-self: flex-start; max-width: 100%; }
+.rx-lib-pane { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.rx-lib-hint { margin: 0; }
+.rx-lib-std { font-size: 11px; font-weight: 650; color: var(--ed-accent); }
+.rx-gen-list { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.rx-gen-card .ed-ic, .rx-gen-card svg { width: 18px; height: 18px; color: var(--ed-accent); align-self: center; }
+.rx-gen-bar { display: flex; align-items: center; gap: 10px; }
+.rx-gen { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.rx-gen-form { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.rx-gen-form .ed-field + .ed-field, .rx-gen-grid > .ed-field { margin-top: 0; }
+.rx-gen-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px 12px; align-items: end; }
+.rx-gen-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.rx-gen-digits { min-height: 56px; font: 13px/1.5 var(--rx-mono); }
+.rx-gen-words { min-height: 160px; font: 13px/1.5 var(--rx-mono); }
+.rx-gen-chips { gap: 4px; margin-top: 6px; }
+.rx-gen-chips .ed-chip { height: 26px; font: 12px var(--rx-mono); }
+.rx-gen-affix { display: flex; flex-direction: column; gap: 6px; }
+/* Generator result panel sticks to the top of the dialog scroll area while the form below changes it. */
+.rx-gen-out { position: sticky; top: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; padding: 12px;
+  border: 1px solid var(--ed-border); border-radius: 12px; background: var(--ed-panel-2); }
+.rx-gen-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rx-gen-meta { font-size: 12px; color: var(--ed-muted); font-variant-numeric: tabular-nums; }
+.rx-gen-lint { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 12px; font-weight: 600; }
+.rx-gen-lint svg, .rx-gen-exh svg, .rx-gen-err svg { width: 14px; height: 14px; flex: none; }
+.rx-gen-ok { color: var(--ed-ok); }
+.rx-gen-warn { color: var(--ed-warn); }
+/* (0,2,0) beats .rx-lib-src: generated patterns can be long, so they wrap (break-all) instead of one ellipsised line. */
+.rx-gen-src.rx-lib-src { white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow: auto; text-overflow: clip; }
+.rx-gen-ex { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; font: 12.5px/1.5 var(--rx-mono); }
+.rx-gen-ex ul { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.rx-gen-ex li { padding: 1px 6px; border-radius: 5px; word-break: break-all; }
+.rx-gen-yes { background: color-mix(in srgb, var(--ed-ok) 13%, transparent); }
+.rx-gen-no { background: var(--ed-danger-weak); }
+.rx-gen-exh { display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; color: var(--ed-muted); }
+.rx-gen-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.rx-gen-err { display: flex; align-items: center; gap: 6px; color: var(--ed-danger); font-weight: 600; }
+@media (max-width: 760px) {
+  .rx-gen { grid-template-columns: minmax(0, 1fr); }
+  /* The result first on phones: it stays in view while the settings below change it. */
+  .rx-gen-out { order: -1; position: static; }
+  .rx-gen-src.rx-lib-src { max-height: 120px; }
+}

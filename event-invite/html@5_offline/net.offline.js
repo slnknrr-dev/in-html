@@ -1,0 +1,1 @@
+const ONLINE=false;const api=()=>Promise.reject(new Error('offline build: no network'));export{ONLINE,api};

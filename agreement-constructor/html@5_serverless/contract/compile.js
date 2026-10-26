@@ -1,0 +1,17 @@
+import{escapeAttr,escapeHTML}from"../html/escape.js";import{pageCSS,formCSS,paperCSS}from"./css.js";import{normalizeTemplate,normalizeDoc,newDocument}from"./model.js";import{renderContract}from"./render.js";const CSP="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' blob:; worker-src blob:; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'";const ICON="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='6' y='3' width='20' height='26' rx='2' fill='%23fff' stroke='%232563eb' stroke-width='2'/%3E%3Cpath d='M10 10h12M10 15h12M10 20h7' stroke='%232563eb' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E";const jsonInline=(v)=>JSON.stringify(v).replace(/</g,'\\u003c').replace(/\u2028/g,'\\u2028').replace(/\u2029/g,'\\u2029');const jsInline=(s)=>String(s).replace(/<\/(script)/gi,'<\\/$1').replace(/\x3C!--/g,'<\\!--');const pick=(o,l,main)=>(o&&(o[l]||o[main]||Object.values(o)[0]))||'';function compileTemplate(tplIn,o={}){const tpl=normalizeTemplate(tplIn);const lang=tpl.langs.includes(o.lang)?o.lang:tpl.main;const start=o.doc?normalizeDoc(o.doc):newDocument(tpl,{empty:!o.withSample});start.lang=lang;const pre=renderContract(tpl,start,{lang,chips:false,today:o.today});const shipped={...tpl,sample:{values:{},modifiers:{},levels:{}}};const data={template:shipped,lang,values:o.withSample||o.doc?start.values:undefined,modifiers:start.modifiers,levels:start.levels,generator:o.generator||'agreement-constructor'};const key=o.runtimeKey||'bundle:page.js';const title=pick(tpl.name,lang,tpl.main)||'Agreement';const boot=o.runtime?`<script type="module">${jsInline(o.runtime)}\n;globalThis[Symbol.for(${JSON.stringify(key)})].boot(JSON.parse(document.getElementById('ctp-data').textContent));\x3C/script>`:'';return'<!doctype html>\n'
++`<html lang="${escapeAttr(lang)}"><head><meta charset="utf-8">`
++'<meta name="viewport" content="width=device-width, initial-scale=1">'
++`<meta http-equiv="Content-Security-Policy" content="${CSP}">`
++'<meta name="color-scheme" content="light dark">'
++`<meta name="generator" content="${escapeAttr(data.generator)}">`
++`<title>${escapeHTML(title)}</title><link rel="icon" href="${ICON}">`
++`<style>${pageCSS()}${formCSS()}${paperCSS(tpl.page)}</style></head>`
++`<body class="ctp"><div id="ctp-root"><main class="ctp-static"><div class="ct-sheet">${pre.html}</div></main></div>`
++`<script type="application/json" id="ctp-data">${jsonInline(data)}\x3C/script>${boot}</body></html>\n`;}
+function compileStatic(tplIn,docIn,o={}){const tpl=normalizeTemplate(tplIn);const doc=normalizeDoc(docIn);const lang=o.lang||doc.lang||tpl.main;const r=renderContract(tpl,doc,{lang,second:o.second,chips:false,today:o.today});const title=doc.name||pick(tpl.name,lang,tpl.main)||'Agreement';return'<!doctype html>\n'
++`<html lang="${escapeAttr(lang)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">`
++`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">`
++`<title>${escapeHTML(title)}</title><link rel="icon" href="${ICON}">`
++`<style>body{margin:0;background:#e9ebef;padding:16px}@media print{body{padding:0;background:#fff}}${paperCSS(tpl.page)}</style></head>`
++`<body><div class="ct-sheet">${r.html}</div></body></html>\n`;}
+export{compileStatic,compileTemplate};

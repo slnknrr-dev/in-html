@@ -1,0 +1,14 @@
+const SYNTAX=/[\\^$.*+?()[\]{}|/]/;const INVISIBLE=/[\s\u00AD\u200B-\u200F\u2028-\u202F\u2060\uFEFF]/u;function hex(cp){return cp>0xffff?`\\u{${cp.toString(16).toUpperCase()}}`:'\\u'+cp.toString(16).toUpperCase().padStart(4,'0');}
+function escapeChar(ch){if(SYNTAX.test(ch))return'\\'+ch;if(ch==='\t')return'\\t';if(ch==='\n')return'\\n';if(ch===' ')return' ';if(INVISIBLE.test(ch)||/\p{C}/u.test(ch))return hex(ch.codePointAt(0));return ch;}
+function escapeClassChar(ch){if(/[\\\]^-]/.test(ch))return'\\'+ch;if(ch==='[')return'\\[';if(ch===' ')return' ';if(INVISIBLE.test(ch)||/\p{C}/u.test(ch))return hex(ch.codePointAt(0));return ch;}
+function charClass(chars){const cps=[...new Set(Array.from(chars,(c)=>c.codePointAt(0)))].sort((a,b)=>a-b);if(!cps.length)return'[]';if(cps.length===1)return escapeChar(String.fromCodePoint(cps[0]));let out='';for(let i=0;i<cps.length;){let j=i;while(j+1<cps.length&&cps[j+1]===cps[j]+1)j++;const a=escapeClassChar(String.fromCodePoint(cps[i])),b=escapeClassChar(String.fromCodePoint(cps[j]));out+=j-i>=2?`${a}-${b}`:j>i?a+b:a;i=j+1;}
+return`[${out}]`;}
+function trie(strings){const root={end:false,kids:new Map()};for(const s of strings){let n=root;for(const ch of Array.from(s)){if(!n.kids.has(ch))n.kids.set(ch,{end:false,kids:new Map()});n=n.kids.get(ch);}
+n.end=true;}
+return root;}
+const ONE_ATOM=/^(?:\[(?:\\.|[^\]\\])*\]|\\u\{[0-9A-F]+\}|\\u[0-9A-F]{4}|\\.|.)$/su;function render(node){const leaves=[],branches=[];for(const[ch,kid]of node.kids)(kid.kids.size?branches:leaves).push([ch,kid]);const alts=[];if(leaves.length)alts.push(charClass(leaves.map(([ch])=>ch)));for(const[ch,kid]of branches){let text=escapeChar(ch),n=kid;while(!n.end&&n.kids.size===1){const[[c,k]]=n.kids;text+=escapeChar(c);n=k;}
+const rest=render(n);alts.push(text+rest);}
+if(!alts.length)return'';const body=alts.length===1?alts[0]:`(?:${alts.join('|')})`;if(!node.end)return body;return(ONE_ATOM.test(body)?body:`(?:${body})`)+'?';}
+function alternation(strings,{caseless=false}={}){const list=[...new Set(strings.map((s)=>(caseless?String(s).toLowerCase():String(s))).filter((s)=>s.length))];if(!list.length)return'(?!)';const t=trie(list);return render(t);}
+function wordListPattern(words,{caseless=false,whole='word',name='word'}={}){const list=(Array.isArray(words)?words:String(words).split(/\r?\n|,/)).map((w)=>w.trim()).filter(Boolean);const body=alternation(list,{caseless});const group=name?`(?<${name}>${body})`:`(?:${body})`;const flags='gu'+(caseless?'i':'')+(whole==='line'?'m':'');const source=whole==='line'?`^${group}$`:whole==='word'?`(?<![\\p{L}\\p{M}\\p{N}_])${group}(?![\\p{L}\\p{M}\\p{N}_])`:group;return{source,flags:[...flags].sort().join('')};}
+export{charClass,alternation,escapeClassChar,wordListPattern};

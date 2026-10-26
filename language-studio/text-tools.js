@@ -1,0 +1,242 @@
+// language-studio/text-tools.js - the Georgian workbench and the text analysis of every course: typing Georgian in
+// Latin or Russian transcription with suggestions where a sound is left open or marked wrongly; the word-form
+// explorer over the lexicon (noun cases, numbers and postpositions; verbs by series, screeve and person with the case
+// frame); the sentence designer (verb, arguments, screeve, negation, question → a grammatical sentence with a gloss
+// and the reason for every case, drawn as a graph); text analysis (sentences, clauses, who does what to whom,
+// entities and their mentions, the topic chain, dialogue with speakers and the author's words, complex constructions)
+// with clause, entity and topic graphs from diagram/ and their Mermaid text.
+//
+//   TEXT_TOOLS: { 'ka-type' | 'ka-forms' | 'ka-sentence' | 'text': { title, render(C, arg) } }
+
+import { h } from '../ui/dom.js';
+import { t } from '../ui/i18n.js';
+import { select, seg, copyText } from '../ui/app.js';
+import { lexicon, lexByWord, lexById, POS } from '../lingua/kartuli-lexicon.js';
+import { declineNoun, verbTable, caseFrame, analyzeWord, SCREEVES_ALL, CASE_IDS, POSTS, PERSONS } from '../lingua/kartuli-grammar.js';
+import { convert, pronunciation } from '../lingua/kartuli-input.js';
+import { buildSentence, WHY, ROLE_NAMES, CASE_NAMES } from '../lingua/kartuli-syntax.js';
+import { analyzeText, clauseGraph, entityGraph, topicGraph, toMermaid } from '../lingua/discourse.js';
+import { translit } from '../lingua/kartuli.js';
+import { graphSVG } from '../diagram/graph.js';
+import { speakBtn } from './views.js';
+import { contrastEl } from './xl-tools.js';
+
+const L = (C, o) => (o == null ? '' : typeof o === 'string' ? o : o[C.lang] || o.ru || o.en || '');
+const field = (label, control) => h('label', { class: 'ed-field' }, h('span', { class: 'ed-label' }, label), control);
+const textInput = (value, onInput, attrs = {}) => {
+  const i = h(attrs.multiline ? 'textarea' : 'input', { class: 'ed-input' + (attrs.multiline ? ' ed-textarea' : ''), value, spellcheck: 'false', autocomplete: 'off', ...attrs, multiline: null });
+  i.addEventListener('input', () => onInput(i.value));
+  return i;
+};
+const tr = (C, ka) => translit(ka, C.lang === 'ru' ? 'ru' : 'lat');
+const dark = () => document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches);
+const partsRow = (parts) => h('span', { class: 'lx-parts', lang: 'ka' }, (parts || []).map((p) => h('span', { class: 'lx-p lx-' + (p.role || 'x'), title: [p.role, p.tag].filter(Boolean).join(' · ') }, p.s)));
+
+// --- typing in transcription ---------------------------------------------------------------------------------------
+function kaType(C) {
+  const out = h('div', { class: 'ls-out' });
+  const run = (text) => {
+    const r = convert(text);
+    const words = r.words.map((w) => h('div', { class: 'lx-word' + (w.notes.some((n) => n.level === 'fix') ? ' lx-fix' : '') },
+      h('div', { class: 'lx-head' }, h('b', { lang: 'ka', class: 'lx-ka' }, w.chosen), speakBtn(C, w.chosen), h('span', { class: 'ls-tr' }, w.src),
+        w.known ? h('span', { class: 'ed-tag' }, t('lx.known')) : h('span', { class: 'ed-tag lx-unknown' }, t('lx.unknown'))),
+      w.candidates.length > 1 ? h('div', { class: 'ls-also' }, h('b', null, t('lx.alternatives') + ' '), w.candidates.slice(1, 5).map((c) => h('span', { class: 'ed-chip', lang: 'ka' }, c.ka))) : null,
+      ...w.notes.filter((n) => n.level === 'fix' || !/:s*$/.test(L(C, n))).map((n) => h('p', { class: 'lx-note lx-' + n.level }, (n.level === 'fix' ? '⚠ ' : 'ℹ ') + L(C, n))),
+      gloss(C, w.chosen)));
+    const pr = r.georgian.trim() ? pronunciation(r.georgian) : null;
+    out.replaceChildren(
+      h('div', { class: 'ls-big', lang: 'ka' }, r.georgian || '…', r.georgian ? speakBtn(C, r.georgian) : null),
+      r.georgian ? h('button', { type: 'button', class: 'ed-btn', onclick: () => copyText(r.georgian) }, t('lx.copy')) : null,
+      pr ? h('p', { class: 'ls-tr' }, '[' + pr.ipa + ']') : null,
+      ...words,
+      pr && pr.notes.length ? h('div', { class: 'lx-sounds' }, h('h4', null, t('lx.sounds')), pr.notes.map((n) => h('p', null, h('b', { lang: 'ka' }, n.letters + ' '), L(C, n)))) : null);
+  };
+  const inp = textInput('gamarjoba, me mkvia nino. sakartvelo lamazi kveqanaa', run, { multiline: true, rows: 3 });
+  run(inp.value);
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('lx.typeHint')),
+    h('div', { class: 'ed-chips' }, ['kartuli ena', "k'acebi", 'картули', 'гамарджоба', 'madloba', 'ts`q`ali', 'гвинo', 'khachapuri'].map((x) => h('button', { type: 'button', class: 'ed-chip', onclick: () => { inp.value = x; run(x); } }, x))),
+    field(t('lx.translit'), inp), out);
+}
+function gloss(C, w) {
+  const hits = analyzeWord(w).slice(0, 2);
+  if (!hits.length) return null;
+  return h('div', { class: 'lx-gloss' }, hits.map((a) => h('div', null, partsRow(a.parts), ' ', h('b', null, a.lemma), ' — ', a.lex ? L(C, a.lex) : '', a.tags ? h('small', { class: 'ed-muted' }, ' ' + tagText(C, a)) : null)));
+}
+function tagText(C, a) {
+  const g = a.tags || {};
+  const out = [];
+  if (g.case) out.push(L(C, CASE_NAMES[g.case]));
+  if (g.num === 'pl') out.push(t('lx.plural'));
+  if (g.post) { const p = POSTS.find((x) => x.id === g.post); if (p) out.push('+ -' + p.s + ' (' + L(C, p) + ')'); }
+  if (g.screeve) { const s = SCREEVES_ALL.find((x) => x.id === g.screeve); if (s) out.push(L(C, s)); }
+  if (g.s) out.push(g.s + (g.o ? ' → ' + g.o : ''));
+  return out.join(' · ');
+}
+
+// --- word forms ----------------------------------------------------------------------------------------------------
+function kaForms(C, arg) {
+  const all = lexicon();
+  const S = { id: (arg && (lexByWord(arg)[0] || {}).id) || 'v:წერა', screeve: 'present', o: '' };
+  const out = h('div', { class: 'ls-out' });
+  const list = h('div', { class: 'lx-list' });
+  const pick = (id) => { S.id = id; draw(); };
+  const search = textInput('', (q) => drawList(q), { type: 'search', placeholder: t('lx.searchWord') });
+  const drawList = (q) => {
+    q = q.trim().toLowerCase();
+    const hits = (q ? all.filter((e) => e.w.includes(q) || e.ru.toLowerCase().includes(q) || e.en.toLowerCase().includes(q) || tr(C, e.w).toLowerCase().includes(q)) : all.filter((e) => e.tier === 1)).slice(0, 60);
+    // A typed form that is not a headword: its analyses lead to the lemma.
+    const forms = q && !hits.length ? analyzeWord(q).filter((a) => a.lex) : [];
+    list.replaceChildren(...forms.map((a) => h('button', { type: 'button', class: 'ed-chip', onclick: () => pick(a.lex.id) }, h('span', { lang: 'ka' }, q), ' → ', h('b', { lang: 'ka' }, a.lemma))),
+      ...hits.map((e) => h('button', { type: 'button', class: 'ed-chip' + (e.id === S.id ? ' ed-on' : ''), onclick: () => pick(e.id), title: L(C, e) }, h('span', { lang: 'ka' }, e.w), h('small', null, ' ' + L(C, e).split(';')[0]))));
+  };
+  const draw = () => {
+    const e = lexById(S.id);
+    if (!e) { out.replaceChildren(); return; }
+    const head = h('div', { class: 'lx-entry' }, h('div', { class: 'ls-big', lang: 'ka' }, e.w, speakBtn(C, e.w)), h('div', { class: 'ls-tr' }, tr(C, e.w)),
+      h('p', null, h('b', null, L(C, POS[e.pos] || {}) + ' · '), L(C, e), e.unverified ? h('span', { class: 'ed-tag lx-unknown' }, t('lx.unverified')) : null));
+    if (e.pos === 'v') out.replaceChildren(head, verbBlock(C, e, S, draw));
+    else if (e.pos === 'n' || e.pos === 'np' || e.pos === 'a') out.replaceChildren(head, nounBlock(C, e));
+    else out.replaceChildren(head);
+    drawList(search.value);
+  };
+  draw();
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('lx.formsHint', { n: all.length })), field(t('lx.searchWord'), search), list, out);
+}
+function nounBlock(C, e) {
+  const d = declineNoun(e);
+  const row = (c) => h('tr', null, h('th', null, L(C, CASE_NAMES[c.id])), h('td', null, partsRow(c.parts), speakBtn(C, c.form)), h('td', null, d.pl ? partsRow((d.pl.find((x) => x.id === c.id) || {}).parts) : ''), h('td', null, d.old ? h('span', { lang: 'ka' }, (d.old.find((x) => x.id === c.id) || {}).form || '') : ''));
+  return h('div', null,
+    h('table', { class: 'ap-table ls-table lx-table' }, h('thead', null, h('tr', null, h('th', null, ''), h('th', null, t('lx.singular')), h('th', null, t('lx.plural')), h('th', null, t('lx.oldPlural')))), h('tbody', null, d.sg.map(row))),
+    h('h4', null, t('lx.postpositions')),
+    h('div', { class: 'lx-posts' }, (d.post || []).map((p) => { const P = POSTS.find((x) => x.id === p.id) || {}; return h('span', { class: 'ed-chip', title: L(C, P) }, h('span', { lang: 'ka' }, p.form), h('small', null, ' ' + L(C, P) + (p.num === 'pl' ? ' · ' + t('lx.plural') : ''))); })));
+}
+function verbBlock(C, e, S, redraw) {
+  const fr = caseFrame(e, S.screeve);
+  const rows = verbTable(e, S.screeve, S.o || null);
+  const ctl = h('div', { class: 'ls-ctl' },
+    field(t('ls.ka.screeve'), select(SCREEVES_ALL.map((s) => ({ v: s.id, l: '=' + L(C, s) + ' · ' + s.ka + ' (' + ['I', 'II', 'III'][s.series - 1] + ')' })), S.screeve, (v) => { S.screeve = v; redraw(); })),
+    field(t('ls.ka.object'), select([{ v: '', l: '=—' }, ...PERSONS.map((p) => ({ v: p, l: '=' + p }))], S.o, (v) => { S.o = v; redraw(); })));
+  const caseLine = (role) => fr[role] ? h('span', { class: 'ed-chip' }, L(C, ROLE_NAMES[role]) + ': ' + L(C, CASE_NAMES[fr[role]])) : null;
+  return h('div', null, ctl,
+    h('table', { class: 'ap-table ls-table lx-table' }, h('tbody', null, rows.map((r) => h('tr', null, h('th', null, r.s), h('td', null, r.form ? [partsRow(r.parts || [{ s: r.form }]), r.derived ? h('small', { class: 'ed-muted', title: t('lx.derivedHint') }, ' *') : null, speakBtn(C, r.form)] : h('span', { class: 'ed-muted' }, '—')), h('td', { class: 'ls-tr' }, r.form ? tr(C, r.form) : ''))))),
+    h('div', { class: 'ls-also' }, h('b', null, t('lx.frame') + ' '), caseLine('subj'), caseLine('obj'), caseLine('io'), fr.inverted ? h('span', { class: 'ed-tag' }, t('lx.inverted')) : null),
+    fr.note && WHY[fr.note + '.subj'] ? h('p', { class: 'ls-note' }, L(C, WHY[fr.note + '.subj'])) : null);
+}
+
+// --- sentence designer ---------------------------------------------------------------------------------------------
+function kaSentence(C) {
+  const verbs = lexicon().filter((e) => e.pos === 'v').sort((a, b) => a.tier - b.tier || a.w.localeCompare(b.w));
+  const nouns = lexicon().filter((e) => e.pos === 'n' || e.pos === 'np').sort((a, b) => a.tier - b.tier);
+  const adjs = lexicon().filter((e) => e.pos === 'a');
+  const S = { verb: (verbs.find((v) => v.w === 'მიცემა') || verbs[0]).id, screeve: 'aorist', subj: 'n:დედა', obj: 'n:წიგნი', io: '1sg', adj: '', place: '', neg: '', question: false };
+  const out = h('div', { class: 'ls-out' });
+  const CS = { to: 'ru' }; // the language of the contrastive structure (xl-tools.js)
+  const argOf = (v) => (!v ? null : PERSONS.includes(v) ? { pron: v } : v === 'who' || v === 'what' ? { q: v } : { noun: lexById(v) });
+  const draw = () => {
+    const obj = argOf(S.obj);
+    if (obj && obj.noun && S.adj) obj.adj = lexById(S.adj);
+    const r = buildSentence({ verb: lexById(S.verb), screeve: S.screeve, subj: argOf(S.subj), obj, io: argOf(S.io), extras: S.place ? [{ noun: lexById(S.place), post: 'shi' }] : [], neg: S.neg || null, question: S.question });
+    out.replaceChildren(
+      h('div', { class: 'ls-big', lang: 'ka' }, r.text, speakBtn(C, r.text)), h('div', { class: 'ls-tr' }, tr(C, r.text)),
+      h('table', { class: 'ap-table ls-table lx-table' }, h('tbody', null, r.words.map((w) => h('tr', null, h('td', { lang: 'ka' }, h('b', null, w.ka)), h('td', null, L(C, ROLE_NAMES[w.role] || {})), h('td', null, w.case ? L(C, CASE_NAMES[w.case]) : ''), h('td', null, L(C, w.gloss)), h('td', { class: 'ls-note' }, w.why ? L(C, w.why) : ''))))),
+      ...(r.issues || []).map((x) => h('p', { class: 'lx-note lx-fix' }, '⚠ ' + L(C, x))),
+      sentenceGraph(C, r), contrastEl(C, r, CS));
+  };
+  const opts = (list) => list.slice(0, 400).map((e) => ({ v: e.id, l: '=' + e.w + ' — ' + L(C, e).split(';')[0] }));
+  const argOpts = (withQ) => [{ v: '', l: '=—' }, ...PERSONS.map((p) => ({ v: p, l: '=' + t('lx.pron') + ' ' + p })), ...(withQ ? [{ v: 'who', l: '=ვინ? (who)' }, { v: 'what', l: '=რა? (what)' }] : []), ...opts(nouns)];
+  const sel = (key, list) => select(list, S[key], (v) => { S[key] = v; draw(); });
+  const ctl = h('div', { class: 'ls-ctl lx-ctl' },
+    field(t('ls.ka.verb'), sel('verb', opts(verbs))),
+    field(t('ls.ka.screeve'), sel('screeve', SCREEVES_ALL.map((s) => ({ v: s.id, l: '=' + L(C, s) + ' (' + ['I', 'II', 'III'][s.series - 1] + ')' })))),
+    field(L(C, ROLE_NAMES.subj), sel('subj', argOpts(true))),
+    field(L(C, ROLE_NAMES.obj), sel('obj', argOpts(true))),
+    field(L(C, ROLE_NAMES.io), sel('io', argOpts(false))),
+    field(t('lx.adj'), sel('adj', [{ v: '', l: '=—' }, ...opts(adjs)])),
+    field(t('lx.place'), sel('place', [{ v: '', l: '=—' }, ...opts(nouns)])),
+    field(t('lx.neg'), seg([{ v: '', l: '=—' }, { v: 'არ', l: '=არ' }, { v: 'ვერ', l: '=ვერ' }], S.neg, (v) => { S.neg = v; draw(); })),
+    h('label', { class: 'ed-field ed-field-check' }, (() => { const c = h('input', { type: 'checkbox', class: 'ed-switch' }); c.addEventListener('change', () => { S.question = c.checked; draw(); }); return c; })(), h('span', { class: 'ed-label' }, t('lx.question'))));
+  draw();
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('lx.sentenceHint')), ctl, out);
+}
+function sentenceGraph(C, r) {
+  const g = { direction: 'TB', nodes: [], edges: [], groups: [], classes: { pred: 'fill:#fde9c8,stroke:#c08a2e,color:#3a2a10' } };
+  const pred = r.words.find((w) => w.role === 'pred');
+  if (!pred) return null;
+  g.nodes.push({ id: 'p', label: pred.ka + '\n' + L(C, pred.gloss), shape: 'stadium', cls: ['pred'] });
+  r.words.forEach((w, i) => {
+    if (w === pred || w.role === 'neg' || w.role === 'q') return;
+    g.nodes.push({ id: 'w' + i, label: w.ka + '\n' + (w.case ? L(C, CASE_NAMES[w.case]) : ''), shape: 'round', accent: ['subj', 'obj', 'io', 'adv', 'adj'].indexOf(w.role) + 1 });
+    g.edges.push({ from: w.role === 'adj' ? 'w' + (i + 1) : 'p', to: 'w' + i, label: L(C, ROLE_NAMES[w.role] || {}) });
+  });
+  g.edges = g.edges.filter((e) => g.nodes.some((n) => n.id === e.from));
+  return h('div', { class: 'lx-graph', html: graphSVG(g, { theme: dark() ? 'dark' : 'light' }) });
+}
+
+// --- text analysis -------------------------------------------------------------------------------------------------
+const SAMPLES = {
+  ka: 'ნინო დილით ადრე ადგა და ბაზარში წავიდა. იქ მან ხილი და ყველი იყიდა.\n— გამარჯობა, ნინო! — დაუძახა გამყიდველმა.\n— გამარჯობა, ბატონო გიორგი, — უპასუხა ნინომ.\nგიორგიმ ნინოს ვაშლი აჩუქა. ნინომ მადლობა გადაუხადა და სახლში დაბრუნდა. დედამ ჩაი მოამზადა, რომელიც ნინომ სიამოვნებით დალია.',
+  ru: 'Утром Анна пошла на рынок. Там она купила хлеб и сыр.\n— Доброе утро, Анна! — сказал продавец.\n— Здравствуйте, — ответила она.\nПродавец дал Анне яблоко. Анна поблагодарила его и вернулась домой. Мама заварила чай, который Анна выпила с удовольствием.',
+  en: 'In the morning Anna went to the market. There she bought bread and cheese.\n"Good morning, Anna!" said the seller.\n"Hello," she answered.\nThe seller gave Anna an apple. Anna thanked him and went home. Her mother made tea, which Anna drank with pleasure.',
+};
+function textTool(C) {
+  const lang0 = ['ka', 'ru', 'en'].includes(C.course.id) ? C.course.id : 'en';
+  const S = { view: 'clauses', text: SAMPLES[lang0] };
+  const out = h('div', { class: 'ls-out' });
+  const area = textInput(S.text, (v) => { S.text = v; later(); }, { multiline: true, rows: 6, lang: lang0 });
+  let timer = 0;
+  const later = () => { clearTimeout(timer); timer = setTimeout(draw, 350); };
+  const draw = () => {
+    const a = analyzeText(S.text);
+    const ent = new Map(a.entities.map((e, i) => [e.id, { ...e, n: i }]));
+    const gl = C.lang === 'ru' ? 'ru' : 'en';
+    const graph = S.view === 'entities' ? entityGraph(a, { gloss: gl }) : S.view === 'topic' ? topicGraph(a) : clauseGraph(a, { gloss: gl });
+    const mermaid = toMermaid(graph);
+    const annotated = h('div', { class: 'lx-text' }, a.sentences.map((s) => h('p', { class: 'lx-s lx-' + s.kind },
+      h('span', { class: 'lx-tag lx-t-' + s.transition, title: t('lx.tr.' + s.transition) }, 'S' + (s.i + 1)),
+      s.kind === 'speech' ? h('span', { class: 'ed-tag' }, '💬 ' + (s.speaker || '?') + (s.addressee ? ' → ' + s.addressee : '')) : null, ' ',
+      ...markup(s, ent))));
+    out.replaceChildren(
+      h('div', { class: 'lx-stats' }, stat(t('lx.sentences'), a.sentences.length), stat(t('lx.entities'), a.entities.length), stat(t('lx.events'), a.events.length), stat(t('lx.lines'), a.dialogue.length)),
+      annotated,
+      h('div', { class: 'lx-legend' }, ['continue', 'shift', 'return', 'new', 'none'].map((k) => h('span', { class: 'lx-tag lx-t-' + k }, t('lx.tr.' + k)))),
+      seg([{ v: 'clauses', l: 'lx.g.clauses' }, { v: 'entities', l: 'lx.g.entities' }, { v: 'topic', l: 'lx.g.topic' }], S.view, (v) => { S.view = v; draw(); }, 'lx.graph'),
+      h('div', { class: 'lx-graph', html: graphSVG(graph, { theme: dark() ? 'dark' : 'light' }) }),
+      h('details', { class: 'lx-mermaid' }, h('summary', null, t('lx.mermaid')), h('pre', null, mermaid), h('button', { type: 'button', class: 'ed-btn', onclick: () => copyText(mermaid) }, t('lx.copy'))),
+      eventsTable(C, a, ent),
+      a.dialogue.length ? h('div', null, h('h4', null, t('lx.dialogue')), h('table', { class: 'ap-table ls-table' }, h('tbody', null, a.dialogue.map((d) => h('tr', null, h('th', null, (d.speaker || '?') + (d.guessed ? ' ?' : '')), h('td', null, d.text), h('td', { class: 'ls-note' }, d.author || '')))))) : null,
+      a.issues.length ? h('div', null, h('h4', null, t('lx.issues')), a.issues.map((x) => h('p', { class: 'lx-note lx-fix' }, 'S' + (x.s + 1) + ': ' + L(C, x)))) : null);
+  };
+  draw();
+  return h('div', { class: 'ls-tool' }, h('p', { class: 'ed-hint' }, t('lx.textHint')),
+    h('div', { class: 'ed-chips' }, Object.keys(SAMPLES).map((k) => h('button', { type: 'button', class: 'ed-chip', onclick: () => { area.value = S.text = SAMPLES[k]; draw(); } }, t('lx.sample') + ' ' + k.toUpperCase()))),
+    field(t('lx.yourText'), area), out);
+}
+const stat = (k, v) => h('div', { class: 'cg-stat lx-stat' }, h('small', null, k), h('b', null, String(v)));
+// Words of a sentence coloured by entity and role.
+function markup(s, ent) {
+  const marks = new Map();
+  for (const c of s.clauses) for (const a of [...c.args, ...(c.adjuncts || [])]) if (a.ent && a.t && a.t !== '∅') marks.set(a.t, { e: ent.get(a.ent), role: a.role });
+  for (const c of s.clauses) if (c.pred) marks.set(c.pred.t, { pred: true });
+  const out = [];
+  for (const piece of s.text.split(/(\s+|[,.!?;:—–«»„“"()]+)/)) {
+    const m = marks.get(piece);
+    if (!m) { out.push(piece); continue; }
+    if (m.pred) out.push(h('mark', { class: 'lx-pred' }, piece));
+    else out.push(h('mark', { class: 'lx-ent lx-c' + (m.e.n % 8), title: m.e.label + ' · ' + m.role }, piece, h('sub', null, m.role)));
+  }
+  return out;
+}
+function eventsTable(C, a, ent) {
+  if (!a.events.length) return null;
+  const name = (id) => (id ? ent.get(id).label : '');
+  return h('div', null, h('h4', null, t('lx.events')), h('table', { class: 'ap-table ls-table' },
+    h('thead', null, h('tr', null, h('th', null, '#'), h('th', null, L(C, ROLE_NAMES.subj)), h('th', null, L(C, ROLE_NAMES.pred)), h('th', null, L(C, ROLE_NAMES.obj)), h('th', null, L(C, ROLE_NAMES.io)))),
+    h('tbody', null, a.events.map((e) => h('tr', { class: e.speech ? 'lx-speechrow' : '' }, h('td', null, 'S' + (e.s + 1)), h('td', null, name(e.agent)), h('td', null, h('b', null, e.verb), e.gloss ? h('small', { class: 'ed-muted' }, ' ' + L(C, e.gloss)) : null), h('td', null, name(e.patient)), h('td', null, name(e.recipient)))))));
+}
+
+export const TEXT_TOOLS = {
+  'ka-type': { title: 'lx.t.type', render: kaType },
+  'ka-forms': { title: 'lx.t.forms', render: kaForms },
+  'ka-sentence': { title: 'lx.t.sentence', render: kaSentence },
+  text: { title: 'lx.t.text', render: textTool },
+};

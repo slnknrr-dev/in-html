@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<!-- image-processor/index.html: the image processor page. Empty shell: main.js renders into <main>; decoding,
+     editing and encoding run in this page and its web workers, so no file ever leaves the browser. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- color-scheme: native controls follow the theme before CSS loads (no light flash in dark mode). -->
+<meta name="color-scheme" content="light dark">
+<title>Image processor</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Cpath d='M7 9h18v14H7z' fill='none' stroke='%23fff' stroke-width='2' stroke-linejoin='round'/%3E%3Cpath d='M7 20l5-5 4 4 3-3 6 6' fill='none' stroke='%23fff' stroke-width='2' stroke-linejoin='round'/%3E%3Ccircle cx='20' cy='13' r='1.6' fill='%23fff'/%3E%3C/svg%3E">
+<!-- Cascade order: tokens/primitives, app shell, the shared photo editor (ph-, also used by other photo apps), then
+     this app (ip-). Later files win equal-specificity ties. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="../photo/photo.css">
+<link rel="stylesheet" href="./app.css">
+<!-- In <head> but still non-blocking: module scripts are deferred by default and run after the document is parsed. -->
+<script type="module" src="./main.js"></script>
+</head>
+<body class="ap">
+<main class="ap-main"></main>
+</body>
+</html>

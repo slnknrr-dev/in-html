@@ -1,0 +1,82 @@
+// walletui/addressbook.js - the address book of the wallet applications: a list of contacts { id, name, address,
+// note } kept by the application (inside the encrypted vault), add / edit / delete dialogs with address validation,
+// a context menu (right click, long press) and a picker dialog for send forms.
+//
+//   addressBookView({ entries, validate(address) -> error | null, onChange(entries), onSend(entry) }) -> element
+//   editContact(entry | null, validate) -> Promise<entry | null>
+//   pickContact(entries) -> Promise<entry | null>
+import { h } from '../ui/dom.js';
+import { t } from '../ui/i18n.js';
+import { confirmDialog, openDialog } from '../ui/overlays.js';
+import { contextMenu } from '../ui/contextmenu.js';
+import { iconEl } from '../ui/icons.js';
+import { copyText } from '../ui/app.js';
+import { randomUUID } from '../crypto/random.js';
+
+// Validation is injected (validate(address)): each wallet app knows its own address format (bech32, hex ...), the
+// UI does not. Ids are random UUIDs, so edits survive renames and duplicate names.
+export function editContact(entry, validate) {
+  const name = h('input', { class: 'ed-input', value: entry ? entry.name : '', autocomplete: 'off' });
+  const address = h('input', { class: 'ed-input wu-mono', value: entry ? entry.address : '', autocomplete: 'off', spellcheck: 'false' });
+  const note = h('input', { class: 'ed-input', value: entry ? entry.note || '' : '' });
+  const err = h('div', { class: 'wu-error', role: 'alert' });
+  const row = (label, el) => h('label', { class: 'ed-field ed-field-col' }, h('span', { class: 'ed-label' }, label), el);
+  return openDialog({
+    title: entry ? t('wu.contactEdit') : t('wu.contactAdd'),
+    body: h('div', { class: 'wu-col' }, row(t('wu.name'), name), row(t('wu.address'), address), row(t('wu.note'), note), err),
+    buttons: [{ label: t('dlg.cancel'), value: null }, {
+      label: t('ap.save'), primary: true, value: 'ok',
+      onClick: () => {
+        const e = !name.value.trim() ? t('wu.nameNeeded') : validate ? validate(address.value.trim()) : null;
+        if (e) { err.textContent = e; return false; }
+        return true;
+      },
+    }],
+  }).then((v) => (v === 'ok' ? { id: entry ? entry.id : randomUUID(), name: name.value.trim(), address: address.value.trim(), note: note.value.trim() } : null));
+}
+
+export function pickContact(entries) {
+  if (!entries.length) return openDialog({ title: t('wu.addressBook'), body: t('wu.contactsNone') }).then(() => null);
+  return new Promise((resolve) => {
+    let closeFn = null;
+    const list = h('div', { class: 'wu-list' }, entries.map((e) => h('button', { type: 'button', class: 'wu-item', onclick: () => { resolve(e); closeFn(e); } },
+      h('div', { class: 'wu-item-main' }, h('b', null, e.name), h('span', { class: 'wu-mono wu-small wu-muted wu-break' }, e.address)))));
+    openDialog({ title: t('wu.addressBook'), body: list, onMount: ({ close }) => { closeFn = close; } }).then((v) => { if (!v) resolve(null); });
+  });
+}
+
+export function addressBookView({ entries, validate, onChange, onSend = null }) {
+  const root = h('div', { class: 'wu-col' });
+  const render = () => {
+    root.textContent = '';
+    const add = h('button', { type: 'button', class: 'ed-btn ed-primary', onclick: async () => {
+      const e = await editContact(null, validate);
+      if (e) { entries.push(e); onChange(entries); render(); }
+    } }, iconEl('plus'), t('wu.contactAdd'));
+    const list = h('div', { class: 'wu-list' });
+    if (!entries.length) list.append(h('div', { class: 'ap-empty' }, t('wu.contactsNone')));
+    for (const e of entries) {
+      list.append(h('div', { class: 'wu-item', tabindex: '0', dataset: { id: e.id } },
+        h('div', { class: 'wu-item-main' }, h('b', null, e.name), h('span', { class: 'wu-mono wu-small wu-break' }, e.address), e.note ? h('span', { class: 'wu-small wu-muted' }, e.note) : null),
+        h('button', { type: 'button', class: 'ed-iconbtn', title: t('ap.copy'), 'aria-label': t('ap.copy'), onclick: () => copyText(e.address) }, iconEl('copy'))));
+    }
+    // One delegated context menu for the whole list (right click / long press) instead of one per row; the row is
+    // identified by data-id, so re-rendering does not leak listeners.
+    contextMenu(list, (target) => {
+      const e = entries.find((x) => x.id === target.dataset.id);
+      if (!e) return null;
+      return [
+        onSend ? { label: t('wu.send'), icon: 'send', action: () => onSend(e) } : null,
+        { label: t('ap.copy'), icon: 'copy', action: () => copyText(e.address) },
+        { label: t('wu.contactEdit'), icon: 'edit', action: async () => { const n = await editContact(e, validate); if (n) { Object.assign(e, n); onChange(entries); render(); } } },
+        { sep: true },
+        { label: t('dlg.delete'), icon: 'trash', danger: true, action: async () => {
+          if (await confirmDialog(t('wu.contactDelete'), e.name, t('dlg.delete'), true)) { entries.splice(entries.indexOf(e), 1); onChange(entries); render(); }
+        } },
+      ].filter(Boolean);
+    }, { selector: '.wu-item', label: t('wu.addressBook') });
+    root.append(h('div', { class: 'ap-row' }, add), list);
+  };
+  render();
+  return root;
+}

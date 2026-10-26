@@ -1,0 +1,685 @@
+// image-processor/main.js - entry of the image processor. On the page it builds the UI (settings column,
+// preview stage, image list, metadata) and drives live previews and batch exports through runner.js; when this same
+// bundled script runs as the processing worker (no document), it only starts the worker side (worker.js).
+
+//
+// State: S.global = shared settings; an item may carry its own settings (it.own) that override them. A result is
+// "fresh" when the JSON signature of the settings it was made with equals the item's current effective settings -
+// a cheap, exact cache key that needs no change tracking. Everything heavy runs through runner.js (worker or
+// in-page fallback) in priority lanes: draft < preview < export.
+import './strings.js';
+import { button, download, dropZone, seg, startApp, t, toast } from '../ui/app.js';
+import { debounce, h, lsGet, lsSet } from '../ui/dom.js';
+import { fmtBytes, pickFiles } from '../ui/files.js';
+import { addIcons, iconEl } from '../ui/icons.js';
+import { confirmDialog } from '../ui/overlays.js';
+import { writeZip } from '../zip/zip.js';
+import { KIND_LABEL, readMeta } from './input.js';
+import { metaBody } from './meta.js';
+import { aspectRatio } from '../raster/ops.js';
+import { createCommandView } from '../photo/cmdview.js';
+import { AUTO_ORIENT, createEditor } from '../photo/editor.js';
+import { commandModel } from './cmdmodel.js';
+import { transformSteps } from './commands.js';
+import { buildPanel } from './panel.js';
+import { normalizeSettings } from './pipeline.js';
+import { createRunner } from './runner.js';
+import { createStage } from './stage.js';
+import { workerMain } from './worker.js';
+
+const LOGO = 'M3 5h18v14H3zM3 16l5-5 4 4 3-3 6 6M15.5 9.5h.01';
+const KEY = 'imgproc-settings';
+// Accept list for pickers/drop zones; addFiles still re-checks by MIME type or extension because drops bypass it.
+const ACCEPT = 'image/*,.png,.jpg,.jpeg,.jfif,.gif,.webp,.bmp,.avif,.ico';
+const S = { items: [], sel: null, global: null, view: 'split', split: 0.5, crop: false, batch: null, mode: 'transform' };
+const E = {};
+let runner, stage, seq = 0, pv = 0, pvBusy = 0;
+
+const itemOf = (key) => S.items.find((i) => i.key === key);
+const selItem = () => itemOf(S.sel);
+const eff = (it) => (it && it.own) || S.global;
+const sigOf = (it) => JSON.stringify(eff(it));
+const fresh = (it) => !!(it && it.result && it.result.sig === sigOf(it));
+const editing = () => (selItem() && selItem().own) || S.global;
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const errText = (e) => String((e && e.message) || e || '');
+
+// --- adding images ---------------------------------------------------------------------------------------
+
+async function addFiles(files) {
+  const ok = files.filter((f) => /^image\//.test(f.type) || /\.(png|jpe?g|jfif|gif|webp|bmp|avif|ico)$/i.test(f.name || ''));
+  if (ok.length < files.length) toast(t('ip.skipped', { n: files.length - ok.length }), 'warn');
+  if (!ok.length) return;
+  const added = ok.map((file) => ({
+    key: ++seq, file, name: file.name || `image-${seq}.png`, size: file.size, type: file.type, meta: null, thumb: null, dims: null,
+    own: null, status: '', progress: 0, result: null, view: null, error: '',
+  }));
+  S.items.push(...added);
+  if (!selItem()) S.sel = added[0].key;
+  renderAll();
+  schedulePreview();
+  for (const it of added) {
+    await loadInfo(it);
+    if (!itemOf(it.key)) continue;
+    updateTile(it);
+    if (it.key === S.sel) { renderMeta(); renderStats(); }
+    renderCommand();
+  }
+}
+
+// Metadata from the first 1 MiB only (headers live at the start), so adding hundreds of large photos stays fast; the
+// full file is read later only for the selected image (renderMeta). Thumbnails decode at reduced size where
+// createImageBitmap supports resize options, falling back to a full decode.
+async function loadInfo(it) {
+  try { it.meta = readMeta(new Uint8Array(await it.file.slice(0, 1 << 20).arrayBuffer())); } catch { it.meta = readMeta(new Uint8Array(0)); }
+  if (it.size <= 1 << 20) it.fullMeta = true;
+  try {
+    let bmp;
+    try { bmp = await createImageBitmap(it.file, { resizeHeight: 160, resizeQuality: 'medium' }); } catch { bmp = await createImageBitmap(it.file); }
+    const k = Math.min(1, 320 / Math.max(bmp.width, bmp.height));
+    const c = h('canvas', { class: 'ip-thumb-c', 'aria-hidden': 'true' });
+    c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    if (bmp.close) bmp.close();
+    it.thumb = c;
+  } catch { it.thumb = null; }
+}
+
+// --- live preview -----------------------------------------------------------------------------------------
+
+const pack = (res, sig) => ({ bytes: res.bytes, size: res.bytes.length, name: res.name, mime: res.mime, ext: res.ext, width: res.width, height: res.height, format: res.format, sig, warning: res.warning });
+// Preview resolution follows the stage width in device pixels (480..2400): sharp on HiDPI, without decoding a
+// 48 MP image at full size just to show it 900 px wide.
+const previewEdge = () => Math.max(480, Math.min(2400, Math.round((stage.surface.clientWidth || 900) * (window.devicePixelRatio || 1))));
+const warned = new Set();
+function warnOnce(w) { if (w && !warned.has(w)) { warned.add(w); toast(t('ip.warn.' + w), 'warn'); } }
+
+// What the stage shows: the output bytes, or the processed pixels as PNG where the output is an .ico (square sizes).
+const viewOf = (res) => ({ before: res.before, bytes: res.preview || res.bytes, mime: res.preview ? 'image/png' : res.mime, width: res.width, height: res.height });
+
+// 180 ms debounce: slider drags produce dozens of changes per second; previews start once the hand pauses (the draft
+// lane keeps large images responsive meanwhile).
+const schedulePreview = debounce(() => runPreview(), 180);
+
+// A token (pv) identifies the latest request; older results are dropped (superseded in the runner, or ignored here
+// when the settings changed while it ran). Large images (> 3 MP) get a draft first so the user sees the effect within
+// a frame or two, then the exact result replaces it.
+async function runPreview() {
+  const it = selItem();
+  if (!it) return;
+  const s = eff(it), sig = JSON.stringify(s), wantBase = S.crop;
+  if (!wantBase && it.view && fresh(it)) { stage.showResult(it.view); renderStats(); return; }
+  const token = ++pv;
+  pvBusy++;
+  // Large images: a quick draft on a downscaled copy first, then the exact full-size result.
+  if (!wantBase && it.meta && it.meta.width * it.meta.height > 3e6) runDraft(it, s, token);
+  stage.setBusy(true, t('ip.st.decode'));
+  let res;
+  try {
+    res = await runner.run({ key: it.key, file: it.file, name: it.name, type: it.type, settings: s, preview: previewEdge(), base: wantBase }, {
+      lane: 'preview', onProgress: (p, st) => { if (token === pv) stage.setBusy(true, `${t('ip.st.' + st)} · ${Math.round(p * 100)} %`); },
+    });
+  } catch (e) { res = { error: e }; }
+  pvBusy--;
+  if (!pvBusy) stage.setBusy(false);
+  if (res.superseded || res.cancelled || !itemOf(it.key)) return;
+  if (res.error) {
+    it.status = 'error'; it.error = errText(res.error);
+    updateTile(it);
+    if (S.sel === it.key) { stage.empty(h('p', { class: 'ip-err-msg' }, iconEl('warn'), t('ip.decodeError', { msg: it.error }))); renderStageChrome(); }
+    return;
+  }
+  it.result = pack(res, sig);
+  it.status = 'done'; it.error = '';
+  if (S.sel === it.key) it.view = viewOf(res);
+  warnOnce(res.warning);
+  updateTile(it);
+  if (S.sel !== it.key || (sig !== sigOf(it) && !S.crop)) return; // a newer preview is on its way
+  stage.showResult(it.view);
+  if (S.crop && res.base) stage.showCrop(res, eff(it).crop.rect);
+  renderStats();
+}
+
+async function runDraft(it, s, token) {
+  let res;
+  try {
+    res = await runner.run({ key: it.key, file: it.file, name: it.name, type: it.type, settings: s, preview: previewEdge(), draft: previewEdge() }, { lane: 'draft' });
+  } catch { return; }
+  if (res.superseded || res.cancelled || token !== pv || S.sel !== it.key || S.crop || fresh(it)) return;
+  stage.showResult(viewOf(res));
+}
+
+// --- batch export ----------------------------------------------------------------------------------------
+
+// Batch: one export job at a time; only the selected image passes its cache key, so a batch does not evict the
+// decoded source the live preview relies on. Cancel stops after the running job (and drops waiting ones).
+async function processAll() {
+  if (S.batch) return false;
+  const todo = S.items.filter((it) => !fresh(it));
+  S.batch = { cancel: false, total: todo.length, done: 0 };
+  for (const it of todo) { it.status = 'queued'; it.progress = 0; updateTile(it); }
+  renderBatch();
+  for (const it of todo) {
+    if (!itemOf(it.key)) continue;
+    if (S.batch.cancel) { it.status = ''; updateTile(it); continue; }
+    if (fresh(it)) { it.status = 'done'; S.batch.done++; updateTile(it); renderBatch(); continue; }
+    it.status = 'busy'; updateTile(it);
+    const s = eff(it), sig = JSON.stringify(s);
+    try {
+      const res = await runner.run({ key: it.key === S.sel ? it.key : null, file: it.file, name: it.name, type: it.type, settings: s, preview: 0 }, {
+        lane: 'export', onProgress: (p) => { it.progress = p; updateTile(it, true); },
+      });
+      if (res.cancelled) it.status = '';
+      else { it.result = pack(res, sig); it.status = 'done'; it.error = ''; warnOnce(res.warning); }
+    } catch (e) { it.status = 'error'; it.error = errText(e); }
+    S.batch.done++;
+    updateTile(it);
+    renderBatch();
+  }
+  const done = !S.batch.cancel;
+  S.batch = null;
+  renderBatch();
+  renderStats();
+  const failed = S.items.filter((i) => i.status === 'error').length;
+  if (failed) toast(t('ip.failed', { n: failed }), 'error');
+  return done;
+}
+
+// ZIP entry names must be unique case-insensitively (Windows/macOS file systems): "a.jpg", "a (2).jpg", ...
+function uniqueNames(list) {
+  const used = new Set();
+  return list.map((it) => {
+    let name = it.result.name;
+    const m = /^(.*?)(\.[^.]+)?$/.exec(name);
+    for (let i = 2; used.has(name.toLowerCase()); i++) name = `${m[1]} (${i})${m[2] || ''}`;
+    used.add(name.toLowerCase());
+    return name;
+  });
+}
+
+// store: true - JPEG/PNG/WebP are already compressed; deflating them again costs time for ~0% gain.
+async function downloadZip() {
+  if (!S.items.length || S.batch) return;
+  if (!(await processAll())) return;
+  const list = S.items.filter(fresh);
+  if (!list.length) { toast(t('ip.nothing'), 'warn'); return; }
+  const names = uniqueNames(list);
+  E.zipBtn.disabled = true;
+  try {
+    const zip = await writeZip(list.map((it, i) => ({ name: names[i], data: it.result.bytes, store: true })));
+    download(zip, 'images.zip', 'application/zip');
+    toast(t('ip.zipped', { n: list.length, size: fmtBytes(zip.length) }), 'ok');
+  } catch (e) { toast(t('err.generic', { msg: errText(e) }), 'error'); }
+  E.zipBtn.disabled = false;
+}
+
+async function downloadSelected() {
+  const it = selItem();
+  if (!it) return;
+  if (!fresh(it)) {
+    const s = eff(it), sig = JSON.stringify(s);
+    it.status = 'busy'; updateTile(it);
+    try {
+      const res = await runner.run({ key: it.key, file: it.file, name: it.name, type: it.type, settings: s, preview: 0 }, { lane: 'export', onProgress: (p) => { it.progress = p; updateTile(it, true); } });
+      it.result = pack(res, sig); it.status = 'done';
+    } catch (e) { it.status = 'error'; it.error = errText(e); updateTile(it); toast(t('ip.decodeError', { msg: it.error }), 'error'); return; }
+    updateTile(it);
+  }
+  download(it.result.bytes, it.result.name, it.result.mime);
+}
+
+// --- selection, scope, crop ---------------------------------------------------------------------------------
+
+// Switching images drops the previous item's preview view (memory: each holds a decoded RGBA "before" image).
+function select(key) {
+  if (S.sel === key || !itemOf(key)) return;
+  const prev = selItem();
+  if (prev) prev.view = null;
+  S.sel = key;
+  if (S.crop) { S.crop = false; stage.exitCrop(); }
+  stage.empty(h('p', { class: 'ed-muted' }, t('ip.preparing')));
+  renderSide(); renderList(); renderMeta(); renderStageChrome(); renderStats(); renderCommand();
+  runPreview();
+}
+
+function remove(key) {
+  const i = S.items.findIndex((x) => x.key === key);
+  if (i < 0) return;
+  S.items.splice(i, 1);
+  runner.drop(key);
+  if (S.sel === key) {
+    S.sel = null;
+    S.crop = false;
+    const next = S.items[Math.min(i, S.items.length - 1)];
+    if (next) { select(next.key); return; }
+    stage.exitCrop();
+  }
+  renderAll();
+}
+
+async function clearAll() {
+  if (!S.items.length) return;
+  if (S.items.length > 1 && !(await confirmDialog(t('ip.clearTitle'), t('ip.clearText', { n: S.items.length }), t('ip.clear'), true))) return;
+  S.items = []; S.sel = null; S.crop = false;
+  runner.clear();
+  stage.exitCrop();
+  renderAll();
+}
+
+// Per-image settings start as a copy of the shared ones; returning to shared settings is undoable from the toast,
+// since it discards the image's own edits.
+function setScope(v) {
+  const it = selItem();
+  if (!it) return;
+  if (v === 'image' && !it.own) it.own = normalizeSettings(clone(S.global));
+  if (v === 'all' && it.own) {
+    const own = it.own;
+    it.own = null;
+    toast(t('ip.ownRemoved'), 'info', { label: t('dlg.undo'), fn: () => { if (itemOf(it.key)) { it.own = own; renderSide(); updateTile(it); renderCommand(); if (S.sel === it.key) schedulePreview(); } } });
+  }
+  renderSide(); updateTile(it); renderCommand(); schedulePreview();
+}
+
+function toggleCrop() {
+  if (!selItem()) return;
+  S.crop = !S.crop;
+  if (!S.crop) stage.exitCrop();
+  renderSide();
+  runPreview();
+}
+
+// The crop rectangle is image-specific and never persisted into the shared defaults.
+const saveGlobal = debounce(() => { const g = clone(S.global); g.crop.rect = null; lsSet(KEY, g); }, 400);
+
+// kind: 'geometry' | 'crop' | 'pixels' | 'output' (panel) or 'cropRect' (crop editor)
+// Settings change: results made with other settings lose their "done" mark; while the crop editor is open, only a
+// geometry change needs a new base image (crop changes are drawn by the editor itself).
+function changed(kind) {
+  if (editing() === S.global) saveGlobal();
+  for (const it of S.items) if (it.status === 'done' && !fresh(it)) it.status = '';
+  renderList();
+  renderCommand();
+  if (kind === 'cropRect') return;
+  if (S.crop) {
+    if (kind === 'crop') stage.reaspect();
+    if (kind !== 'geometry') return; // the crop editor only needs a new image when the geometry changed
+  }
+  schedulePreview();
+  renderMetaNote();
+}
+
+// --- rendering --------------------------------------------------------------------------------------------
+
+function scopeHeader() {
+  const it = selItem();
+  if (!it || (S.items.length < 2 && !it.own)) return null;
+  const own = !!it.own;
+  return h('div', { class: 'ip-scope' },
+    seg([{ v: 'all', l: 'ip.scopeAll' }, { v: 'image', l: 'ip.scopeImage' }], own ? 'image' : 'all', setScope, 'ip.scope'),
+    h('p', { class: 'ed-hint' }, own ? t('ip.scopeImageHint') : t('ip.scopeAllHint', { n: S.items.filter((i) => !i.own).length })));
+}
+
+// The panel is rebuilt only on scope/selection changes; its scroll position is preserved across the rebuild.
+function renderSide() {
+  const top = E.side.scrollTop;
+  E.side.replaceChildren(...buildPanel({
+    settings: editing(), changed, cropActive: () => S.crop, toggleCrop, header: scopeHeader(), disabled: !S.items.length, rebuild: renderSide,
+  }));
+  E.side.scrollTop = top;
+}
+
+function sizesLine(it) {
+  const parts = [fmtBytes(it.size)];
+  if (it.result && fresh(it)) parts.push('→', fmtBytes(it.result.size));
+  return parts.join(' ');
+}
+
+function tileFor(it) {
+  const sel = it.key === S.sel;
+  const status = it.status === 'error' ? h('span', { class: 'ip-st-ic ip-st-err', title: it.error, role: 'img', 'aria-label': t('ip.stError') }, iconEl('warn'))
+    : it.status === 'done' && fresh(it) ? h('span', { class: 'ip-st-ic ip-st-ok', role: 'img', 'aria-label': t('ip.stDone') }, iconEl('check'))
+      : it.status === 'queued' ? h('span', { class: 'ip-st-q' }, t('ip.stQueued')) : null;
+  const busy = it.status === 'busy' || it.status === 'queued';
+  return h('li', { class: 'ip-tile' + (sel ? ' ip-sel' : '') + (it.status === 'error' ? ' ip-err' : ''), dataset: { key: String(it.key) } },
+    h('button', { type: 'button', class: 'ip-tile-main', 'aria-pressed': String(sel), title: it.name, onclick: () => select(it.key) },
+      h('span', { class: 'ip-thumb' }, it.thumb || iconEl('image')),
+      h('span', { class: 'ip-tile-name' }, it.name),
+      h('span', { class: 'ip-tile-meta' }, sizesLine(it))),
+    h('span', { class: 'ip-tile-badges' }, it.own ? h('span', { class: 'ed-badge', title: t('ip.customTitle') }, t('ip.custom')) : null, status),
+    h('span', { class: 'ap-progress ip-tile-bar', hidden: !busy }, h('i', { style: { width: Math.round((it.progress || 0) * 100) + '%' } })),
+    h('button', { type: 'button', class: 'ed-iconbtn ed-sm ip-tile-x', title: t('ip.remove'), 'aria-label': t('ip.removeName', { name: it.name }), onclick: () => remove(it.key) }, iconEl('close')));
+}
+
+// Progress updates touch only the bar (cheap, frequent); full updates replace the tile and restore focus to the
+// equivalent control inside it.
+function updateTile(it, progressOnly = false) {
+  const li = E.listEl.querySelector(`[data-key="${it.key}"]`);
+  if (!li) return;
+  if (progressOnly) { const bar = li.querySelector('.ip-tile-bar'); bar.hidden = false; bar.firstChild.style.width = Math.round(it.progress * 100) + '%'; return; }
+  const focused = li.contains(document.activeElement) ? document.activeElement.className : null;
+  const n = tileFor(it);
+  li.replaceWith(n);
+  if (focused) { const f = n.querySelector('.' + focused.split(' ')[0]); if (f) f.focus({ preventScroll: true }); }
+  if (it.key === S.sel) renderStats();
+}
+
+function renderList() {
+  E.listTitle.textContent = t('ip.images', { n: S.items.length });
+  E.listEl.replaceChildren(...S.items.map(tileFor));
+  E.list.hidden = !S.items.length;
+  renderBatch();
+}
+
+function renderBatch() {
+  const b = S.batch;
+  E.batch.hidden = !b;
+  if (b) {
+    E.batchBar.style.width = (b.total ? Math.round((b.done / b.total) * 100) : 100) + '%';
+    E.batchText.textContent = t('ip.batchProgress', { done: b.done, total: b.total });
+  }
+  const pending = S.items.filter((it) => !fresh(it)).length;
+  E.zipBtn.disabled = !!b || !S.items.length;
+  E.processBtn.disabled = !!b || !pending;
+  E.dlBtn.disabled = !!b || !selItem();
+  if (E.editBtn) E.editBtn.disabled = !selItem();
+  E.zipLabel.textContent = t('ip.downloadZip', { n: S.items.length });
+}
+
+function renderStats() {
+  const it = selItem();
+  if (!it) { stage.setStats(null); return; }
+  const m = it.meta || {};
+  const w = m.width || (it.dims && it.dims.w), hh = m.height || (it.dims && it.dims.h);
+  const orig = h('span', { class: 'ip-stat' }, h('span', { class: 'ip-stat-k' }, t('ip.original')), h('b', {}, fmtBytes(it.size)),
+    h('span', { class: 'ed-muted' }, [w ? `${w} × ${hh}` : null, KIND_LABEL[m.kind]].filter(Boolean).join(' · ')));
+  let res;
+  if (fresh(it)) {
+    const r = it.result, d = r.size - it.size, pct = it.size ? Math.round((d / it.size) * 100) : 0;
+    res = h('span', { class: 'ip-stat' }, h('span', { class: 'ip-stat-k' }, t('ip.result')), h('b', {}, fmtBytes(r.size)),
+      h('span', { class: 'ed-muted' }, `${r.width} × ${r.height} · ${KIND_LABEL[r.format] || r.format}`),
+      h('span', { class: 'ip-delta ' + (d <= 0 ? 'ip-down' : 'ip-up') }, (d <= 0 ? '−' : '+') + Math.abs(pct) + ' %'));
+  } else res = h('span', { class: 'ip-stat ed-muted' }, t('ip.estimating'));
+  stage.setStats([orig, h('span', { class: 'ip-arrow', 'aria-hidden': 'true' }, iconEl('chevRight')), res]);
+}
+
+function renderMetaNote() {
+  const it = selItem();
+  if (it && !E.meta.hidden) E.metaBody.replaceChildren(metaBody(it, eff(it)));
+}
+
+// Upgrade from header metadata to full-file metadata once, lazily, for the selected image (some EXIF blocks sit
+// beyond the first MiB, e.g. after large ICC profiles or in long PNG chunk lists).
+function renderMeta() {
+  const it = selItem();
+  E.meta.hidden = !it;
+  if (!it) return;
+  E.metaBody.replaceChildren(metaBody(it, eff(it)));
+  if (it.meta && !it.fullMeta) {
+    it.fullMeta = true;
+    it.file.arrayBuffer().then((b) => { it.meta = readMeta(new Uint8Array(b)); if (S.sel === it.key) { renderMeta(); renderStats(); } }).catch(() => {});
+  }
+}
+
+function renderStageChrome() {
+  const it = selItem();
+  E.actions.hidden = !it;
+  if (!it) { stage.empty(E.bigDrop); return; }
+  if (E.bigDrop.isConnected) stage.empty(h('p', { class: 'ed-muted' }, t('ip.preparing')));
+  stage.setTitle(it.name, S.items.length > 1 ? `${S.items.indexOf(it) + 1} / ${S.items.length}` : '');
+}
+
+function renderAll() {
+  renderSide();
+  renderList();
+  renderStageChrome();
+  renderMeta();
+  renderStats();
+  renderCommand();
+  stage.relabel();
+}
+
+// --- the ImageMagick command of the pipeline -----------------------------------------------------------------
+
+let cmdModel = null;
+const renderCommand = debounce(() => {
+  if (!E.cmd) return;
+  E.cmd.el.hidden = !S.items.length;
+  if (!S.items.length) return;
+  const st = E.cmd.state;
+  cmdModel = commandModel({ items: S.items, sel: selItem(), settingsOf: eff, global: S.global, scope: st.scope, shell: st.shell, wrap: st.wrap, bat: st.bat });
+  E.cmd.render(cmdModel);
+}, 40);
+
+// A command step points at its settings section: opened, scrolled into view and flashed.
+// Restarting a CSS animation: remove the class, force a reflow (reading offsetWidth), add it again.
+function focusSection(section) {
+  const d = section && E.side.querySelector(`[data-sec="${section}"]`);
+  if (!d) return;
+  if (d.tagName === 'DETAILS' && !d.open) d.open = true;
+  d.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  d.classList.remove('ip-flash');
+  void d.offsetWidth;
+  d.classList.add('ip-flash');
+  setTimeout(() => d.classList.remove('ip-flash'), 1300);
+}
+
+// Hovering a settings section highlights its part of the command.
+function sectionHover(e) {
+  if (!cmdModel || !cmdModel.steps) return;
+  const sec = e.type === 'mouseleave' ? null : e.target.closest && e.target.closest('[data-sec]');
+  const id = sec ? sec.dataset.sec : null;
+  if (id === sectionHover.last) return;
+  sectionHover.last = id;
+  E.cmd.highlight(id ? cmdModel.steps.map((s, i) => (s.section === id ? i : -1)).filter((i) => i >= 0) : []);
+}
+
+function buildZones() {
+  E.bigDrop = h('div', { class: 'ip-start' },
+    dropZone({ onFiles: addFiles, accept: ACCEPT, multiple: true, label: 'ip.drop', paste: false }),
+    h('p', { class: 'ed-hint ip-formats' }, t('ip.formats')));
+  E.smallDrop = dropZone({ onFiles: addFiles, accept: ACCEPT, multiple: true, label: 'ip.dropMore', paste: false });
+  E.smallDrop.classList.add('ip-drop-sm');
+}
+
+// Page-wide drop and paste handlers: files dropped anywhere are accepted (preventDefault on dragover is required to
+// allow a drop); pastes inside text fields are left alone so normal text paste keeps working.
+function buildLayout() {
+  const main = document.querySelector('main.ap-main') || document.body.appendChild(h('main', { class: 'ap-main' }));
+  main.classList.add('ap-wide', 'ip-main');
+  E.side = h('aside', { class: 'ap-side ip-side', 'aria-label': t('ip.settings') });
+  stage = createStage({
+    view: S.view, split: S.split,
+    onView: (v) => { S.view = v; lsSet('imgproc-view', v); },
+    onSplit: (v) => { S.split = v; },
+    onCrop: (rect) => { editing().crop.rect = rect; changed('cropRect'); },
+    aspectOf: (w, hh) => aspectRatio(editing().crop.aspect, w, hh),
+  });
+  E.actions = h('div', { class: 'ip-actions' });
+  stage.el.append(E.actions);
+  E.listTitle = h('h2', { class: 'ap-card-h' });
+  E.listEl = h('ul', { class: 'ip-list', 'aria-label': t('ip.imagesList') });
+  E.listEl.addEventListener('keydown', (e) => {
+    const k = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!k || !e.target.classList.contains('ip-tile-main')) return;
+    const i = S.items.findIndex((x) => x.key === S.sel) + k;
+    const next = S.items[Math.max(0, Math.min(S.items.length - 1, i))];
+    if (!next) return;
+    e.preventDefault();
+    select(next.key);
+    const b = E.listEl.querySelector(`[data-key="${next.key}"] .ip-tile-main`);
+    if (b) b.focus();
+  });
+  E.listTop = h('div', { class: 'ip-card-top' });
+  E.dropSlot = h('div', {});
+  E.list = h('section', { class: 'ap-card ip-listcard' }, E.listTop, E.dropSlot, E.listEl);
+  E.metaBody = h('div', {});
+  E.metaTitle = h('h2', { class: 'ap-card-h' });
+  E.meta = h('section', { class: 'ap-card ip-metacard' }, E.metaTitle, E.metaBody);
+  E.cmd = createCommandView({
+    storageKey: 'imgproc-cmd', scopes: [{ v: 'image', l: 'ip.cmdScopeImage' }, { v: 'batch', l: 'ip.cmdScopeBatch' }],
+    onChange: () => renderCommand(), onStep: (i, step) => focusSection(step && step.section),
+  });
+  E.cmd.el.classList.add('ip-cmdcard');
+  E.cmd.el.hidden = true;
+  E.side.addEventListener('mouseover', sectionHover);
+  E.side.addEventListener('mouseleave', sectionHover);
+  E.stageCol = h('div', { class: 'ap-stage ip-stage' }, stage.el, E.cmd.el, E.list, E.meta);
+  E.work = h('div', { class: 'ap-work ip-work' }, E.side, E.stageCol);
+  E.editorHost = h('div', { class: 'ip-editor', hidden: true });
+  main.replaceChildren(E.work, E.editorHost);
+  // Files dropped anywhere on the page are added too (in the editor: opened there).
+  document.addEventListener('dragover', (e) => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault(); });
+  document.addEventListener('drop', (e) => {
+    if (e.defaultPrevented || !e.dataTransfer || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    if (S.mode === 'editor') { editor.openFile(e.dataTransfer.files[0]); return; }
+    addFiles([...e.dataTransfer.files]);
+  });
+  // Pasted images (Ctrl+V outside text fields) are added (the editor takes its own pastes).
+  document.addEventListener('paste', (e) => {
+    if (S.mode === 'editor' || (e.target.closest && e.target.closest('input, textarea, [contenteditable]'))) return;
+    const files = [...((e.clipboardData && e.clipboardData.files) || [])];
+    if (files.length) { e.preventDefault(); addFiles(files); }
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && S.mode === 'transform' && S.crop && !document.querySelector('.ed-dialog')) toggleCrop(); });
+}
+
+// --- modes: Transform (the pipeline, batch, commands) and Editor (photo/editor.js) ------------------------------
+
+const PAGES = [{ href: '#transform', label: 'ip.modeTransform', current: true }, { href: '#editor', label: 'ip.modeEditor', current: false }];
+let editor = null;
+
+// Two modes on one page (hash #transform / #editor): the editor is created lazily on first use, and keeps its state
+// while hidden so switching back and forth loses nothing.
+function setMode(mode, remember = true) {
+  if (mode !== 'editor') mode = 'transform';
+  S.mode = mode;
+  PAGES[0].current = mode === 'transform'; PAGES[1].current = mode === 'editor';
+  for (const a of document.querySelectorAll('.ap-page')) {
+    const on = a.getAttribute('href') === '#' + mode;
+    a.classList.toggle('ap-on', on);
+    if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  }
+  E.work.hidden = mode !== 'transform';
+  E.editorHost.hidden = mode !== 'editor';
+  document.body.classList.toggle('ip-mode-editor', mode === 'editor');
+  if (mode === 'editor') { if (S.crop) toggleCrop(); ensureEditor(); fitEditorHeight(); }
+  if (editor) editor.setActive(mode === 'editor');
+  if (remember) lsSet('imgproc-mode', mode);
+}
+
+// The editor fills the window below the header.
+function fitEditorHeight() {
+  const top = document.getElementById('ap-top');
+  document.documentElement.style.setProperty('--ip-top', (top ? top.offsetHeight : 56) + 'px');
+}
+
+// Pixels of a Transform image for the editor: the pipeline result (raw RGBA from the worker) or the original.
+// Handing a Transform result to the editor: raw pixels from the worker (no lossy re-encode in between) plus the
+// pixel steps, so the editor's command line starts with the same ImageMagick operations.
+async function transformImage(it, result) {
+  if (!result) {
+    const bmp = await createImageBitmap(it.file);
+    return { image: bmp, name: it.name, source: { name: it.name, steps: [AUTO_ORIENT] }, alpha: (it.meta && it.meta.kind) !== 'jpeg' };
+  }
+  const s = eff(it);
+  const res = await runner.run({ key: it.key, file: it.file, name: it.name, type: it.type, settings: s, preview: 0, raw: true }, { lane: 'export' });
+  if (res.error || !res.img) throw res.error || new Error('no result');
+  const c = document.createElement('canvas');
+  c.width = res.width; c.height = res.height;
+  c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(res.img.data.buffer, res.img.data.byteOffset, res.width * res.height * 4), res.width, res.height), 0, 0);
+  // the Transform steps (pixels only) start the editor's command
+  const m = it.meta || {};
+  const { steps } = transformSteps(s, { name: it.name, kind: m.kind || 'unknown', width: m.width || 0, height: m.height || 0, orientation: m.orientation || 1 });
+  const pix = steps.filter((x) => x.section !== 'output').map((x) => ({ id: x.id, args: x.args, fidelity: x.fidelity, note: x.note, label: stepLabel(x) }));
+  return { image: c, name: it.name, source: { name: it.name, steps: pix }, alpha: (m.kind || 'png') !== 'jpeg' };
+}
+const stepLabel = (x) => { const [k, v] = x.label; const vars = { ...v }; if (typeof vars.parts === 'string') vars.parts = vars.parts.replace(/\{(\w+)\}/g, (q, p) => t('ip.step.' + p + 'Name')); return t(k, vars); };
+
+async function openInEditor(it, result) {
+  if (!it) return;
+  setMode('editor');
+  location.hash = '#editor';
+  try {
+    const r = await transformImage(it, result);
+    editor.openImage(r.image, r);
+    if (r.image.close) r.image.close();
+  } catch (e) { toast(t('ip.decodeError', { msg: errText(e) }), 'error'); }
+}
+
+function ensureEditor() {
+  if (editor) return;
+  editor = createEditor({
+    storageKey: 'imgproc-photo',
+    run: (job) => runner.run({ photo: job }, { lane: 'export' }).then((r) => { if (r.cancelled || r.superseded) throw new Error('cancelled'); return r; }),
+    sources: () => {
+      const it = selItem();
+      const list = [];
+      if (it) list.push({ label: t('ip.editResult', { name: it.name }), load: () => transformImage(it, true) }, { label: t('ip.editOriginal', { name: it.name }), load: () => transformImage(it, false) });
+      for (const x of S.items) if (x !== it && list.length < 6) list.push({ label: t('ip.editOriginal', { name: x.name }), load: () => transformImage(x, false) });
+      return list.map((s) => ({ ...s, load: () => s.load().catch((e) => { toast(t('ip.decodeError', { msg: errText(e) }), 'error'); return null; }) }));
+    },
+    onSend: (blob, name) => {
+      const file = new File([blob], name, { type: 'image/png' });
+      setMode('transform');
+      location.hash = '#transform';
+      addFiles([file]).then(() => { const it = S.items[S.items.length - 1]; if (it) select(it.key); });
+      toast(t('ip.sentToTransform', { name }), 'ok');
+    },
+  });
+  E.editorHost.append(editor.el);
+}
+
+// Localized chrome built outside the render functions (rebuilt when the UI language changes).
+function relabel() {
+  E.dlBtn = button('ip.download', 'download', downloadSelected);
+  E.zipLabel = h('span', {});
+  E.zipBtn = h('button', { type: 'button', class: 'ed-btn ed-primary', onclick: downloadZip }, iconEl('export'), E.zipLabel);
+  E.processBtn = button('ip.processAll', 'refresh', () => processAll());
+  E.batchBar = h('i', {});
+  E.batchText = h('span', { class: 'ip-batch-t' });
+  E.batch = h('div', { class: 'ip-batch', hidden: true }, h('div', { class: 'ap-progress' }, E.batchBar), E.batchText,
+    button('ip.stop', 'close', () => { if (S.batch) { S.batch.cancel = true; runner.cancel('export'); } }));
+  E.editBtn = button('ip.toEditor', 'brush', () => openInEditor(selItem(), true));
+  E.editBtn.title = t('ip.toEditorHint');
+  E.actions.replaceChildren(E.dlBtn, E.processBtn, E.editBtn, h('span', { class: 'ed-spacer' }), E.zipBtn, E.batch);
+  E.listTop.replaceChildren(E.listTitle, h('span', { class: 'ed-spacer' }),
+    button('ip.add', 'plus', async () => addFiles(await pickFiles({ accept: ACCEPT, multiple: true }))),
+    button('ip.clear', 'trash', clearAll, 'danger'));
+  buildZones();
+  E.dropSlot.replaceChildren(E.smallDrop);
+  E.metaTitle.textContent = t('ip.metadata');
+  E.side.setAttribute('aria-label', t('ip.settings'));
+  E.listEl.setAttribute('aria-label', t('ip.imagesList'));
+}
+
+// The engine actually used (worker / inline) is exposed on <html data-engine> - useful when a CSP or old browser
+// forces the slower in-page path.
+function boot() {
+  addIcons({
+    rotL: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5',
+    rotR: 'M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5',
+    flipV: 'M3 12h18M7 8l5-5 5 5zM7 16l5 5 5-5z',
+  });
+  S.global = normalizeSettings(lsGet(KEY, {}));
+  S.global.crop.rect = null;
+  S.view = ['split', 'before', 'after'].includes(lsGet('imgproc-view', 'split')) ? lsGet('imgproc-view', 'split') : 'split';
+  const initial = /^#editor/.test(location.hash) ? 'editor' : /^#transform/.test(location.hash) ? 'transform' : lsGet('imgproc-mode', 'transform');
+  PAGES[0].current = initial !== 'editor'; PAGES[1].current = initial === 'editor';
+  startApp({ key: 'imgproc', name: 'app.name', logo: LOGO, offline: true, pages: PAGES, onLang: () => { relabel(); renderAll(); if (editor) editor.relabel(); setMode(S.mode, false); } });
+  buildLayout();
+  relabel();
+  // The engine in use (worker / inline) is visible on <html data-engine> for diagnostics.
+  runner = createRunner({ onMode: (mode) => { document.documentElement.dataset.engine = mode; } });
+  renderAll();
+  setMode(initial, false);
+  window.addEventListener('hashchange', () => { if (/^#(editor|transform)$/.test(location.hash)) setMode(location.hash.slice(1)); });
+  window.addEventListener('resize', () => { if (S.mode === 'editor') fitEditorHeight(); });
+  // the colour scheme switch changes the editor's canvas backdrop
+  new MutationObserver(() => { if (editor) editor.themeChanged(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+}
+
+// Page: the UI. Worker (this bundle re-run from a Blob): the processing side. Anywhere else (Node): nothing.
+// One bundle for both roles is what lets the single-file build start a worker without a second file.
+if (typeof document !== 'undefined') boot();
+else if (typeof WorkerGlobalScope !== 'undefined') workerMain();

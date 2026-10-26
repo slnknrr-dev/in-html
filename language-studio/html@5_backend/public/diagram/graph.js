@@ -1,0 +1,1 @@
+import{layoutGraph}from"./layout.js";import{renderSVG}from"./svg.js";const graphSVG=(graph,opts={})=>renderSVG(layoutGraph(graph,opts),{...opts,classes:{...(graph.classes||{}),...(opts.classes||{})},title:opts.title||graph.title});export{graphSVG};

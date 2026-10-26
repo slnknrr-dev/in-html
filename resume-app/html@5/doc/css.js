@@ -1,0 +1,11 @@
+import{isB64}from"../codec/base64.js";import{langDir}from"../i18n/lang.js";import{own,isObj,str,MIME_RE}from"../util/value.js";import{P}from"./product.js";function cssStr(s){return'"'+String(s).replace(/[\\"]/g,'\\$&').replace(/\r?\n/g,'\\a ').replace(/</g,'\\3c ')+'"';}
+function splitSelectors(s){const out=[];let depth=0;let q='';let start=0;for(let i=0;i<s.length;i++){const ch=s[i];if(q){if(ch===q)q='';continue;}
+if(ch==='"'||ch==="'")q=ch;else if(ch==='('||ch==='[')depth++;else if(ch===')'||ch===']')depth--;else if(ch===','&&depth===0){out.push(s.slice(start,i));start=i+1;}}
+out.push(s.slice(start));return out;}
+function shakeRules(css,owners,has){const used=(sel)=>{for(const[re,owner]of owners)if(re.test(sel)&&!has(owner))return false;return true;};const out=[];for(const line of css.split('\n')){const t=line.trim();const b=t.indexOf('{');if(!t||t[0]==='@'||b<0){if(used(line))out.push(line);continue;}
+const keep=splitSelectors(t.slice(0,b)).filter(used);if(keep.length)out.push(keep.join(',')+t.slice(b));}
+return out.join('\n');}
+function fontStack(doc,key,opts,faces,stacks,fallback='sans'){if(own(stacks,key))return stacks[key];const fb=stacks[fallback];const m=/^asset:([a-z0-9]{3,32})$/i.exec(String(key||''));const a=m?own(doc.attachments,m[1]):null;if(!isObj(a))return fb;const id=m[1];const fam=P.prefix+'f-'+id;let url='';if(opts.mode==='edit'&&typeof opts.attURL==='function')url=str(opts.attURL(id));if(!url&&isB64(a.data)&&MIME_RE.test(str(a.mime)))url=`data:${a.mime};base64,${a.data}`;if(!url&&typeof opts.attURL==='function')url=str(opts.attURL(id));if(!/^(data:[\w.+-]+\/[\w.+-]+;base64,[A-Za-z0-9+/]*={0,2}|blob:[\w.:/%-]+)$/.test(url))return fb;if(!faces.has(fam))faces.set(fam,`@font-face{font-family:"${fam}";src:url("${url}");font-display:swap}`);return`"${fam}", ${fb}`;}
+function langCSS(langs){const ok=langs.filter((l)=>/^[A-Za-z0-9-]+$/.test(l));const rtl=ok.filter((l)=>langDir(l)==='rtl');return`.${P.prefix}-rich>[data-l]>:last-child{margin-bottom:0}`+ok.map((l)=>`html[lang="${l}"] [data-l]:not([data-l~="${l}"]){display:none!important}`).join('\n')
++(rtl.length?'\n'+rtl.map((l)=>`html[lang="${l}"]`).join(',')+'{direction:rtl}':'');}
+export{fontStack,cssStr,shakeRules,langCSS};

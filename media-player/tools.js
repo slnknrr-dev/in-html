@@ -1,0 +1,495 @@
+// media-player/tools.js - the tools: index sources and their rules (folders of the backend / Electron, File System
+// Access folders, other servers' mounts, link lists, yt-dlp playlists; include / exclude globs, path templates,
+// precedence, hints; a preview of what the rules make of real paths; scans), the converter (jobs of the backend with
+// progress, logs, cancel; every job's command for bash and cmd.exe; in-browser conversions to WAV / MP3 / Opus where
+// no server runs), export / import (descriptive tree, database JSON / ZIP), and the settings.
+
+import { h } from '../ui/dom.js';
+import { t, UI_STATE, ED_I18N } from '../ui/i18n.js';
+import { toast, promptDialog, confirmDialog, openDialog } from '../ui/overlays.js';
+import { download, copyText } from '../ui/app.js';
+import { pickFiles } from '../ui/files.js';
+import { langLabel } from '../ui/lang.js';
+import { facts } from '../catalog/facts.js';
+import { newSource, scanSource, previewRules, indexLinks, TEMPLATE_PRESETS, HINTS, FIELD_ORDER, DEFAULT_EXCLUDE } from '../catalog/indexer.js';
+import { exportTree, exportDB, exportZip, readExchange, importData } from '../catalog/exchange.js';
+import { DEMO_TAG } from '../catalog/demo.js';
+import { EQ_PRESETS, EQ_BANDS, SPEEDS } from '../player/gain.js';
+import { DEFAULT_KEYS, formatKey, conflicts } from '../player/keys.js';
+import { renderJob } from '../mediajobs/shell.js';
+import { parseSource } from '../mediajobs/ytdlp.js';
+import { JOB_KINDS, FORMATS_AUDIO, FORMATS_VIDEO, buildJob } from './jobs.js';
+import { MODE, bridge, own, settings, saveSettings, servers, saveServers, api, caps, DEFAULT_SETTINGS } from './env.js';
+import { fileClient, pickFolderFSA, scanIO, fsaPermission, mediaURL, resetClients } from './access.js';
+import { section, empty, btn, iconBtn, tabs, inputRow, textField, selectField, checkField, rangeField, fmtSize, fmtDate, iconEl, workRow } from './ui.js';
+import { header } from './views.js';
+
+// --- sources -----------------------------------------------------------------------------------------------------------
+
+function sources(app, main) {
+  const { db } = app;
+  const c = caps();
+  main.append(header(t('mp.nav.sources'), t('mp.src.sub')));
+  const adders = [];
+  if (c.server) adders.push(btn(bridge ? t('mp.src.addFolderNative') : t('mp.src.addMount'), 'folder', () => addServerFolder(app), 'primary'));
+  if (c.fsa) adders.push(btn(t('mp.src.addFSA'), 'folder', () => addFSA(app), c.server ? '' : 'primary'));
+  if (servers().length) adders.push(btn(t('mp.src.addRemote'), 'cloud', () => addRemote(app)));
+  adders.push(btn(t('mp.src.addLinks'), 'link', () => addLinks(app)));
+  if (c.ytdlp) adders.push(btn(t('mp.src.addYtdlp'), 'download2', () => addYtdlp(app)));
+  main.append(h('div', { class: 'mp-actions' }, adders));
+  if (!c.server && !c.fsa) main.append(h('p', { class: 'mp-note' }, t('mp.src.noFolders')));
+  const list = db.all('source');
+  if (!list.length) { main.append(empty(t('mp.src.empty'))); return; }
+  for (const s of list) main.append(sourceCard(app, s));
+}
+
+function sourceWhere(app, s) {
+  const l = s.loc || {};
+  if (s.kind === 'folder') { const m = (app._mounts || []).find((x) => x.id === l.mount); return (m ? m.path || m.name : l.mount) + (l.path ? '/' + l.path : ''); }
+  if (s.kind === 'fsa') return t('mp.src.fsaFolder', { name: l.name || '' });
+  if (s.kind === 'remote') { const sv = servers().find((x) => x.id === l.server); return (sv ? sv.name || sv.base : l.server) + ' · ' + (l.mount || '') + (l.path ? '/' + l.path : ''); }
+  if (s.kind === 'ytdlp') return l.url || '';
+  return t('mp.src.nLinks', { n: (s.links || []).length });
+}
+
+const scanning = new Map();
+
+function sourceCard(app, s) {
+  const { db } = app;
+  const st = s.stats || {};
+  const prog = h('div', { class: 'mp-progress' });
+  const card = h('section', { class: 'mp-card-box mp-source' },
+    h('div', { class: 'mp-head' }, h('div', {}, h('h3', {}, iconEl({ folder: 'folder', fsa: 'folder', remote: 'cloud', links: 'link', ytdlp: 'download2' }[s.kind]), ' ', s.name || t('mp.src.kind.' + s.kind)), h('p', { class: 'mp-muted' }, sourceWhere(app, s))),
+      h('div', { class: 'mp-actions' }, btn(t('mp.src.scan'), 'sync', () => runScan(app, s, prog), 'primary'), btn(t('mp.src.rules'), 'settings', () => rulesDialog(app, s)), iconBtn('trash', t('mp.delete'), async () => { if (await confirmDialog(t('mp.delete'), t('mp.src.deleteQ'), t('mp.delete'), true)) db.remove(s.id); }))),
+    h('p', { class: 'mp-muted' }, [t('mp.src.hint.' + (s.hint || 'auto')), s.lastScan ? t('mp.src.last', { d: fmtDate(s.lastScan) }) : t('mp.src.never'), st.media != null ? t('mp.src.stats', { media: st.media, missing: st.missing || 0, errors: st.errors || 0 }) : ''].filter(Boolean).join(' · ')), prog);
+  if (scanning.has(s.id)) prog.textContent = scanning.get(s.id);
+  return card;
+}
+
+// Scan dispatch by source kind: server folders scan on the backend (polled every 600 ms), link lists index
+// synchronously, yt-dlp playlists queue an info job, FSA / remote sources scan in the page. The progress text is
+// kept in `scanning` for 30 s so navigating away and back still shows the result.
+async function runScan(app, s, prog) {
+  const { db } = app;
+  const show = (text) => { prog.textContent = text; scanning.set(s.id, text); };
+  try {
+    if (s.kind === 'folder') {
+      await api(own, 'scan', { method: 'POST', body: { source: s.id } });
+      show(t('mp.src.scanning'));
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 600));
+        const all = await api(own, 'scan');
+        const x = all[s.id];
+        if (!x) break;
+        if (x.status === 'running') { show(x.progress ? t('mp.src.progress.' + x.progress.phase, { done: x.progress.done, total: x.progress.total }) : t('mp.src.scanning')); continue; }
+        if (x.status === 'failed') throw new Error(x.error);
+        show(t('mp.src.done', x.report));
+        toast(t('mp.src.done', x.report), 'ok');
+        break;
+      }
+    } else if (s.kind === 'links') {
+      const r = indexLinks(db, s, s.links || []);
+      show(t('mp.src.linksDone', r));
+    } else if (s.kind === 'ytdlp') {
+      const r = await api(own, 'jobs', { method: 'POST', body: { kind: 'ytdlpInfo', params: { ref: s.loc.url, sourceId: s.id, flat: true } } });
+      show(t('mp.src.ytdlpQueued', { id: r.id }));
+      app.nav('convert');
+    } else {
+      if (s.kind === 'fsa' && !(await fsaPermission(s.loc.handle, true))) throw new Error(t('mp.src.permission'));
+      const rep = await scanSource(db, db.get(s.id), scanIO(s), { onProgress: (p) => show(t('mp.src.progress.' + p.phase, { done: p.done, total: p.total })) });
+      show(t('mp.src.done', rep));
+      toast(t('mp.src.done', rep), 'ok');
+    }
+  } catch (e) { show(t('mp.err.generic', { msg: e.message })); toast(t('mp.err.generic', { msg: e.message }), 'error'); }
+  setTimeout(() => scanning.delete(s.id), 30000);
+}
+
+async function chooseHint(defaultHint = 'auto') {
+  const sel = selectField(HINTS.map((x) => [x, t('mp.src.hint.' + x)]), defaultHint, () => {});
+  const name = textField('', () => {}, { placeholder: t('mp.name') });
+  const v = await openDialog({ title: t('mp.src.what'), body: h('div', { class: 'mp-form' }, inputRow(t('mp.src.hint'), sel, t('mp.src.hintHelp')), inputRow(t('mp.name'), name)), buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('dlg.ok'), value: 'ok', primary: true }] });
+  return v === 'ok' ? { hint: sel.value, name: name.value.trim() } : null;
+}
+
+async function addServerFolder(app) {
+  let mount = null, path = '';
+  if (bridge) {
+    const [dir] = await bridge.openFolder({ title: t('mp.src.addFolderNative') });
+    if (!dir) return;
+    const [g] = await api(own, 'fs/grant', { method: 'POST', body: { paths: [dir] } });
+    if (!g || !g.mount) { toast(t('mp.err.generic', { msg: g && g.error || '?' }), 'error'); return; }
+    mount = g.mount;
+  } else {
+    const mounts = await fileClient('own').mounts();
+    app._mounts = mounts;
+    const sel = selectField(mounts.map((m) => [m.id, (m.name || m.id) + (m.path ? ' — ' + m.path : '')]), mounts[0] && mounts[0].id, () => {});
+    const sub = textField('', () => {}, { placeholder: 'Music' });
+    const add = textField('', () => {}, { placeholder: '/srv/media' });
+    const v = await openDialog({ title: t('mp.src.addMount'), body: h('div', { class: 'mp-form' }, mounts.length ? inputRow(t('mp.src.mount'), sel) : h('p', {}, t('mp.src.noMounts')), inputRow(t('mp.src.subfolder'), sub), inputRow(t('mp.src.newMount'), add, t('mp.src.newMountHint'))), buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('dlg.ok'), value: 'ok', primary: true }] });
+    if (v !== 'ok') return;
+    if (add.value.trim()) { try { mount = (await fileClient('own').addMount(add.value.trim(), {})).id; } catch (e) { toast(e.message, 'error'); return; } }
+    else mount = sel.value;
+    path = sub.value.trim().replace(/^\/+|\/+$/g, '');
+  }
+  const h2 = await chooseHint();
+  if (!h2) return;
+  const s = app.db.put(newSource('folder', { name: h2.name, hint: h2.hint, loc: { mount, path }, templates: (TEMPLATE_PRESETS[h2.hint] || []).slice(0, 2) }));
+  app.refresh();
+  setTimeout(() => runScan(app, s, document.querySelector('.mp-source:last-child .mp-progress') || h('div')), 50);
+}
+
+async function addFSA(app) {
+  const { id, name } = await pickFolderFSA().catch(() => ({}));
+  if (!id) return;
+  const h2 = await chooseHint();
+  if (!h2) return;
+  const s = app.db.put(newSource('fsa', { name: h2.name || name, hint: h2.hint, loc: { handle: id, name } }));
+  app.refresh();
+  setTimeout(() => runScan(app, s, h('div')), 50);
+}
+
+async function addRemote(app) {
+  const list = servers();
+  const sel = selectField(list.map((s) => [s.id, s.name || s.base]), list[0].id, () => {});
+  const v = await openDialog({ title: t('mp.src.addRemote'), body: h('div', { class: 'mp-form' }, inputRow(t('mp.set.server'), sel)), buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('dlg.ok'), value: 'ok', primary: true }] });
+  if (v !== 'ok') return;
+  let mounts;
+  try { mounts = await fileClient(sel.value).mounts(); } catch (e) { toast(t('mp.err.generic', { msg: e.message }), 'error'); return; }
+  const ms = selectField(mounts.map((m) => [m.id, m.name || m.id]), mounts[0] && mounts[0].id, () => {});
+  const v2 = await openDialog({ title: t('mp.src.mount'), body: h('div', { class: 'mp-form' }, inputRow(t('mp.src.mount'), ms)), buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('dlg.ok'), value: 'ok', primary: true }] });
+  if (v2 !== 'ok') return;
+  const h2 = await chooseHint();
+  if (!h2) return;
+  app.db.put(newSource('remote', { name: h2.name, hint: h2.hint, loc: { server: sel.value, mount: ms.value, path: '' } }));
+}
+
+async function addLinks(app) {
+  const text = textField('', () => {}, { multiline: true, rows: 8, placeholder: 'https://www.youtube.com/watch?v=…  Title\nhttps://example.org/song.mp3' });
+  const sel = selectField(HINTS.map((x) => [x, t('mp.src.hint.' + x)]), 'music', () => {});
+  const v = await openDialog({ title: t('mp.src.addLinks'), body: h('div', { class: 'mp-form' }, h('p', { class: 'mp-muted' }, t('mp.src.linksHelp')), text, inputRow(t('mp.src.hint'), sel)), buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('dlg.ok'), value: 'ok', primary: true }] });
+  if (v !== 'ok' || !text.value.trim()) return;
+  const links = text.value.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => { const m = /^(\S+)\s+(.+)$/.exec(l); return m ? { url: m[1], title: m[2] } : { url: l }; });
+  const s = app.db.put(newSource('links', { name: t('mp.src.kind.links'), hint: sel.value, links }));
+  const r = indexLinks(app.db, s, links);
+  toast(t('mp.src.linksDone', r), 'ok');
+}
+
+async function addYtdlp(app) {
+  const url = await promptDialog(t('mp.src.addYtdlp'), t('mp.src.ytdlpUrl'), '');
+  if (!url) return;
+  if (!parseSource(url)) { toast(t('mp.src.badUrl'), 'warn'); return; }
+  const h2 = await chooseHint('music');
+  if (!h2) return;
+  const s = app.db.put(newSource('ytdlp', { name: h2.name || url, hint: h2.hint, loc: { url } }));
+  setTimeout(() => runScan(app, s, h('div')), 50);
+}
+
+// Index rules with a live preview against sample paths (or the source's existing files): rules such as globs and
+// path templates are easy to get wrong, and a dry run is cheaper than a rescan of a large library.
+async function rulesDialog(app, s) {
+  const { db } = app;
+  const lines = (a) => (a || []).join('\n');
+  const parse = (v) => v.split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+  const hint = selectField(HINTS.map((x) => [x, t('mp.src.hint.' + x)]), s.hint || 'auto', () => {});
+  const include = textField(lines(s.include), () => {}, { multiline: true, rows: 3, placeholder: '**/*.flac' });
+  const exclude = textField(lines(s.exclude || DEFAULT_EXCLUDE), () => {}, { multiline: true, rows: 4 });
+  const templates = textField(lines((s.templates || []).map((x) => (typeof x === 'string' ? x : x.tpl))), () => {}, { multiline: true, rows: 4, placeholder: '{artist}/{year} - {album}/{track:02} {title}.{ext}' });
+  const presets = selectField([['', t('mp.src.presets')], ...Object.entries(TEMPLATE_PRESETS).flatMap(([k, list]) => list.map((x) => [x, t('mp.src.hint.' + k) + ': ' + x]))], '', (v) => { if (v) templates.value = (templates.value ? templates.value + '\n' : '') + v; });
+  const order = textField((s.order || FIELD_ORDER).join(', '), () => {}, {});
+  const useTags = checkField(t('mp.src.useTags'), s.useTags !== false, () => {});
+  const useSide = checkField(t('mp.src.useSidecars'), s.useSidecars !== false, () => {});
+  const hash = selectField([['none', t('mp.src.hash.none')], ['quick', t('mp.src.hash.quick')]], s.hashMode || 'none', () => {});
+  const missing = selectField([['keep', t('mp.src.missing.keep')], ['remove', t('mp.src.missing.remove')]], s.removeMissing ? 'remove' : 'keep', () => {});
+  const sample = textField('', () => {}, { multiline: true, rows: 4, placeholder: 'Music/Artist/1999 - Album/01 Title.flac\nAnime/Title/[Group] Title - 05 [1080p].mkv' });
+  const out = h('div', { class: 'mp-preview' });
+  const current = () => ({ ...s, hint: hint.value, include: parse(include.value), exclude: parse(exclude.value), templates: parse(templates.value), order: order.value.split(/[\s,]+/).filter((x) => FIELD_ORDER.includes(x)), useTags: useTags.querySelector('input').checked, useSidecars: useSide.querySelector('input').checked });
+  const preview = () => {
+    out.textContent = '';
+    const paths = parse(sample.value).length ? parse(sample.value) : db.all('media').filter((m) => m.sourceId === s.id).slice(0, 12).map((m) => m.path).filter(Boolean);
+    for (const r of previewRules(current(), paths)) {
+      out.append(h('div', { class: 'mp-prev-row' }, h('code', {}, r.path), h('div', { class: 'mp-prev-f' }, h('b', {}, t('mp.kind.' + r.kind) + ' · ' + t('mp.domain.' + r.domain)), ...Object.entries(r.fields).filter(([k]) => !['ext', 'nameKind'].includes(k)).map(([k, v]) => h('span', { title: t('mp.src.from', { p: r.provenance[k] || '' }), class: 'mp-prov-' + (r.provenance[k] || 'x') }, `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)))));
+    }
+  };
+  const body = h('div', { class: 'mp-form mp-rules' },
+    inputRow(t('mp.src.hint'), hint), inputRow(t('mp.src.include'), include, t('mp.src.includeHint')), inputRow(t('mp.src.exclude'), exclude),
+    inputRow(t('mp.src.templates'), templates, t('mp.src.templatesHint')), presets, inputRow(t('mp.src.order'), order, t('mp.src.orderHint')),
+    h('div', { class: 'mp-formrow' }, useTags, useSide), h('div', { class: 'mp-formrow' }, inputRow(t('mp.src.hash'), hash), inputRow(t('mp.src.missing'), missing)),
+    section(t('mp.src.preview'), sample, btn(t('mp.src.runPreview'), 'eye', preview), out));
+  setTimeout(preview, 0);
+  const v = await openDialog({ title: t('mp.src.rules'), body, wide: true, buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('dlg.ok'), value: 'ok', primary: true }] });
+  if (v !== 'ok') return;
+  const c = current();
+  db.patch(s.id, { hint: c.hint, include: c.include, exclude: c.exclude, templates: c.templates, order: c.order.length ? c.order : FIELD_ORDER, useTags: c.useTags, useSidecars: c.useSidecars, hashMode: hash.value, removeMissing: missing.value === 'remove' });
+}
+
+// --- converter -------------------------------------------------------------------------------------------------------
+
+let jobsTimer = null;
+
+function convert(app, main, params, query) {
+  const { db } = app;
+  const c = caps();
+  main.append(header(t('mp.nav.convert'), c.jobs ? t('mp.cv.sub.server') : t('mp.cv.sub.local')));
+  if (c.server) main.append(toolsBox(app));
+  const mediaId = query.media || (app.engine.current() && app.engine.current().media && app.engine.current().media.id) || '';
+  const target = db.get(mediaId);
+  const kind = selectField(Object.keys(JOB_KINDS).map((k) => [k, t('mp.cv.kind.' + k)]), query.kind || 'convertAudio', () => form());
+  const picker = h('input', { class: 'ed-input', list: 'mp-media-list', value: target ? target.name || target.id : '', placeholder: t('mp.cv.pickMedia') });
+  const dl = h('datalist', { id: 'mp-media-list' }, db.all('media').filter((m) => m.presence !== 'nominal').slice(0, 2000).map((m) => h('option', { value: m.name || m.id }, (db.get(m.work) && db.get(m.work).title) || '')));
+  const opts = h('div', { class: 'mp-formrow' });
+  const out = h('div', { class: 'mp-cmds' });
+  const state = { format: '', quality: 'high', loudnorm: false, mode: 'best', addVersion: true, maxHeight: '', ref: query.ref || '' };
+  const mediaOf = () => db.all('media').find((m) => (m.name || m.id) === picker.value) || db.get(picker.value);
+  function form() {
+    opts.textContent = '';
+    const k = kind.value;
+    const def = JOB_KINDS[k];
+    if (def.formats) opts.append(inputRow(t('mp.cv.format'), selectField(def.formats.map((f) => [f, f]), def.formats.includes(state.format) ? state.format : def.formats[0], (v) => { state.format = v; })));
+    if (['convertAudio', 'convertVideo', 'split'].includes(k)) opts.append(inputRow(t('mp.cv.quality'), selectField(['low', 'med', 'high', 'lossless'].map((q) => [q, t('mp.cv.q.' + q)]), state.quality, (v) => { state.quality = v; })));
+    if (k === 'convertAudio') opts.append(checkField(t('mp.cv.loudnorm'), state.loudnorm, (v) => { state.loudnorm = v; }));
+    if (k === 'convertVideo' || k === 'ytdlpDownload') opts.append(inputRow(t('mp.cv.maxHeight'), textField(state.maxHeight, (v) => { state.maxHeight = v; }, { placeholder: '1080' })));
+    if (k.startsWith('ytdlp')) opts.append(inputRow(t('mp.cv.ref'), textField(state.ref, (v) => { state.ref = v; }, { placeholder: 'https://… / youtube:ID' })));
+    if (!['probe', 'frame', 'cover', 'collage', 'ytdlpInfo'].includes(k)) opts.append(checkField(t('mp.cv.addVersion'), state.addVersion, (v) => { state.addVersion = v; }));
+  }
+  const paramsOf = () => {
+    const m = mediaOf();
+    const k = kind.value;
+    const p = { media: m ? m.id : undefined, format: state.format || (JOB_KINDS[k].formats || [])[0], quality: state.quality, loudnorm: state.loudnorm, addVersion: state.addVersion, maxHeight: state.maxHeight || undefined, ref: state.ref || undefined };
+    if (k === 'ytdlpDownload') p.mode = ['best', 'video', 'audio'].includes(p.format) ? p.format : 'best';
+    if (k === 'collage') p.collection = query.collection || (db.all('collection')[0] || {}).id;
+    return p;
+  };
+  const showCommands = (cmds) => {
+    out.textContent = '';
+    for (const [sh, text] of Object.entries(cmds)) out.append(h('div', { class: 'mp-cmd' }, h('div', { class: 'mp-cmd-h' }, h('b', {}, sh === 'cmd' ? 'cmd.exe' : 'bash'), btn(t('mp.copy'), 'copy', () => copyText(text))), h('pre', {}, text)));
+  };
+  const preview = async () => {
+    const k = kind.value;
+    try {
+      if (c.server) { const r = await api(own, 'jobs/preview', { method: 'POST', body: { kind: k, params: paramsOf() } }); showCommands(r.commands); if (r.missing && r.missing.length) out.prepend(h('p', { class: 'mp-note' }, t('mp.cv.missing', { tools: r.missing.join(', ') }))); return; }
+      // No server: the same builders with file names; the user runs the commands.
+      const env = { media: (id) => db.get(id), work: (id) => db.get(id), facts: (w) => facts(db, w), pathOf: (m) => m && (m.name || (m.loc && m.loc.path)), outPath: (i, ext, suffix) => String(i || 'output').replace(/\.[^.]+$/, '') + (suffix ? ' (' + suffix + ')' : '') + '.' + (ext || 'out'), outDirOf: (i, o, n) => n, tmpFile: (n) => n, coverPath: () => null, segments: (m) => (m && m.chapters) || [], chapters: (b) => db.children(b.id).map((x) => { const mm = db.mediaOf(x.id)[0]; return mm ? { path: mm.name, title: x.title, duration: mm.duration || 0 } : null; }).filter(Boolean), resolve: (mo, p) => p, blobPath: (b) => b, collageInputs: () => ['cover1.jpg', 'cover2.jpg', 'cover3.jpg', 'cover4.jpg'], downloads: 'Downloads' };
+      const b = buildJob(k, paramsOf(), env);
+      showCommands({ bash: renderJob(b.spec, 'bash', { progress: false }).text, cmd: renderJob(b.spec, 'cmd', { progress: false }).text });
+    } catch (e) { out.textContent = ''; out.append(h('p', { class: 'mp-note' }, e.message)); }
+  };
+  const run = async () => {
+    try { const r = await api(own, 'jobs', { method: 'POST', body: { kind: kind.value, params: paramsOf() } }); toast(t('mp.cv.queued', { title: r.title }), 'ok'); showCommands(r.commands); refreshJobs(); } catch (e) { if (e.body && e.body.commands) showCommands(e.body.commands); toast(t('mp.err.generic', { msg: e.message }), 'error'); }
+  };
+  form();
+  main.append(h('section', { class: 'mp-card-box' }, h('div', { class: 'mp-formrow' }, inputRow(t('mp.cv.kind'), kind), inputRow(t('mp.cv.input'), h('div', {}, picker, dl))), opts,
+    h('div', { class: 'mp-actions' }, btn(t('mp.cv.preview'), 'eye', preview), c.jobs ? btn(t('mp.cv.run'), 'play', run, 'primary') : null), out));
+  if (!c.server) main.append(localConvert(app));
+  const jobsBox = h('div', { class: 'mp-jobs', 'data-live': '1' });
+  main.append(section(t('mp.cv.jobs'), jobsBox));
+  async function refreshJobs() {
+    if (!c.server || !jobsBox.isConnected) { clearInterval(jobsTimer); return; }
+    let list = [];
+    try { list = await api(own, 'jobs'); } catch { return; }
+    jobsBox.textContent = '';
+    if (!list.length) jobsBox.append(h('p', { class: 'mp-muted' }, t('mp.cv.noJobs')));
+    for (const j of list.slice().reverse()) {
+      jobsBox.append(h('div', { class: 'mp-job mp-job-' + j.status }, h('div', { class: 'mp-head' }, h('div', {}, h('b', {}, j.title), h('p', { class: 'mp-muted' }, t('mp.cv.status.' + j.status) + (j.progressText ? ' · ' + j.progressText : '') + (j.error ? ' · ' + j.error : ''))),
+        h('div', { class: 'mp-actions' }, ['queued', 'running'].includes(j.status) ? btn(t('mp.cancel'), 'close', () => api(own, `jobs/${j.id}/cancel`, { method: 'POST' }).then(refreshJobs)) : btn(t('mp.cv.retry'), 'sync', () => api(own, `jobs/${j.id}/retry`, { method: 'POST' }).then(refreshJobs)),
+          btn('bash', 'copy', async () => copyText((await api(own, `jobs/${j.id}/command?shell=bash`)).text)), btn('cmd', 'copy', async () => copyText((await api(own, `jobs/${j.id}/command?shell=cmd`)).text)), iconBtn('trash', t('mp.delete'), () => api(own, 'jobs/' + j.id, { method: 'DELETE' }).then(refreshJobs)))),
+        h('div', { class: 'mp-progress-bar' }, h('i', { style: { width: Math.round((j.progress || (j.status === 'done' ? 1 : 0)) * 100) + '%' } })),
+        h('details', {}, h('summary', {}, t('mp.cv.log')), h('pre', { class: 'mp-log' }, (j.log || []).join('\n')))));
+    }
+    if (bridge) { const r = list.find((j) => j.status === 'running'); bridge.window.setProgress(r ? r.progress || 0.01 : -1); }
+  }
+  clearInterval(jobsTimer);
+  if (c.server) { refreshJobs(); jobsTimer = setInterval(refreshJobs, 1500); }
+}
+
+function toolsBox(app) {
+  const box = h('details', { class: 'mp-card-box' }, h('summary', {}, t('mp.cv.tools')));
+  api(own, 'tools').then((r) => {
+    const fields = {};
+    for (const k of ['ffmpeg', 'ffprobe', 'yt-dlp', 'magick']) {
+      const x = r.tools[k];
+      fields[k] = textField(r.configured[k] || '', () => {}, { placeholder: x ? x.path : t('mp.cv.notFound') });
+      box.append(h('div', { class: 'mp-tool' }, h('b', {}, k), h('span', { class: x ? 'mp-ok' : 'mp-bad' }, x ? (x.version || t('mp.cv.found')) + ' · ' + x.path : t('mp.cv.notFound')), fields[k]));
+    }
+    box.append(h('p', { class: 'mp-muted' }, t('mp.cv.downloadsAt', { p: r.downloads })), btn(t('mp.save'), 'save', async () => { const conf = {}; for (const [k, f] of Object.entries(fields)) conf[k] = f.value.trim(); try { await api(own, 'tools', { method: 'POST', body: { configured: conf } }); toast(t('mp.saved'), 'ok'); } catch (e) { toast(e.message, 'error'); } }));
+  }).catch((e) => box.append(h('p', {}, e.message)));
+  return box;
+}
+
+// In-browser conversions: decode with WebAudio, encode WAV (wav/), MP3 (mp3/encoder.js) or Opus in WebM (WebCodecs).
+// In-browser conversion for the serverless artifact: decode with WebAudio, then encode with the repository's own
+// WAV / MP3 encoders or WebCodecs Opus. Limits: whole file in memory, no video, no tags.
+function localConvert(app) {
+  const { db } = app;
+  const status = h('p', { class: 'mp-muted' });
+  const fmt = selectField([['wav', 'WAV'], ['mp3', 'MP3 128 kbps'], ['mp3-192', 'MP3 192 kbps'], ['opus', 'Opus (WebM)']], 'mp3', () => {});
+  const go = async (file) => {
+    try {
+      status.textContent = t('mp.cv.decoding');
+      const buf = await file.arrayBuffer();
+      const ac = new OfflineAudioContext(2, 44100, 44100);
+      const audio = await ac.decodeAudioData(buf.slice(0));
+      const chans = Array.from({ length: Math.min(2, audio.numberOfChannels) }, (_, i) => audio.getChannelData(i));
+      const base = file.name.replace(/\.[^.]+$/, '');
+      if (fmt.value === 'wav') {
+        const { encodeWav } = await import('../wav/wav.js');
+        download(encodeWav(chans, { sampleRate: audio.sampleRate, bitDepth: 16 }), base + '.wav', 'audio/wav');
+      } else if (fmt.value.startsWith('mp3')) {
+        let pcm = chans, rate = audio.sampleRate;
+        // MPEG-1 Layer III supports only 32 / 44.1 / 48 kHz; other rates are resampled through an OfflineAudioContext
+        // (browser-quality resampler) instead of a hand-written one.
+        if (![32000, 44100, 48000].includes(rate)) {
+          const oc = new OfflineAudioContext(chans.length, Math.ceil(audio.duration * 44100), 44100);
+          const src = oc.createBufferSource(); src.buffer = audio; src.connect(oc.destination); src.start();
+          const r = await oc.startRendering(); pcm = Array.from({ length: r.numberOfChannels }, (_, i) => r.getChannelData(i)); rate = 44100;
+        }
+        const { encodeMp3Async } = await import('../mp3/encoder.js');
+        const bytes = await encodeMp3Async(pcm, { sampleRate: rate, bitrate: fmt.value === 'mp3-192' ? 192 : 128, channels: pcm.length, onProgress: (p) => { status.textContent = t('mp.cv.encoding', { p: Math.round(p * 100) }); } });
+        download(bytes, base + '.mp3', 'audio/mpeg');
+      } else {
+        if (typeof AudioEncoder !== 'function') throw new Error(t('mp.cv.noWebCodecs'));
+        const oc = new OfflineAudioContext(2, Math.ceil(audio.duration * 48000), 48000);
+        const src = oc.createBufferSource(); src.buffer = audio; src.connect(oc.destination); src.start();
+        const r = await oc.startRendering();
+        const chunks = [];
+        let head = null;
+        const enc = new AudioEncoder({ output: (c, meta) => { const d = new Uint8Array(c.byteLength); c.copyTo(d); chunks.push({ data: d, timestamp: c.timestamp, duration: c.duration }); if (meta && meta.decoderConfig && meta.decoderConfig.description) head = new Uint8Array(meta.decoderConfig.description); }, error: (e) => { throw e; } });
+        enc.configure({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 });
+        // Opus in WebCodecs works on 48 kHz only; audio is fed in 1 s planar chunks with microsecond timestamps, and
+        // the encoder's chunks are muxed into WebM (weba/weba.js) because raw Opus packets are not a playable file.
+        const n = r.length, step = 48000;
+        for (let i = 0; i < n; i += step) {
+          const len = Math.min(step, n - i);
+          const data = new Float32Array(len * 2);
+          data.set(r.getChannelData(0).subarray(i, i + len), 0); data.set(r.getChannelData(1).subarray(i, i + len), len);
+          enc.encode(new AudioData({ format: 'f32-planar', sampleRate: 48000, numberOfFrames: len, numberOfChannels: 2, timestamp: Math.round((i / 48000) * 1e6), data }));
+        }
+        await enc.flush();
+        const { muxOpus } = await import('../weba/weba.js');
+        download(muxOpus(chunks, { sampleRate: 48000, channels: 2, head: head || undefined, title: base }), base + '.weba', 'audio/webm');
+      }
+      status.textContent = t('mp.cv.doneLocal');
+    } catch (e) { status.textContent = t('mp.err.generic', { msg: e.message }); }
+  };
+  return section(t('mp.cv.local'), h('p', { class: 'mp-muted' }, t('mp.cv.localHelp')), h('div', { class: 'mp-formrow' }, inputRow(t('mp.cv.format'), fmt), btn(t('mp.cv.pickFile'), 'upload', async () => { const [f] = await pickFiles({ accept: 'audio/*,video/*' }); if (f) go(f); }, 'primary')), status);
+}
+
+// --- settings --------------------------------------------------------------------------------------------------------
+
+function settingsView(app, main, [tab = 'general']) {
+  main.append(header(t('mp.nav.settings'), null));
+  main.append(tabs([['general', t('mp.set.general')], ['playback', t('mp.set.playback')], ['library', t('mp.set.library')], ['storage', t('mp.set.storage')], ['exchange', t('mp.set.exchange')], ['keys', t('mp.set.keys')], ['about', t('mp.set.about')]], tab, (k) => app.nav('settings/' + k)));
+  const set = (k, v) => { settings[k] = v; saveSettings(); };
+  const box = h('div', { class: 'mp-form mp-settings' });
+  main.append(box);
+  if (tab === 'general') {
+    const lang = selectField(Object.keys(ED_I18N).map((l) => [l, langLabel(l)]), UI_STATE.lang, (v) => { UI_STATE.lang = v; localStorage.setItem('mp-ui', JSON.stringify(v)); document.documentElement.lang = v; app.renderShell(); });
+    box.append(inputRow(t('ap.lang'), lang),
+      inputRow(t('mp.theme'), selectField(['auto', 'light', 'dark'].map((x) => [x, t('ap.theme.' + x)]), settings.theme, (v) => { set('theme', v); app.applySkin(); })),
+      inputRow(t('mp.view'), selectField(['auto', 'desktop', 'mobile', 'theatre'].map((x) => [x, t('mp.view.' + x)]), settings.view, (v) => app.setView(v))),
+      checkField(t('mp.set.dynamic'), settings.dynamicColor, (v) => { set('dynamicColor', v); app.applySkin(); }),
+      inputRow(t('mp.set.titleLang'), selectField([['romaji', t('mp.title.romaji')], ['en', t('mp.title.en')], ['native', t('mp.title.native')]], settings.titleLang, (v) => set('titleLang', v))),
+      h('div', { class: 'mp-actions' }, btn(t('mp.nav.studio'), 'palette', () => app.nav('studio'))));
+  } else if (tab === 'playback') {
+    const eqBox = h('div', { class: 'mp-eq' });
+    const drawEq = () => {
+      eqBox.textContent = '';
+      EQ_BANDS.forEach((f, i) => {
+        const r = h('input', { type: 'range', class: 'mp-eq-r', min: -12, max: 12, step: 0.5, value: settings.eq[i] || 0, 'aria-label': f + ' Hz', orient: 'vertical' });
+        r.addEventListener('input', () => { settings.eq[i] = +r.value; settings.eqPreset = 'custom'; saveSettings(); app.engine.setEq(); });
+        eqBox.append(h('label', { class: 'mp-eq-b' }, r, h('span', {}, f >= 1000 ? f / 1000 + 'k' : String(f))));
+      });
+    };
+    drawEq();
+    box.append(checkField(t('mp.set.eqOn'), settings.eqOn, (v) => { set('eqOn', v); app.engine.setEq(); }),
+      inputRow(t('mp.set.eqPreset'), selectField([...Object.keys(EQ_PRESETS).map((k) => [k, t('mp.eq.' + k)]), ['custom', t('mp.eq.custom')]], settings.eqPreset, (v) => { if (EQ_PRESETS[v]) settings.eq = EQ_PRESETS[v].slice(); set('eqPreset', v); drawEq(); app.engine.setEq(); })), eqBox,
+      inputRow(t('mp.set.level'), selectField([['replaygain', t('mp.level.track')], ['album', t('mp.level.album')], ['loudness', t('mp.level.loudness')], ['off', t('mp.level.off')]], settings.level, (v) => { set('level', v); app.engine.setLevel(); })),
+      inputRow(t('mp.set.target'), rangeField(-23, -8, 1, settings.target, (v) => { set('target', v); app.engine.setLevel(); }, (v) => v + ' LUFS')),
+      inputRow(t('mp.set.preamp'), rangeField(-12, 12, 0.5, settings.preamp, (v) => { set('preamp', v); app.engine.setLevel(); }, (v) => v + ' dB')),
+      inputRow(t('mp.set.crossfade'), rangeField(0, 12, 1, settings.crossfade, (v) => set('crossfade', v), (v) => (v ? v + ' s' : t('mp.off')))),
+      checkField(t('mp.set.gapless'), settings.gapless, (v) => set('gapless', v)),
+      checkField(t('mp.set.resume'), settings.resume, (v) => set('resume', v)),
+      checkField(t('mp.set.autoSkip'), settings.autoSkip, (v) => set('autoSkip', v)),
+      checkField(t('mp.set.autoNext'), settings.autoNext, (v) => set('autoNext', v)),
+      checkField(t('mp.set.skipOnError'), settings.skipOnError, (v) => set('skipOnError', v)),
+      inputRow(t('mp.set.watched'), rangeField(0.5, 1, 0.05, settings.watched, (v) => set('watched', v), (v) => Math.round(v * 100) + ' %')),
+      ...['music', 'audiobook', 'podcast', 'video'].map((f) => inputRow(t('mp.set.speed.' + f), selectField(SPEEDS.map((s) => [s, s + '×']), settings.speeds[f] || 1, (v) => { settings.speeds[f] = Number(v); saveSettings(); }))),
+      inputRow(t('mp.set.sleep'), rangeField(5, 180, 5, settings.sleepMinutes, (v) => set('sleepMinutes', v), (v) => v + ' min')),
+      inputRow(t('mp.set.seekForward'), rangeField(5, 120, 5, settings.seekForward, (v) => set('seekForward', v), (v) => v + ' s')),
+      bridge ? checkField(t('mp.set.mediaKeys'), settings.mediaKeys, (v) => { set('mediaKeys', v); bridge.shortcuts.set({ media: v }); }) : null,
+      bridge ? checkField(t('mp.set.tray'), settings.tray, (v) => { set('tray', v); if (!v) bridge.tray.remove(); }) : null);
+  } else if (tab === 'library') {
+    box.append(checkField(t('mp.set.remoteImages'), settings.remoteImages, (v) => set('remoteImages', v)), h('p', { class: 'mp-muted' }, t('mp.set.remoteImagesHint')),
+      checkField(t('mp.set.analyze'), settings.analyze, (v) => set('analyze', v)), h('p', { class: 'mp-muted' }, t('mp.set.analyzeHint')),
+      inputRow(t('mp.set.prefLang'), textField(settings.prefLang, (v) => set('prefLang', v.trim().toLowerCase()), { placeholder: 'ja, en, ru' })),
+      h('div', { class: 'mp-actions' }, btn(t('mp.demo.load'), 'wand', () => app.seedDemo(true)), btn(t('mp.demo.remove'), 'trash', async () => { if (await confirmDialog(t('mp.demo.remove'), t('mp.demo.removeQ'), t('mp.delete'), true)) app.removeDemo(); }, 'danger')),
+      btn(t('mp.set.reset'), 'undo', async () => { if (await confirmDialog(t('mp.set.reset'), t('mp.set.resetQ'), t('mp.set.reset'), true)) { Object.assign(settings, DEFAULT_SETTINGS); saveSettings(); app.renderShell(); } }));
+  } else if (tab === 'storage') storageSettings(app, box);
+  else if (tab === 'exchange') exchangeSettings(app, box);
+  else if (tab === 'keys') {
+    const c = conflicts(DEFAULT_KEYS);
+    box.append(h('div', { class: 'mp-keys' }, DEFAULT_KEYS.filter((k) => !/^seek-\d$/.test(k.command)).map((k) => h('div', { class: 'mp-keyrow' }, h('span', {}, t('mp.cmd.' + k.command)), h('span', {}, k.keys.map((x) => h('kbd', { class: 'ed-kbd' }, formatKey(x))))))),
+      h('p', { class: 'mp-muted' }, t('mp.keys.digits')), c.length ? h('p', { class: 'mp-note' }, JSON.stringify(c)) : null);
+  } else {
+    box.append(h('dl', { class: 'mp-about' }, h('dt', {}, t('mp.about.mode')), h('dd', {}, t('mp.mode.' + MODE)), h('dt', {}, t('mp.about.store')), h('dd', {}, app.store.kind === 'remote' ? t('mp.status.server') : app.store.persistent ? t('mp.status.local') : t('mp.status.memory')),
+      h('dt', {}, t('mp.about.counts')), h('dd', {}, `${app.db.count('work')} / ${app.db.count('media')} / ${app.db.count('collection')}`)), h('p', { class: 'mp-muted' }, t('mp.about.text')));
+    if (bridge) bridge.info().then((i) => box.append(h('p', { class: 'mp-muted' }, `Electron ${i.versions.electron} · Chrome ${i.versions.chrome} · Node ${i.versions.node} · ${i.platform} · ${t('mp.about.data')}: ${i.dataDir}`)));
+  }
+}
+
+function storageSettings(app, box) {
+  const list = servers();
+  if (own) box.append(h('p', {}, t('mp.set.ownServer', { mode: t('mp.mode.' + MODE) })));
+  else {
+    box.append(inputRow(t('mp.set.store'), selectField([['local', t('mp.status.local')], ...list.map((s) => [s.id, s.name || s.base])], app.settings.store, async (v) => {
+      if (v !== 'local' && app.db.count('work') && await confirmDialog(t('mp.set.store'), t('mp.set.copyQ'), t('mp.set.copy'))) {
+        try { await api(list.find((s) => s.id === v), 'db/ops', { method: 'POST', body: { ops: app.db.all().map((node) => ({ op: 'put', node })) } }); } catch (e) { toast(e.message, 'error'); return; }
+      }
+      app.settings.store = v; saveSettings(); location.reload();
+    })), h('p', { class: 'mp-muted' }, t('mp.set.storeHint')));
+  }
+  box.append(section(t('mp.set.servers'), h('p', { class: 'mp-muted' }, t('mp.set.serversHint')), h('div', { class: 'mp-list' }, list.map((s) => h('div', { class: 'mp-row' }, h('div', { class: 'mp-row-main' }, h('div', { class: 'mp-row-t' }, s.name || s.base), h('div', { class: 'mp-row-s' }, s.base)),
+    btn(t('mp.set.test'), 'check', async () => { try { const i = await api(s, 'info'); await api(s, 'fs/mounts'); toast(t('mp.set.testOk', { app: i.app, mode: i.mode }), 'ok'); } catch (e) { toast(t('mp.err.generic', { msg: e.message }), 'error'); } }),
+    iconBtn('trash', t('mp.delete'), () => { saveServers(list.filter((x) => x.id !== s.id)); resetClients(); app.refresh(); })))),
+  btn(t('mp.set.addServer'), 'plus', async () => {
+    const base = textField('', () => {}, { placeholder: 'https://media.example.org/' });
+    const token = textField('', () => {}, { placeholder: t('mp.token.label') });
+    const name = textField('', () => {}, {});
+    const v = await openDialog({ title: t('mp.set.addServer'), body: h('div', { class: 'mp-form' }, inputRow(t('mp.set.address'), base), inputRow(t('mp.token.label'), token), inputRow(t('mp.name'), name), h('p', { class: 'mp-muted' }, t('mp.set.corsHint'))), buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('dlg.ok'), value: 'ok', primary: true }] });
+    if (v !== 'ok' || !base.value.trim()) return;
+    let b = base.value.trim();
+    if (!/\/api\/?$/.test(b)) b = b.replace(/\/+$/, '') + '/api/';
+    saveServers([...list, { id: 's' + Math.random().toString(36).slice(2, 8), base: b, token: token.value.trim(), name: name.value.trim() }]);
+    resetClients(); app.refresh();
+  })));
+  if (own) {
+    const cors = textField('', () => {}, { placeholder: 'null, https://player.example' });
+    api(own, 'settings').then((s) => { cors.value = (s.cors || []).join(', '); }).catch(() => {});
+    box.append(section(t('mp.set.cors'), h('p', { class: 'mp-muted' }, t('mp.set.corsOwn')), cors, btn(t('mp.save'), 'save', async () => { try { await api(own, 'settings', { method: 'POST', body: { cors: cors.value.split(/[\s,]+/).filter(Boolean) } }); toast(t('mp.saved'), 'ok'); } catch (e) { toast(e.message, 'error'); } })));
+  }
+}
+
+function exchangeSettings(app, box) {
+  const { db } = app;
+  const policy = selectField(['newer', 'keep', 'theirs', 'copy'].map((p) => [p, t('mp.ex.policy.' + p)]), 'newer', () => {});
+  const stamp = new Date().toISOString().slice(0, 10);
+  box.append(section(t('mp.ex.export'),
+    h('p', { class: 'mp-muted' }, t('mp.ex.treeHint')),
+    h('div', { class: 'mp-actions' },
+      btn(t('mp.ex.tree'), 'download', () => download(JSON.stringify(exportTree(db, { generator: 'in-html media-player' }), null, 1), `media-tree-${stamp}.json`, 'application/json')),
+      btn(t('mp.ex.dbJson'), 'download', () => download(JSON.stringify(exportDB(db, { generator: 'in-html media-player' })), `media-db-${stamp}.json`, 'application/json')),
+      btn(t('mp.ex.dbZip'), 'download', async () => { toast(t('mp.ex.packing')); const bytes = await exportZip(db, { blobs: { list: () => app.store.blobs.list(), get: async (id) => { const b = await app.store.blobs.get(id); return b ? { type: b.type, bytes: new Uint8Array(await b.arrayBuffer()) } : null; } }, generator: 'in-html media-player' }); download(bytes, `media-db-${stamp}.zip`, 'application/zip'); }, 'primary'))),
+  section(t('mp.ex.import'), h('p', { class: 'mp-muted' }, t('mp.ex.importHint')), inputRow(t('mp.ex.policy'), policy),
+    btn(t('mp.ex.importFile'), 'upload', async () => {
+      const [f] = await pickFiles({ accept: '.json,.zip' });
+      if (!f) return;
+      try {
+        const x = await readExchange(new Uint8Array(await f.arrayBuffer()));
+        for (const [id, b] of x.blobs) await app.store.blobs.put(new Blob([b.bytes], { type: b.type }), b.type, id);
+        const r = importData(db, x.data, { policy: policy.value, locations: x.format !== 'in-html-media-tree' });
+        toast(t('mp.ex.imported', r), 'ok');
+      } catch (e) { toast(t('mp.err.generic', { msg: e.message }), 'error'); }
+    }, 'primary')),
+  section(t('mp.ex.other'), h('div', { class: 'mp-actions' }, btn(t('mp.nav.tracking'), 'chart', () => app.nav('tracking')), btn(t('mp.nav.playlists'), 'list', () => app.nav('playlists')))));
+}
+
+export const TOOL_VIEWS = { sources, convert, settings: settingsView };

@@ -1,0 +1,381 @@
+// catalog-rules/rules.js - the rules page: listing title rules (conditions with the six operators, templates in
+// Georgian, Russian and English, first match wins, a fallback), scales for {key:scale}, tag templates, a table of
+// sample objects (editable, CSV import / export) and a tracer that shows for the selected sample every rule's
+// condition results, rendered texts and the winner (schema/rules.js traceRules), and its tags with search tokens.
+//
+// Page model: editors on the left (rules, scales, tags) mutate store.P in place and call changed(), which saves and
+// re-evaluates every sample (repaintResults, debounced 150 ms). The sample table and the tracer on the right are pure
+// views of evalSample(). The editors are rebuilt only on structural changes (add, remove, reorder), never on typing,
+// so focus and open <details> survive. Rule order is meaning (first match wins), hence explicit up/down moves.
+import { chip, condEditor, langInputs, projectCard, saveProject, saveUI, startShell, store, onProject, uid } from './common.js';
+import { CONTENT_LANGS, columnKeys, droppedConds, evalSample, fieldIndex, formatLabels, formatOptions, nodeName, parseLabels, parseOptions, samplesFromCSV, samplesToCSV, treeOrder } from './engine.js';
+import { button, card, download, seg, t, toast } from '../ui/app.js';
+import { $, $$, debounce, h } from '../ui/dom.js';
+import { icon, iconEl } from '../ui/icons.js';
+import { pickFiles } from '../ui/files.js';
+import { UI_STATE } from '../ui/i18n.js';
+import { COND_BARE } from '../schema/rules.js';
+import { pick } from '../schema/text.js';
+import { templateVars } from '../schema/rules.js';
+import { scaleWord, normalizeScale } from '../units/scales.js';
+
+const main = $('#main');
+main.classList.add('cr-rules');
+const P = () => store.P;
+const lang = () => UI_STATE.lang;
+const L = (o) => pick(o, lang(), ['en', 'ru', 'ka']);
+let els = {};
+
+function render() {
+  main.textContent = '';
+  els = { rules: h('div', { class: 'cr-rulelist' }), scales: h('div'), tags: h('div'), samples: h('div'), tracer: h('div', { class: 'cr-tracer', id: 'cr-tracer' }) };
+  const left = h('div', { class: 'cr-col' }, rulesCard(), card('cr.scales', els.scales), card('cr.tags', els.tags), projectCard());
+  const right = h('div', { class: 'cr-col' }, card('cr.samples', els.samples), card('cr.tracer', els.tracer));
+  main.append(h('div', { class: 'cr-rwork' }, left, right));
+  paintRules(); paintScales(); paintTags(); paintSamples(); paintTracer();
+}
+
+// One debounced path for every edit: save + recompute derived columns + tracer. Evaluating all samples per change is
+// O(samples x rules), fine at the 2000-sample cap of normalizeProject.
+const changed = debounce(() => { saveProject(); repaintResults(); }, 150);
+// Variables a template may use: every column key plus the two special variables (see engine.js header).
+const knownVars = () => new Set([...columnKeys(P()), 'category', 'path']);
+
+// --- rules ------------------------------------------------------------------------------------------------------
+
+function rulesCard() {
+  const src = seg(CONTENT_LANGS.map((l) => ({ v: l, l: 'cr.lang.' + l })), P().srcLang, (v) => { P().srcLang = v; changed(); }, 'cr.src');
+  const fb = langInputs(P().fallback, (l, v) => { P().fallback[l] = v; changed(); }, { label: t('cr.fallback') });
+  const add = button('cr.rule.add', 'plus', () => { P().rules.push({ note: '', off: false, when: [], tpl: { ka: '', ru: '', en: '' } }); saveProject(); paintRules(); $$('.cr-rule', els.rules).at(-1).open = true; repaintResults(); });
+  add.classList.add('ed-sm');
+  return card('cr.rules',
+    h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('cr.src')), src, h('div', { class: 'ed-hint' }, t('cr.srcHint'))),
+    h('p', { class: 'cr-muted cr-lead' }, t('cr.rules.lead')),
+    els.rules, h('div', { class: 'ap-actions' }, add),
+    h('div', { class: 'ed-field cr-fallback' }, h('span', { class: 'ed-label' }, t('cr.fallback')), fb, h('div', { class: 'ed-hint' }, t('cr.fallbackHint'))),
+    h('div', { class: 'ed-hint' }, t('cr.varsHint')));
+}
+
+function paintRules() {
+  const box = els.rules;
+  // Open/closed state of each rule's <details> is captured before the rebuild and restored by index, so reordering or
+  // adding a rule does not collapse what the user was editing.
+  const openSet = new Set($$('.cr-rule[open]', box).map((d) => d.dataset.i));
+  box.textContent = '';
+  const keys = [...knownVars()];
+  P().rules.forEach((r, i) => {
+    const det = h('details', { class: 'cr-rule', dataset: { i: String(i) }, open: openSet.has(String(i)) });
+    const status = h('span', { class: 'cr-rstat' });
+    const paintStatus = () => {
+      status.textContent = '';
+      // A rule with no template in any language can never produce a title: flagged as incomplete.
+      const empty = !CONTENT_LANGS.some((l) => (r.tpl[l] || '').trim());
+      if (r.off) status.append(chip(t('cr.rule.off'), 'cr-c-off'));
+      if (empty) status.append(chip(t('cr.rule.incomplete'), 'cr-c-bad'));
+    };
+    paintStatus();
+    det.append(h('summary', {}, iconEl('chevRight'), h('span', { class: 'cr-rnum' }, String(i + 1)), h('span', { class: 'cr-rnote' }, r.note || (r.tpl[P().srcLang] || t('cr.rule.untitled'))), status));
+    const body = h('div', { class: 'ed-fields' });
+    const note = h('input', { class: 'ed-input', value: r.note, id: uid(), placeholder: t('cr.rule.notePh') });
+    note.addEventListener('input', () => { r.note = note.value; det.querySelector('.cr-rnote').textContent = r.note || t('cr.rule.untitled'); changed(); });
+    const on = h('input', { type: 'checkbox', class: 'ed-switch', role: 'switch', checked: !r.off, id: uid() });
+    on.addEventListener('change', () => { r.off = !on.checked; paintStatus(); changed(); });
+    body.append(h('div', { class: 'ed-field' }, h('label', { class: 'ed-label', for: note.id }, t('cr.rule.note')), note),
+      h('div', { class: 'ed-field ed-field-check' }, on, h('label', { class: 'ed-label', for: on.id }, t('cr.rule.on'))));
+    // Conditions the library would drop (droppedConds) are marked in the editor, so "why does this rule always match?"
+    // has a visible answer.
+    body.append(condEditor(r.when, () => changed(), { keys, labelKey: 'cr.rule.when', invalid: (j) => droppedConds(r).includes(j) }));
+    const warn = h('div', { class: 'ed-hint cr-bad' });
+    const paintWarn = () => {
+      // Template variables that are neither fields nor special variables render empty; warn while typing.
+      const kv = knownVars();
+      const unknown = [...new Set(CONTENT_LANGS.flatMap((l) => templateVars(r.tpl[l])))].filter((k) => !kv.has(k));
+      warn.textContent = unknown.length ? t('cr.rule.unknownVars', { list: unknown.join(', ') }) : '';
+    };
+    paintWarn();
+    body.append(h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('cr.rule.tpl')), langInputs(r.tpl, (l, v) => { r.tpl[l] = v; paintStatus(); paintWarn(); changed(); }, { label: t('cr.rule.tpl') }), warn));
+    const sm = (b, label) => { b.classList.add('ed-sm'); if (label) { b.title = t(label); b.setAttribute('aria-label', t(label)); } return b; };
+    const mv = (d) => { const j = i + d; if (j < 0 || j >= P().rules.length) return; [P().rules[i], P().rules[j]] = [P().rules[j], P().rules[i]]; saveProject(); paintRules(); repaintResults(); };
+    body.append(h('div', { class: 'ap-actions' },
+      sm(button('', 'up', () => mv(-1)), 'cr.rule.up'), sm(button('', 'down', () => mv(1)), 'cr.rule.down'),
+      // Copy inserts a deep clone right after the original (JSON round trip: rules are plain data).
+      sm(button('cr.rule.copy', 'copy', () => { P().rules.splice(i + 1, 0, JSON.parse(JSON.stringify(r))); saveProject(); paintRules(); repaintResults(); })),
+      sm(button('cr.rule.remove', 'trash', () => { P().rules.splice(i, 1); saveProject(); paintRules(); repaintResults(); }, 'danger'))));
+    det.append(body);
+    box.append(det);
+  });
+  if (!P().rules.length) box.append(h('div', { class: 'ap-empty' }, t('cr.rules.none')));
+}
+
+// --- scales -----------------------------------------------------------------------------------------------------
+
+// Steps as "threshold = labels" lines; an empty threshold is the open-ended last step (at: null). Comma decimals are
+// accepted because the users are Georgian/Russian.
+const stepsText = (s) => (s.steps || []).map((st) => `${st.at == null || st.at === '' ? '' : st.at} = ${formatLabels(st.name)}`).join('\n');
+function parseSteps(text) {
+  const out = [];
+  for (const line of text.split(/\r?\n/)) {
+    const i = line.indexOf('=');
+    if (i < 0 || !line.trim()) continue;
+    const at = line.slice(0, i).trim().replace(',', '.');
+    out.push({ at: at === '' ? null : +at, name: parseLabels(line.slice(i + 1)) });
+  }
+  return out;
+}
+
+function paintScales() {
+  const box = els.scales;
+  box.textContent = '';
+  P().scales.forEach((s, i) => {
+    const det = h('details', { class: 'cr-item' }, h('summary', {}, iconEl('chevRight'), h('span', { class: 'cr-mono' }, `{…:${s.key || '?'}}`), h('span', { class: 'cr-muted' }, L(s.name))));
+    const key = h('input', { class: 'ed-input cr-mono', value: s.key || '', 'aria-label': t('cr.scale.key') });
+    key.addEventListener('input', () => { s.key = key.value.trim(); changed(); });
+    const mode = seg([{ v: 'exact', l: 'cr.scale.exact' }, { v: 'upto', l: 'cr.scale.upto' }], s.mode || 'exact', (v) => { s.mode = v; changed(); test(); }, 'cr.scale.mode');
+    const unit = h('input', { class: 'ed-input cr-mono', value: s.unit || '', 'aria-label': t('cr.d.unit'), placeholder: t('cr.d.unit') });
+    unit.addEventListener('input', () => { s.unit = unit.value.trim(); if (!s.unit) delete s.unit; changed(); });
+    const steps = h('textarea', { class: 'ed-input ed-textarea cr-mono', rows: 4, 'aria-label': t('cr.scale.steps'), spellcheck: 'false' }, stepsText(s));
+    steps.addEventListener('input', () => { s.steps = parseSteps(steps.value); changed(); test(); });
+    const num = h('input', { class: 'ed-input', inputmode: 'decimal', value: '2', 'aria-label': t('cr.scale.try') });
+    const out = h('span', { class: 'cr-mono' });
+    // Live preview of the scale with a test number in all three content languages.
+    const test = () => { const n = normalizeScale(s); out.textContent = n ? CONTENT_LANGS.map((l) => `${l}: ${scaleWord(n, num.value, l) || '—'}`).join(' · ') : t('cr.scale.bad'); };
+    num.addEventListener('input', test); test();
+    const del = button('cr.rule.remove', 'trash', () => { P().scales.splice(i, 1); changed(); paintScales(); }, 'danger'); del.classList.add('ed-sm');
+    det.append(h('div', { class: 'ed-fields' }, h('div', { class: 'cr-grid2' }, key, unit), mode, steps, h('div', { class: 'ed-hint' }, t('cr.scale.hint')),
+      h('div', { class: 'cr-row' }, h('span', { class: 'ed-label' }, t('cr.scale.try')), num, out), h('div', { class: 'ap-actions' }, del)));
+    box.append(det);
+  });
+  const add = button('cr.scale.add', 'plus', () => { P().scales.push({ key: 'scale' + (P().scales.length + 1), mode: 'exact', name: {}, steps: [] }); changed(); paintScales(); });
+  add.classList.add('ed-sm');
+  box.append(h('div', { class: 'ap-actions' }, add));
+}
+
+// --- tags -------------------------------------------------------------------------------------------------------
+
+function paintTags() {
+  const box = els.tags;
+  box.textContent = '';
+  box.append(h('p', { class: 'cr-muted cr-lead' }, t('cr.tags.lead')));
+  P().tags.forEach((tg, i) => {
+    // Tag summary shows the colour dot and the "t<id>" key that sample tag strings and search tokens use.
+    const det = h('details', { class: 'cr-item' }, h('summary', {}, iconEl('chevRight'), h('span', { class: 'cr-tagdot', style: { background: tg.color || '#888' } }, tg.icon || ''), h('span', { class: 'cr-mono' }, `t${tg.id} · ${tg.key}`), h('span', { class: 'cr-muted' }, L(tg.label))));
+    const body = h('div', { class: 'ed-fields' });
+    const inp = (k, attrs = {}) => { const x = h('input', { class: 'ed-input', value: tg[k] ?? '', spellcheck: 'false', 'aria-label': t('cr.tag.' + k), placeholder: t('cr.tag.' + k), ...attrs }); x.addEventListener('input', () => { tg[k] = x.value; changed(); }); return x; };
+    body.append(h('div', { class: 'cr-grid3' }, inp('key', { class: 'ed-input cr-mono' }), inp('icon'), inp('color', { type: 'color', value: tg.color || '#888888', class: 'ap-color' })));
+    body.append(h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('cr.tag.label')), langInputs(tg.label || {}, (l, v) => { tg.label = { ...(tg.label || {}), [l]: v }; changed(); }, { label: t('cr.tag.label') })));
+    tg.fields ||= [];
+    const flist = h('div', { class: 'cr-tfields' });
+    const paintF = () => {
+      flist.textContent = '';
+      tg.fields.forEach((f, j) => {
+        const k = h('input', { class: 'ed-input cr-mono', value: f.key || '', 'aria-label': t('cr.tag.fkey'), placeholder: t('cr.tag.fkey') });
+        k.addEventListener('input', () => { f.key = k.value.trim(); changed(); });
+        const kind = h('select', { class: 'ed-input ed-select', 'aria-label': t('cr.tag.kind') }, ['number', 'text', 'select'].map((x) => h('option', { value: x, selected: f.kind === x }, t('cr.type.' + x))));
+        kind.addEventListener('change', () => { f.kind = kind.value; changed(); paintF(); });
+        const del = h('button', { type: 'button', class: 'ed-iconbtn', 'aria-label': t('cr.cond.remove'), title: t('cr.cond.remove'), html: icon('trash'), onclick: () => { tg.fields.splice(j, 1); changed(); paintF(); } });
+        const row = h('div', { class: 'cr-tfield' }, h('div', { class: 'cr-row' }, k, kind, del));
+        if (f.kind === 'number') {
+          const u = h('input', { class: 'ed-input cr-mono', value: f.unit || '', 'aria-label': t('cr.d.unit'), placeholder: t('cr.d.unit') });
+          u.addEventListener('input', () => { f.unit = u.value.trim(); changed(); });
+          const sc = h('input', { class: 'ed-input cr-mono', value: f.scale || '', 'aria-label': t('cr.tag.scale'), placeholder: t('cr.tag.scale') });
+          sc.addEventListener('input', () => { f.scale = sc.value.trim(); changed(); });
+          row.append(h('div', { class: 'cr-grid2' }, u, sc));
+        }
+        if (f.kind === 'select') {
+          const ta = h('textarea', { class: 'ed-input ed-textarea cr-mono', rows: 2, 'aria-label': t('cr.d.options'), spellcheck: 'false' }, formatOptions(f.options));
+          ta.addEventListener('input', () => { f.options = parseOptions(ta.value); changed(); });
+          row.append(ta);
+        }
+        flist.append(row);
+      });
+    };
+    paintF();
+    // Up to 6 parameters per tag: the tag text templates stay readable and the search tokens bounded.
+    const addF = button('cr.tag.addField', 'plus', () => { if (tg.fields.length >= 6) { toast(t('cr.tag.max'), 'warn'); return; } tg.fields.push({ key: 'f' + (tg.fields.length + 1), kind: 'text' }); changed(); paintF(); });
+    addF.classList.add('ed-sm');
+    body.append(h('div', { class: 'ed-label' }, t('cr.tag.fields')), flist, addF);
+    tg.texts ||= [];
+    const tlist = h('div', { class: 'cr-ttexts' });
+    const paintT = () => {
+      tlist.textContent = '';
+      tg.texts.forEach((x, j) => {
+        const del = h('button', { type: 'button', class: 'ed-iconbtn', 'aria-label': t('cr.cond.remove'), title: t('cr.cond.remove'), html: icon('trash'), onclick: () => { tg.texts.splice(j, 1); changed(); paintT(); } });
+        tlist.append(h('div', { class: 'cr-row cr-variant' }, h('span', { class: 'cr-rnum' }, String(j + 1)), langInputs(x, (l, v) => { x[l] = v; changed(); }, { label: t('cr.tag.text') }), del));
+      });
+    };
+    paintT();
+    const addT = button('cr.tag.addText', 'plus', () => { tg.texts.push({ ka: '', ru: '', en: '' }); changed(); paintT(); });
+    addT.classList.add('ed-sm');
+    body.append(h('div', { class: 'ed-label' }, t('cr.tag.texts')), tlist, addT, h('div', { class: 'ed-hint' }, t('cr.tag.textsHint')));
+    body.append(h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('cr.tag.link')), inp('link', { class: 'ed-input cr-mono', placeholder: 'https://…?q=%m' }), h('div', { class: 'ed-hint' }, t('cr.tag.linkHint'))));
+    const del = button('cr.rule.remove', 'trash', () => { P().tags.splice(i, 1); changed(); paintTags(); }, 'danger'); del.classList.add('ed-sm');
+    body.append(h('div', { class: 'ap-actions' }, del));
+    det.append(body);
+    box.append(det);
+  });
+  const add = button('cr.tag.add', 'plus', () => {
+    // Tag ids only grow (max + 1): a removed tag's id is not reused, so old search tokens never point to a new tag.
+    const id = Math.max(0, ...P().tags.map((x) => x.id)) + 1;
+    P().tags.push({ id, key: 'tag' + id, label: { en: 'Tag ' + id }, icon: '', color: '#64748b', where: ['unit'], fields: [], texts: [], link: '' });
+    changed(); paintTags();
+  });
+  add.classList.add('ed-sm');
+  box.append(h('div', { class: 'ap-actions' }, add));
+}
+
+// --- samples ----------------------------------------------------------------------------------------------------
+
+const ruleName = (e) => (e.winner >= 0 ? t('cr.s.rule', { n: e.winner + 1 }) : e.winner === -1 ? t('cr.s.fallback') : t('cr.s.none'));
+
+function paintSamples() {
+  const box = els.samples;
+  box.textContent = '';
+  const keys = columnKeys(P());
+  const idx = fieldIndex(P());
+  // Datalists for option/bool columns: free typing still allowed (to test invalid values), with suggestions.
+  const lists = h('div', { hidden: true });
+  const listId = (k) => 'cr-opt-' + k;
+  for (const k of keys) {
+    const f = idx.get(k);
+    if (f && (f.options.length || f.type === 'bool')) lists.append(h('datalist', { id: listId(k) }, (f.type === 'bool' ? [{ v: 'yes' }, { v: 'no' }] : f.options).map((o) => h('option', { value: o.v }, o.label ? L(o.label) : ''))));
+  }
+  const nodes = treeOrder(P());
+  const head = h('tr', {}, h('th', {}, '#'), h('th', {}, t('cr.s.category')), keys.map((k) => h('th', { class: 'cr-mono', title: idx.get(k) ? L(idx.get(k).label) : '' }, k)), h('th', {}, t('cr.s.tags')), h('th', {}, t('cr.s.expect')), h('th', {}, t('cr.s.title')), h('th', {}, t('cr.s.ruleCol')), h('th', {}, h('span', { class: 'cr-sr' }, t('cr.s.remove'))));
+  const body = h('tbody');
+  P().samples.forEach((s, i) => {
+    const tr = h('tr', { class: 'cr-srow' + (s.id === store.ui.sample ? ' cr-on' : ''), dataset: { id: s.id } });
+    const pickBtn = h('button', { type: 'button', class: 'cr-link cr-mono', 'aria-pressed': String(s.id === store.ui.sample), onclick: () => selectSample(s.id) }, s.id);
+    // Category select indents by depth with non-breaking spaces (options cannot be styled with padding reliably).
+    const cat = h('select', { class: 'ed-input ed-select cr-cell', 'aria-label': t('cr.s.category') }, nodes.map(({ node, depth }) => h('option', { value: node.id, selected: node.id === s.node }, ' '.repeat(depth) + nodeName(P(), node.id, lang()))));
+    cat.addEventListener('change', () => { s.node = cat.value; changed(); });
+    const cell = (val, onInput, attrs = {}) => { const x = h('input', { class: 'ed-input cr-cell', value: val ?? '', spellcheck: 'false', dir: 'auto', ...attrs }); x.addEventListener('input', () => onInput(x.value)); x.addEventListener('focus', () => { if (store.ui.sample !== s.id) selectSample(s.id, false); }); return h('td', {}, x); };
+    tr.append(h('td', {}, pickBtn), h('td', {}, cat),
+      ...keys.map((k) => cell(s.values[k], (v) => { if (v === '') delete s.values[k]; else s.values[k] = v; changed(); }, { 'aria-label': `${s.id} ${k}`, list: idx.get(k) && (idx.get(k).options.length || idx.get(k).type === 'bool') ? listId(k) : null })),
+      cell(s.tags, (v) => { s.tags = v; changed(); }, { class: 'ed-input cr-cell cr-wide-cell', 'aria-label': `${s.id} ${t('cr.s.tags')}`, placeholder: 'sea dist=150' }),
+      cell(s.expect, (v) => { s.expect = v; changed(); }, { class: 'ed-input cr-cell cr-wide-cell', 'aria-label': `${s.id} ${t('cr.s.expect')}` }),
+      // Computed cells (title, winning rule) are filled by repaintResults, not here, so typing does not rebuild the table.
+      h('td', { class: 'cr-stitle' }), h('td', { class: 'cr-swin' }),
+      h('td', {}, h('button', { type: 'button', class: 'ed-iconbtn', title: t('cr.s.remove'), 'aria-label': t('cr.s.remove'), html: icon('trash'), onclick: () => { P().samples.splice(i, 1); saveProject(); paintSamples(); paintTracer(); } })));
+    body.append(tr);
+  });
+  const add = button('cr.s.add', 'plus', () => {
+    const ids = new Set(P().samples.map((s) => s.id)); let n = P().samples.length + 1; while (ids.has('s' + n)) n++;
+    P().samples.push({ id: 's' + n, node: nodeById0(), values: {}, tags: '', expect: '' });
+    store.ui.sample = 's' + n; saveUI(); saveProject(); paintSamples(); paintTracer();
+  });
+  const imp = button('cr.s.import', 'upload', importCSV);
+  const exp = button('cr.s.export', 'download', () => download('﻿' + samplesToCSV(P(), keys), 'samples.csv', 'text/csv'));
+  const clr = button('cr.s.clear', 'trash', () => { P().samples = []; saveProject(); paintSamples(); paintTracer(); }, 'danger');
+  for (const b of [add, imp, exp, clr]) b.classList.add('ed-sm');
+  box.append(h('div', { class: 'cr-ssum', id: 'cr-ssum' }), h('div', { class: 'ap-actions cr-sact' }, add, imp, exp, clr), lists,
+    h('div', { class: 'ap-table-wrap cr-swrap' }, h('table', { class: 'cr-table cr-stable' }, h('thead', {}, head), body)),
+    h('div', { class: 'ed-hint' }, t('cr.s.hint')));
+  repaintResults();
+}
+// New samples default to the first leaf node (a node with no children): leaves are where real objects live.
+const nodeById0 = () => (P().tree.find((n) => !P().tree.some((c) => c.parent === n.id)) || P().tree[0]).id;
+
+async function importCSV() {
+  const [file] = await pickFiles({ accept: '.csv,.tsv,.txt,text/csv' });
+  if (!file) return;
+  const { samples } = samplesFromCSV(P(), await file.text());
+  if (!samples.length) { toast(t('cr.s.importNone'), 'warn'); return; }
+  // Imported samples are appended, never replacing existing ones; ids were de-duplicated by samplesFromCSV.
+  P().samples.push(...samples);
+  saveProject(); paintSamples(); paintTracer();
+  toast(t('cr.s.imported', { n: samples.length }), 'ok');
+}
+
+function selectSample(id, focus = true) {
+  store.ui.sample = id; saveUI();
+  for (const tr of $$('.cr-srow')) { const on = tr.dataset.id === id; tr.classList.toggle('cr-on', on); tr.querySelector('.cr-link')?.setAttribute('aria-pressed', String(on)); }
+  paintTracer();
+  // In the one-column layout the tracer sits below the table; scroll it into view so the click has a visible effect.
+  if (focus && matchMedia('(max-width: 1100px)').matches) els.tracer.scrollIntoView({ block: 'start' });
+}
+
+// Computed columns of the table, the summary and the tracer after any edit.
+function repaintResults() {
+  let ok = 0, bad = 0;
+  for (const tr of $$('.cr-srow')) {
+    const s = P().samples.find((x) => x.id === tr.dataset.id);
+    if (!s) continue;
+    const e = evalSample(P(), s);
+    const tt = tr.querySelector('.cr-stitle');
+    tt.textContent = e.mainTitle || '—';
+    tt.classList.toggle('cr-bad', e.expectOk === false);
+    tt.classList.toggle('cr-good', e.expectOk === true);
+    tt.title = e.expectOk === false ? t('cr.s.expected', { v: e.expect }) : '';
+    tr.querySelector('.cr-swin').textContent = ruleName(e);
+    if (e.expectOk === true) ok++; else if (e.expectOk === false) bad++;
+  }
+  const sum = $('#cr-ssum');
+  if (sum) sum.textContent = t('cr.s.summary', { n: P().samples.length }) + (ok + bad ? ' · ' + t('cr.s.matches', { ok, n: ok + bad }) : '');
+  paintTracer();
+}
+
+// --- tracer -----------------------------------------------------------------------------------------------------
+
+function paintTracer() {
+  const box = els.tracer;
+  if (!box) return;
+  box.textContent = '';
+  // Falls back to the first sample when the selected id disappeared (deleted, or a project replaced).
+  const s = P().samples.find((x) => x.id === store.ui.sample) || P().samples[0];
+  if (!s) { box.append(h('div', { class: 'ap-empty' }, t('cr.tr.none'))); return; }
+  const e = evalSample(P(), s);
+  const src = P().srcLang;
+  box.append(h('div', { class: 'cr-trhead' }, h('span', { class: 'cr-mono' }, s.id), chip(e.node ? nodeName(P(), e.node.id, lang()) : t('cr.tr.noNode'), e.node ? '' : 'cr-c-bad'), chip(ruleName(e), e.winner >= 0 ? 'cr-c-win' : e.winner === -1 ? 'cr-c-off' : 'cr-c-bad')));
+  // Titles per language.
+  box.append(h('dl', { class: 'cr-titles' }, CONTENT_LANGS.map((l) => [h('dt', {}, l + (l === src ? ' ★' : '')), h('dd', { lang: l, dir: 'auto', dataset: { lang: l } }, e.titles[l] || '—')])));
+  if (e.expect) box.append(h('div', { class: 'cr-note ' + (e.expectOk ? 'cr-good' : 'cr-bad'), id: 'cr-expect', dataset: { ok: String(e.expectOk) } }, iconEl(e.expectOk ? 'ok' : 'xcircle'), h('span', {}, e.expectOk ? t('cr.tr.expectOk') : t('cr.s.expected', { v: e.expect }))));
+  const errs = Object.entries(e.errors);
+  if (errs.length) box.append(h('div', { class: 'cr-note cr-bad' }, iconEl('warn'), h('span', {}, t('cr.tr.invalid'), ' ', errs.map(([k, c]) => `${k}: ${t('cr.verr.' + c, { min: '', max: '' })}`).join('; '))));
+  // Rules.
+  const ol = h('ol', { class: 'cr-trace' });
+  for (const r of e.trace) {
+    // Per-rule state for the trace: incomplete / off / won / later (matched but an earlier rule won) / nosrc (matched,
+    // no text in any language) / nomatch. The fallback is shown as a last pseudo-rule with its own state.
+    const state = r.incomplete ? 'incomplete' : r.off ? 'off' : r.won ? 'won' : r.matched ? (Object.keys(r.texts).length ? 'later' : 'nosrc') : 'nomatch';
+    const li = h('li', { class: 'cr-tr-rule cr-st-' + state + (r.won ? ' cr-won' : ''), dataset: { index: String(r.index), state } },
+      h('div', { class: 'cr-tr-h' }, h('span', { class: 'cr-rnum' }, String(r.index + 1)), h('span', { class: 'cr-rnote' }, r.note || P().rules[r.index]?.tpl[src] || t('cr.rule.untitled')), chip(t('cr.st.' + state), 'cr-c-' + state)));
+    if (r.conds.length) li.append(h('ul', { class: 'cr-tr-conds' }, r.conds.map((c) => {
+      const v = e.values[c.v];
+      // Each condition is shown with the actual raw value it was tested against; an empty list item prints as the
+      // empty-set sign, which is how "not set" was written in the condition.
+      const actual = v == null || v === '' ? t('cr.tr.notSet') : Array.isArray(v) ? v.join(', ') : String(v);
+      return h('li', { class: c.ok ? 'cr-ok' : 'cr-no' }, iconEl(c.ok ? 'check' : 'close'), h('span', { class: 'cr-mono' }, c.v), ' ', opLabel2(c.op), COND_BARE.includes(c.op) ? '' : ' ' + c.a.map((x) => (x === '' ? '∅' : x)).join(', '), h('span', { class: 'cr-muted' }, ` (${actual})`));
+    })));
+    else if (!r.incomplete) li.append(h('div', { class: 'cr-muted cr-tr-always' }, t('cr.tr.always')));
+    if (Object.keys(r.texts).length) li.append(h('dl', { class: 'cr-tr-texts' }, CONTENT_LANGS.filter((l) => r.texts[l]).map((l) => [h('dt', {}, l), h('dd', { lang: l }, r.texts[l])])));
+    ol.append(li);
+  }
+  const fbState = e.winner === -1 ? 'won' : e.winner >= 0 ? 'later' : 'nomatch';
+  ol.append(h('li', { class: 'cr-tr-rule cr-st-' + fbState + (e.winner === -1 ? ' cr-won' : ''), dataset: { index: 'fallback', state: fbState } },
+    h('div', { class: 'cr-tr-h' }, h('span', { class: 'cr-rnum' }, '∗'), h('span', { class: 'cr-rnote' }, t('cr.fallback')), chip(t('cr.st.' + (e.winner === -1 ? 'won' : e.winner >= 0 ? 'skipped' : 'empty')), 'cr-c-' + fbState)),
+    h('div', { class: 'cr-mono cr-muted' }, P().fallback[src] || '—')));
+  box.append(h('h3', { class: 'cr-h3' }, t('cr.tr.rules')), ol);
+  // Tags.
+  box.append(h('h3', { class: 'cr-h3' }, t('cr.tags')));
+  if (!e.tags.length && !e.unknownTags.length) box.append(h('div', { class: 'ed-hint' }, t('cr.tr.noTags')));
+  for (const tg of e.tags) {
+    box.append(h('div', { class: 'cr-tagres' },
+      h('div', { class: 'cr-row' }, h('span', { class: 'cr-tagdot', style: { background: tg.def.color || '#888' } }, tg.def.icon || ''), h('b', {}, L(tg.def.label)), h('span', { class: 'cr-mono cr-muted' }, 't' + tg.def.id)),
+      h('dl', { class: 'cr-tr-texts' }, CONTENT_LANGS.map((l) => [h('dt', {}, l), h('dd', { lang: l }, tg.texts[l])])),
+      tg.link ? h('div', { class: 'cr-mono cr-wrap cr-muted' }, '↗ ', tg.link) : null,
+      h('div', { class: 'cr-tokens' }, tg.tokens.map((x) => h('code', {}, x)))));
+  }
+  if (e.unknownTags.length) box.append(h('div', { class: 'cr-note cr-bad' }, iconEl('warn'), h('span', {}, t('cr.tr.unknownTags', { list: e.unknownTags.join(', ') }))));
+  if (e.tokens.length) box.append(h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('cr.tr.tokens')), h('code', { class: 'cr-mono cr-wrap', id: 'cr-tokens' }, e.tokens.join(' '))));
+  // Values and variables.
+  // Values table: raw value, template variable text in the source language, and the origin (sample or category).
+  const vars = e.varsFor(src);
+  box.append(h('details', { class: 'cr-details' }, h('summary', {}, iconEl('chevRight'), t('cr.tr.values')),
+    h('div', { class: 'ap-table-wrap' }, h('table', { class: 'cr-table' }, h('thead', {}, h('tr', {}, h('th', {}, t('cr.tr.key')), h('th', {}, t('cr.tr.raw')), h('th', {}, t('cr.tr.var', { l: src })), h('th', {}, t('cr.tr.from')))),
+      h('tbody', {}, Object.keys(e.values).map((k) => h('tr', {}, h('td', { class: 'cr-mono' }, k), h('td', { class: 'cr-mono' }, JSON.stringify(e.values[k])), h('td', {}, vars[k] ?? ''), h('td', {}, e.from[k] === 'sample' ? t('cr.tr.sample') : e.from[k] ? nodeName(P(), e.from[k], lang()) : '—'))))))));
+}
+const opLabel2 = (op) => t('cr.op.' + op);
+
+onProject(() => render());
+startShell('rules', () => render());
+render();

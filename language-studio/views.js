@@ -1,0 +1,190 @@
+// language-studio/views.js - lessons: every kind of course section (texts with tables and examples, word lists,
+// expressions taken apart, dialogues, poems, etymologies, borrowings, characters, variants, false friends,
+// compositions) rendered in the chosen explanation language.
+//
+//   renderSection(C, section) -> element      C: { course, lang, doc, speak(text), canSpeak, onLearn(section) }
+//   wordRow(C, w, opts) / partsEl(C, parts, roles) - shared with tools and the dictionary
+import { h } from '../ui/dom.js';
+import { iconEl } from '../ui/icons.js';
+import { t } from '../ui/i18n.js';
+import { toDeva } from '../lingua/iast.js';
+import { METERS, scan } from '../lingua/meter.js';
+import { CASES, POSTPOSITIONS, ROLES, SCREEVES, decline, paradigm, translit } from '../lingua/kartuli.js';
+import { TONES } from '../lingua/pinyin.js';
+import { strength } from '../lingua/srs.js';
+import { CHARS } from './courses/cjk.js';
+import { pick, wordId } from './courses/index.js';
+import { VERBS } from './courses/ka.js';
+import { extraBlock } from './lesson-extra.js';
+
+// X: text of a multilingual field in the course's explanation language (with fallbacks, courses/index.js pick).
+export const X = (C, obj) => pick(obj, C.lang, C.course);
+const langAttr = (C) => ({ ka: 'ka', xmf: 'xmf', ko: 'ko', ja: 'ja', zh: 'zh', sa: 'sa', ru: 'ru', en: 'en' }[C.course.id]);
+
+export function speakBtn(C, text) {
+  if (!C.canSpeak) return null;
+  return h('button', { type: 'button', class: 'ed-iconbtn ls-say', title: t('ls.listen'), 'aria-label': t('ls.listen'), onclick: (e) => { e.stopPropagation(); C.speak(text); } }, iconEl('play'));
+}
+
+// A word with its transcription, meaning and note; Sanskrit words in IAST also in Devanagari.
+export function wordRow(C, w, { id = null, deva = false } = {}) {
+  const card = id ? C.doc.cards[id] : null;
+  const st = card ? strength(card) : null;
+  const shown = deva ? toDeva(w.w) : w.w;
+  return h('div', { class: 'ls-word' },
+    h('div', { class: 'ls-word-main' },
+      h('span', { class: 'ls-w', lang: langAttr(C) }, shown),
+      deva ? h('span', { class: 'ls-iast' }, w.w) : null,
+      w.tr ? h('span', { class: 'ls-tr' }, w.tr) : null,
+      speakBtn(C, deva ? shown : w.w),
+      st !== null ? h('span', { class: 'ls-meter', title: t('ls.strength', { n: Math.round(st * 100) }) }, h('span', { style: { width: Math.round(st * 100) + '%' } })) : null),
+    h('div', { class: 'ls-m' }, X(C, w.m)),
+    w.note ? h('div', { class: 'ls-note' }, X(C, w.note)) : null);
+}
+
+// Morphemes as coloured chips with their roles.
+export function partsEl(C, parts, roleNotes = null) {
+  return h('div', { class: 'ls-parts', lang: langAttr(C) }, parts.map((p) => {
+    const s = Array.isArray(p) ? { s: p[0], note: p[1] } : p;
+    const role = s.role || '';
+    const note = s.note || (roleNotes && roleNotes[role] ? X(C, roleNotes[role]) : '') || (s.gloss ? X(C, s.gloss) : '');
+    return h('span', { class: 'ls-part' + (role ? ' ls-r-' + role : ''), title: note, tabindex: '0' },
+      h('b', null, s.s.trim() || '·'), note ? h('small', null, note) : null);
+  }));
+}
+
+const blockEl = (C, b) => {
+  if (b.h) return h('h3', null, X(C, b.h));
+  if (b.p) return h('p', null, X(C, b.p));
+  if (b.table) return h('div', { class: 'ap-table-wrap' }, h('table', { class: 'ap-table ls-table' },
+    h('thead', null, h('tr', null, b.table.head.map((x) => h('th', null, x)))),
+    h('tbody', null, b.table.rows.map((r) => h('tr', null, r.map((x) => h('td', { lang: /[ა-ჿऀ-ॿ぀-ヿ一-鿿가-힣ㄱ-ㅣ]/.test(x) ? langAttr(C) : null }, x)))))));
+  if (b.ex) return h('div', { class: 'ls-words' }, b.ex.map((w) => wordRow(C, w)));
+  if (b.decline) return declineEl(C, b.decline);
+  if (b.verb) return paradigmEl(C, VERBS.find((v) => v.id === b.verb), 'present', 'neutral');
+  if (b.quiz || b.try) return extraBlock(C, b);
+  if (b.tones) return h('div', { class: 'ls-tones' }, TONES.map((x) => h('div', { class: 'ls-tone' }, h('b', null, x.n === 5 ? '·' : String(x.n)), toneSvg(x.contour), h('span', null, C.lang === 'ja' ? x.ja : x.ru))));
+  return null;
+};
+
+export function toneSvg(contour) {
+  if (!/^\d+$/.test(contour)) return h('span', { class: 'ls-tone-svg' });
+  const pts = [...contour].map((d, i, a) => `${(i / Math.max(1, a.length - 1)) * 40 + 4},${44 - (+d - 1) * 10}`).join(' ');
+  return h('span', { class: 'ls-tone-svg', html: `<svg viewBox="0 0 48 48" width="40" height="40" aria-hidden="true"><path d="M4 4H44M4 44H44" stroke="currentColor" stroke-opacity=".2"/><polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>` });
+}
+
+export function declineEl(C, noun) {
+  const d = decline(noun);
+  const row = (label, f) => h('tr', null, h('th', null, label), h('td', { lang: 'ka' }, partsEl(C, f.parts, ROLES)), h('td', { class: 'ls-form' }, h('span', { lang: 'ka' }, f.form), ' ', h('span', { class: 'ls-tr' }, translit(f.form, C.lang === 'ru' ? 'ru' : 'lat'))));
+  return h('div', { class: 'ls-decl' },
+    h('div', { class: 'ap-table-wrap' }, h('table', { class: 'ap-table ls-table' },
+      h('thead', null, h('tr', null, h('th', null, noun), h('th', null, t('ls.ka.singular')), h('th', null, ''))),
+      h('tbody', null, d.cases.map((c) => row(X(C, CASES.find((x) => x.id === c.id)), c))))),
+    h('div', { class: 'ap-table-wrap' }, h('table', { class: 'ap-table ls-table' },
+      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, t('ls.ka.plural')), h('th', null, ''))),
+      h('tbody', null, d.plural.map((c) => row(X(C, CASES.find((x) => x.id === c.id)), c))))),
+    h('div', { class: 'ap-table-wrap' }, h('table', { class: 'ap-table ls-table' },
+      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, t('ls.ka.post')), h('th', null, ''))),
+      h('tbody', null, d.post.map((c) => { const pp = POSTPOSITIONS.find((x) => x.id === c.id); return row(`-${pp.s} «${X(C, pp)}»`, c); })))));
+}
+
+const PERSON_LABEL = { '1sg': 'მე', '2sg': 'შენ', '3sg': 'ის', '1pl': 'ჩვენ', '2pl': 'თქვენ', '3pl': 'ისინი' };
+export function paradigmEl(C, verb, screeve, version, o = '3sg') {
+  const rows = paradigm(verb, screeve, version, o);
+  const sc = SCREEVES.find((x) => x.id === screeve);
+  return h('div', { class: 'ap-table-wrap' }, h('table', { class: 'ap-table ls-table ls-paradigm' },
+    h('thead', null, h('tr', null, h('th', null, X(C, sc) + ' · ' + X(C, verb.m)), h('th', null, ''), h('th', null, ''))),
+    h('tbody', null, rows.map((r) => h('tr', null, h('th', { lang: 'ka' }, PERSON_LABEL[r.s] + ' (' + r.s + ')'),
+      h('td', null, r.parts.length ? partsEl(C, r.parts, ROLES) : '—'), h('td', { class: 'ls-form' }, r.parts.length ? [h('span', { lang: 'ka' }, r.form), ' ', h('span', { class: 'ls-tr' }, translit(r.form, C.lang === 'ru' ? 'ru' : 'lat'))] : ''))))));
+}
+
+function charCard(C, ch, zhCourse) {
+  const c = CHARS.find((x) => x.ja === ch);
+  if (!c) return null;
+  const main = zhCourse ? c.zh : c.ja;
+  return h('div', { class: 'ls-char' },
+    h('div', { class: 'ls-char-big', lang: zhCourse ? 'zh' : 'ja' }, main),
+    h('div', { class: 'ls-char-forms' },
+      zhCourse ? [c.trad !== c.zh ? h('span', { title: t('ls.cjk.trad') }, '繁 ' + c.trad) : null, c.ja !== c.zh ? h('span', { title: t('ls.cjk.ja') }, '日 ' + c.ja) : null]
+        : [c.trad !== c.ja ? h('span', { title: t('ls.cjk.trad') }, '繁 ' + c.trad) : null, c.zh !== c.ja ? h('span', { title: t('ls.cjk.simp') }, '简 ' + c.zh) : null]),
+    h('div', { class: 'ls-tr' }, zhCourse ? c.py : `${c.on} · ${c.kun}`),
+    h('div', { class: 'ls-m' }, X(C, c.m)),
+    c.comp.length ? h('div', { class: 'ls-note' }, c.comp.join(' + ')) : null,
+    speakBtn(C, main));
+}
+
+// One renderer per section kind (switch on s.kind): the course files stay pure data and every kind looks the same in
+// all courses. <article> per section, <header> with the level tag and, for word lists, the button into flash cards.
+// Group headings are emitted when w.group changes, so groups follow the author's order without a nested structure.
+export function renderSection(C, s) {
+  const el = h('article', { class: 'ls-section' });
+  el.append(h('header', { class: 'ls-sec-head' },
+    h('h2', null, X(C, s.title)), s.level ? h('span', { class: 'ed-tag' }, s.level) : null,
+    s.kind === 'words' ? h('button', { type: 'button', class: 'ed-btn ed-primary', onclick: () => C.onLearn(s) }, iconEl('sparkle'), t('ls.learnCards')) : null));
+  if (s.intro) el.append(h('p', { class: 'ap-lead' }, X(C, s.intro)));
+  const deva = !!s.deva;
+  switch (s.kind) {
+    case 'text': el.append(...s.blocks.map((b) => blockEl(C, b)).filter(Boolean)); break;
+    case 'words': {
+      let group = null;
+      const list = h('div', { class: 'ls-words' });
+      for (const w of s.words) {
+        if (w.group && w.group !== group) { group = w.group; list.append(h('h3', { class: 'ls-group' }, group)); }
+        list.append(wordRow(C, w, { id: wordId(C.course, s, w), deva }));
+      }
+      el.append(list);
+      break;
+    }
+    case 'parse': el.append(...s.items.map((it) => h('div', { class: 'ls-parse' },
+      h('div', { class: 'ls-word-main' }, h('span', { class: 'ls-w', lang: langAttr(C) }, it.w), it.tr ? h('span', { class: 'ls-tr' }, it.tr) : null, h('span', { class: 'ls-m' }, X(C, it.m)), speakBtn(C, it.w)),
+      partsEl(C, it.parts),
+      it.lit ? h('p', null, h('b', null, t('ls.literally') + ' '), X(C, it.lit)) : null,
+      it.now ? h('p', null, h('b', null, t('ls.narrowed') + ' '), X(C, it.now)) : null,
+      it.orig ? h('p', { class: 'ls-orig' }, h('b', null, t('ls.original') + ' '), X(C, it.orig)) : null,
+      it.note ? h('p', { class: 'ls-note' }, X(C, it.note)) : null))); break;
+    case 'dialogue': el.append(h('div', { class: 'ls-dialogue' }, s.lines.map((l) => h('div', { class: 'ls-line' },
+      l.who ? h('span', { class: 'ls-who', lang: langAttr(C) }, l.who) : null,
+      h('div', null, h('div', { class: 'ls-word-main' }, h('span', { class: 'ls-w', lang: langAttr(C) }, l.w), speakBtn(C, l.w)), l.tr ? h('div', { class: 'ls-tr' }, l.tr) : null, h('div', { class: 'ls-m' }, X(C, l.m)), l.note ? h('div', { class: 'ls-note' }, X(C, l.note)) : null))))); break;
+    case 'poem': el.append(h('div', { class: 'ls-poem' }, s.lines.map((l) => {
+      const scanBox = h('div', { class: 'ls-scan', hidden: true });
+      return h('div', { class: 'ls-line' },
+        l.who ? h('span', { class: 'ls-who' }, l.who) : null,
+        h('div', null,
+          h('div', { class: 'ls-word-main' }, h('span', { class: 'ls-w', lang: langAttr(C) }, deva ? toDeva(l.w) : l.w), speakBtn(C, deva ? toDeva(l.w) : l.w),
+            deva ? h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => { scanBox.hidden = !scanBox.hidden; if (!scanBox.childNodes.length) scanBox.append(scanEl(C, l.w)); } }, t('ls.sa.scan')) : null),
+          deva ? h('div', { class: 'ls-iast' }, l.w) : l.tr ? h('div', { class: 'ls-tr' }, l.tr) : null,
+          h('div', { class: 'ls-m' }, X(C, l.m)), l.note ? h('div', { class: 'ls-note' }, X(C, l.note)) : null, scanBox));
+    })));
+      if (s.note) el.append(h('p', { class: 'ls-note' }, X(C, s.note)));
+      break;
+    case 'etym': el.append(h('div', { class: 'ls-cards' }, s.items.map((e) => h('div', { class: 'ls-card' },
+      h('div', { class: 'ls-word-main' }, h('span', { class: 'ls-w', lang: 'en' }, e.w), h('span', { class: 'ls-tr' }, e.tr), speakBtn(C, e.w)),
+      h('div', { class: 'ls-m' }, X(C, e.m)), h('div', { class: 'ls-path' }, e.path), h('p', { class: 'ls-note' }, X(C, e.note)))))); break;
+    case 'borrow': el.append(h('div', { class: 'ls-cards' }, s.items.map((b) => h('div', { class: 'ls-card' },
+      h('h3', null, b.from), h('p', { class: 'ls-note' }, X(C, b.note)), h('div', { class: 'ed-chips ls-chips' }, b.list.split(/,\s*/).map((x) => h('span', { class: 'ed-chip' }, x))))))); break;
+    case 'kanji': el.append(h('div', { class: 'ls-chars' }, s.chars.map((ch) => charCard(C, ch, s.lang === 'zh')).filter(Boolean))); break;
+    case 'variants': el.append(h('div', { class: 'ap-table-wrap' }, h('table', { class: 'ap-table ls-table ls-variants' },
+      h('thead', null, h('tr', null, h('th', null, t('ls.cjk.ja')), h('th', null, t('ls.cjk.trad')), h('th', null, t('ls.cjk.simp')), h('th', null, ''))),
+      h('tbody', null, s.items.map(([ja, tr, zh, note]) => h('tr', null, h('td', { lang: 'ja' }, ja), h('td', { lang: 'zh-Hant' }, tr), h('td', { lang: 'zh' }, zh), h('td', { class: 'ls-note' }, note))))))); break;
+    case 'false': el.append(h('div', { class: 'ap-table-wrap' }, h('table', { class: 'ap-table ls-table' },
+      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, t('ls.cjk.inJa')), h('th', null, t('ls.cjk.inZh')))),
+      h('tbody', null, s.items.map(([w, jr, jm, zp, zm]) => h('tr', null, h('td', { class: 'ls-w' }, w), h('td', null, h('div', { class: 'ls-tr' }, jr), jm), h('td', null, h('div', { class: 'ls-tr' }, zp), zm))))))); break;
+    case 'compose': el.append(h('div', { class: 'ls-cards' }, s.items.map(([r, comp, ru, zh, ja, note]) => h('div', { class: 'ls-card ls-compose' },
+      h('div', { class: 'ls-formula', lang: C.course.id }, comp.split(' ').join(' + '), ' = ', h('b', null, r)),
+      h('div', { class: 'ls-m' }, X(C, { ru, zh, ja })), h('p', { class: 'ls-note' }, note))))); break;
+    default: break;
+  }
+  return el;
+}
+
+export function scanEl(C, text) {
+  const r = scan(text);
+  const box = h('div', { class: 'ls-scan-box' });
+  for (const p of r.padas) {
+    box.append(h('div', { class: 'ls-pada' },
+      h('div', { class: 'ls-syls' }, p.syl.map((s) => h('span', { class: 'ls-syl' + (s.heavy ? ' ls-heavy' : ' ls-light'), title: t('ls.sa.why.' + s.why) }, h('b', null, s.heavy ? '–' : '⏑'), h('small', null, s.text)))),
+      h('span', { class: 'ls-count' }, t('ls.sa.syllables', { n: p.count }))));
+  }
+  if (r.meter) box.append(h('p', { class: 'ls-note' }, t('ls.sa.meterIs', { m: METERS[r.meter.id].name }), r.meter.missing ? ' ' + t('ls.sa.restored', { n: r.meter.missing }) : ''));
+  return box;
+}

@@ -1,0 +1,419 @@
+// embroidery-studio/site.js - the scheme site: the catalogue (search, categories, difficulty, size, colours, source,
+// designer, tags, sorting), the page of a scheme (preview in three looks, facts for the chosen fabric, the key with
+// skeins in any thread brand, the shopping list, downloads, printing, starting to stitch, editing a copy, sending to
+// the site) and "my schemes" (my charts, stitching in progress, imports, backups, publishing a static site pack).
+
+//
+// The filter state lives at module level (not per render), so going back from a scheme page to the catalogue keeps
+// the user's search and filters. Query parameters in the hash (?q=, ?cat=, ?tag=, ?designer=) seed it, which makes
+// tag / designer links on scheme pages deep-linkable.
+import { h, debounce } from '../ui/dom.js';
+import { t, UI_STATE } from '../ui/i18n.js';
+import { iconEl } from '../ui/icons.js';
+import { seg, select, button, copyText, download } from '../ui/app.js';
+import { openDialog, confirmDialog, toast, openMenu } from '../ui/overlays.js';
+import { pickFiles } from '../ui/files.js';
+import { fromJSON, toJSON, cloneScheme, newId, flatten } from '../stitch/model.js';
+import { readOXS } from '../stitch/oxs.js';
+import { SYMBOLS } from '../stitch/symbols.js';
+import { legend, shoppingList, stats as schemeStats } from '../stitch/estimate.js';
+import { paginate, pageCapacity } from '../stitch/pages.js';
+import { createChartView } from '../stitch/view.js';
+import { writeZip } from '../zip/zip.js';
+import { CATEGORIES } from './demo.js';
+import { loadCatalog, getScheme, getItem, queryItems, thumbFor, saveMine, onCatalogChange, backendInfo, dropMineFromCache } from './catalog.js';
+import { settings, setSettings, listMine, deleteMine, getProgress, listProgress } from './store.js';
+import { upload, serverHit } from './remote.js';
+import { itemTitle, itemDescription, categoryName, tagName, difficultyEl, sizeText, fabricText, fmtNum, chip, exportScheme, printScheme, brandList, equivalent, entryLabel, artifactMode, thumbURL, safeName } from './common.js';
+import { progressSummary } from './progress.js';
+
+// Cards rendered per "more" click: thumbnails are generated on demand, so a short first page keeps the initial work
+// small even for a large catalogue.
+const PAGE = 24;
+const state = { text: '', category: 'all', difficulty: [], size: 'all', colors: 'all', src: 'all', designer: '', tag: '', shown: PAGE };
+
+// --- catalogue ---------------------------------------------------------------------------------------------------
+
+// Search is debounced 220 ms; the results section is a polite live region so the new count is announced.
+export function renderHome(main, { go, query = {} }) {
+  if (query.q != null) state.text = query.q;
+  if (query.cat) state.category = query.cat;
+  if (query.tag != null) state.tag = query.tag;
+  if (query.designer != null) state.designer = query.designer;
+  const st = settings();
+  const search = h('input', { type: 'search', class: 'ed-input es-search-in', placeholder: t('home.searchPh'), value: state.text, 'aria-label': t('home.search') });
+  const results = h('div', { class: 'es-cards' + (st.view === 'list' ? ' es-list' : '') });
+  const count = h('span', { class: 'es-count' });
+  const filters = h('aside', { class: 'es-filters', 'aria-label': t('home.filters') });
+  const more = h('button', { type: 'button', class: 'ed-btn es-more' }, t('home.more'));
+  const activeBox = h('div', { class: 'es-active' });
+  const mode = artifactMode();
+  const hero = h('section', { class: 'es-hero' },
+    h('div', { class: 'es-hero-text' },
+      h('p', { class: 'es-kicker' }, t('home.kicker')),
+      h('h2', { class: 'es-hero-t' }, t('home.title')),
+      h('p', { class: 'es-hero-s' }, t('home.lead')),
+      h('form', { class: 'es-search', role: 'search', onsubmit: (e) => { e.preventDefault(); state.text = search.value; refresh(); } }, iconEl('search'), search),
+      h('div', { class: 'es-hero-acts' },
+        h('a', { class: 'ed-btn ed-primary', href: '#/convert' }, iconEl('image'), t('home.convert')),
+        h('a', { class: 'ed-btn', href: '#/new' }, iconEl('filePlus'), t('home.new')),
+        h('button', { type: 'button', class: 'ed-btn', onclick: () => importFiles(go) }, iconEl('upload'), t('home.open')))),
+    h('div', { class: 'es-hero-art', 'aria-hidden': 'true' }, h('div', { class: 'es-hoop' }, h('img', { alt: '', class: 'es-hoop-img' }))));
+  // The hero hoop shows a real chart thumbnail (the demo mandala) rendered by the same code as the catalogue cards.
+  thumbFor({ key: 'demo:mandala', src: 'demo', id: 'mandala' }).then((u) => { const im = hero.querySelector('.es-hoop-img'); if (im) im.src = u; }).catch(() => {});
+  const head = h('div', { class: 'es-results-head' }, count, activeBox, h('span', { class: 'ed-spacer' }),
+    h('button', { type: 'button', class: 'ed-btn es-filter-btn', onclick: () => document.body.classList.toggle('es-filters-open') }, iconEl('filter'), t('home.filters')),
+    h('label', { class: 'es-sort' }, h('span', {}, t('home.sort')), select(['new', 'popular', 'title', 'easy', 'size', 'colors'].map((v) => ({ v, l: 'sort.' + v })), st.sort, (v) => { setSettings({ sort: v }); refresh(); })),
+    seg([{ v: 'grid', l: 'home.grid', icon: 'grid', iconOnly: true }, { v: 'list', l: 'home.list', icon: 'list', iconOnly: true }], st.view, (v) => { setSettings({ view: v }); results.classList.toggle('es-list', v === 'list'); }, 'home.layout'));
+  main.append(hero, h('div', { class: 'es-catalog' }, filters, h('section', { class: 'es-results', 'aria-live': 'polite' }, head, results, more)),
+    mode === 'offline' ? h('p', { class: 'ed-hint es-modehint' }, t('home.offlineMode')) : null);
+  search.addEventListener('input', debounce(() => { state.text = search.value; state.shown = PAGE; refresh(); }, 220));
+  more.addEventListener('click', () => { state.shown += PAGE; refresh(); });
+
+  let all = [];
+  // Facets are computed from the loaded items: only categories that exist are listed, with counts; source and
+  // designer selectors appear only when there is a choice to make.
+  function renderFilters() {
+    filters.textContent = '';
+    const counts = {};
+    for (const x of all) counts[x.category] = (counts[x.category] || 0) + 1;
+    const catBtn = (c, n) => h('button', { type: 'button', class: 'es-cat' + (state.category === c ? ' on' : ''), 'aria-pressed': String(state.category === c), onclick: () => { state.category = c; state.shown = PAGE; refresh(); } },
+      h('span', {}, c === 'all' ? t('cat.all') : categoryName(c)), h('b', {}, String(n)));
+    const sec = (title, ...kids) => h('div', { class: 'es-fsec' }, h('h3', {}, t(title)), ...kids);
+    const diff = h('div', { class: 'es-diffpick' }, [1, 2, 3, 4, 5].map((d) => h('button', {
+      type: 'button', class: 'ed-chip es-dchip' + (state.difficulty.includes(d) ? ' on' : ''), 'aria-pressed': String(state.difficulty.includes(d)), title: t('diff.' + d),
+      onclick: () => { state.difficulty = state.difficulty.includes(d) ? state.difficulty.filter((x) => x !== d) : [...state.difficulty, d]; refresh(); },
+    }, difficultyEl(d), h('span', {}, t('diff.' + d)))));
+    const designers = [...new Set(all.map((x) => x.designer).filter(Boolean))].sort();
+    const srcs = ['all', 'demo', ...new Set(all.map((x) => x.src).filter((s) => s !== 'demo'))];
+    filters.append(
+      h('div', { class: 'es-fhead' }, h('b', {}, t('home.filters')), h('button', { type: 'button', class: 'ed-btn es-fclose', onclick: () => document.body.classList.remove('es-filters-open') }, iconEl('close'))),
+      sec('home.categories', h('div', { class: 'es-cats' }, catBtn('all', all.length), ...CATEGORIES.filter((c) => counts[c]).map((c) => catBtn(c, counts[c])))),
+      sec('es.difficulty', diff),
+      sec('home.size', seg([{ v: 'all', l: 'any' }, { v: 's', l: 'size.s' }, { v: 'm', l: 'size.m' }, { v: 'l', l: 'size.l' }], state.size, (v) => { state.size = v; refresh(); }, 'home.size')),
+      sec('home.colors', seg([{ v: 'all', l: 'any' }, { v: 'few', l: 'colors.few' }, { v: 'some', l: 'colors.some' }, { v: 'many', l: 'colors.many' }], state.colors, (v) => { state.colors = v; refresh(); }, 'home.colors')),
+      srcs.length > 2 ? sec('home.source', select(srcs.map((v) => ({ v, l: 'src.' + v })), state.src, (v) => { state.src = v; refresh(); })) : null,
+      designers.length > 1 ? sec('home.designer', select([{ v: '', l: 'any' }, ...designers.map((d) => ({ v: d, l: '=' + d }))], state.designer, (v) => { state.designer = v; refresh(); })) : null,
+      h('button', { type: 'button', class: 'ed-btn es-reset', onclick: () => { Object.assign(state, { text: '', category: 'all', difficulty: [], size: 'all', colors: 'all', src: 'all', designer: '', tag: '' }); search.value = ''; refresh(); } }, iconEl('refresh'), t('home.reset')));
+  }
+
+  const progressCache = new Map();
+  // Progress badges on cards come from stored progress, loaded once in parallel with the catalogue.
+  listProgress().then((ps) => { for (const p of ps) progressCache.set(p.key, p); refresh(false); }).catch(() => {});
+
+  function refresh(filtersToo = true) {
+    if (filtersToo) renderFilters();
+    const list = queryItems(all, { ...state, sort: settings().sort });
+    count.textContent = t('home.count', { n: list.length });
+    activeBox.textContent = '';
+    if (state.tag) activeBox.append(h('button', { type: 'button', class: 'ed-chip es-chip on', onclick: () => { state.tag = ''; refresh(); } }, '#' + tagName(state.tag), iconEl('close')));
+    if (state.designer) activeBox.append(h('button', { type: 'button', class: 'ed-chip es-chip on', onclick: () => { state.designer = ''; refresh(); } }, state.designer, iconEl('close')));
+    results.textContent = '';
+    if (!list.length) results.append(h('div', { class: 'es-empty' }, iconEl('search'), h('p', {}, t('home.none'))));
+    for (const x of list.slice(0, state.shown)) results.append(card(x, progressCache.get(x.key)));
+    more.hidden = list.length <= state.shown;
+  }
+
+  loadCatalog().then((items) => { all = items; refresh(); });
+  const off = onCatalogChange(() => { loadCatalog().then((items) => { all = items; refresh(); }); });
+  return { destroy: () => { off(); document.body.classList.remove('es-filters-open'); } };
+}
+
+// Cards are plain links (#/s/<key>): open in new tab, copy link and keyboard activation work natively. Thumbnails
+// load lazily (loading=lazy, async decode) and are filled in when generated.
+function card(x, progress) {
+  const img = h('img', { alt: '', loading: 'lazy', decoding: 'async' });
+  const thumb = h('div', { class: 'es-thumb' }, img);
+  thumbFor(x).then((u) => { img.src = u; }).catch(() => thumb.classList.add('es-thumb-err'));
+  const pct = progress && progress.total ? Math.round((100 * progress.doneCount) / progress.total) : null;
+  return h('a', { class: 'es-card', href: '#/s/' + encodeURIComponent(x.key), dataset: { key: x.key } },
+    thumb,
+    x.src !== 'demo' ? h('span', { class: 'es-src es-src-' + x.src }, t('src.' + x.src)) : null,
+    pct != null ? h('span', { class: 'es-pct', title: t('prog.done', { pct }) }, pct + '%') : null,
+    h('div', { class: 'es-card-b' },
+      h('h3', { class: 'es-card-t' }, itemTitle(x)),
+      h('div', { class: 'es-card-m' }, h('span', {}, `${x.width} × ${x.height}`), h('span', {}, t('es.ncolors', { n: x.colors })), x.difficulty ? difficultyEl(x.difficulty) : null),
+      h('div', { class: 'es-card-d' }, h('span', {}, categoryName(x.category)), x.designer ? h('span', {}, x.designer) : null)));
+}
+
+// Files dropped on the page or picked: OXS, JSON schemes (and pictures go to the converter).
+// File type by content, not extension: text starting with '<' is OXS (XML), anything else is tried as JSON. Pictures
+// are handed to the converter through a one-shot global (a File cannot go through the URL).
+export async function importFiles(go, files = null) {
+  files = files || await pickFiles({ accept: '.oxs,.xml,.json,.stitch,image/*', multiple: true });
+  let last = null;
+  for (const f of files) {
+    try {
+      if (/^image\//.test(f.type)) { sessionStorage.setItem('es-convert-pending', '1'); window.__esPendingImage = f; go('convert'); return; }
+      const text = await f.text();
+      const s = /^\s*</.test(text) ? readOXS(text) : fromJSON(text);
+      s.id = newId('s');
+      if (!s.meta.title) s.meta.title = f.name.replace(/\.[^.]+$/, '');
+      await saveMine(s, { origin: 'import' });
+      last = s;
+      toast(t('my.imported', { name: s.meta.title }), 'ok');
+    } catch (e) {
+      toast(t('err.import', { name: f.name, msg: e.message }), 'error');
+    }
+  }
+  if (last) go('s/' + encodeURIComponent('my:' + last.id));
+}
+
+// --- the page of a scheme ------------------------------------------------------------------------------------------
+
+// Server items count a view on open (best effort). Fabric count and strands are user settings that recompute facts
+// (finished size, fabric to buy) and the key (skeins) live: the same chart is a different project on 14- or
+// 18-count fabric.
+export async function renderScheme(main, { key, go }) {
+  const box = h('div', { class: 'es-loading' }, h('span', { class: 'ed-spinner' }), t('es.loading'));
+  main.append(box);
+  await loadCatalog();
+  let scheme;
+  try { scheme = await getScheme(key); } catch (e) { box.replaceWith(notFound(e.message)); return {}; }
+  box.remove();
+  const item = getItem(key) || { key, src: key.split(':')[0], id: key.slice(key.indexOf(':') + 1), title: scheme.meta.title, designer: scheme.meta.designer, category: scheme.meta.category, tags: scheme.meta.tags, difficulty: scheme.meta.difficulty, width: scheme.width, height: scheme.height, colors: scheme.palette.length };
+  if (item.src === 'srv') serverHit(item.id, 'view');
+  const title = itemTitle(item);
+  document.title = title + ' — ' + t('app.name');
+  const st = settings();
+  const flat = flatten(scheme);
+  const S = schemeStats(scheme, flat);
+  const progress = await getProgress(key).catch(() => null);
+  const info = await backendInfo();
+
+  // Preview: a small read-only viewer with three looks.
+  let look = 'color';
+  const prevBox = h('div', { class: 'es-prev-box' });
+  const lookSeg = seg([{ v: 'color', l: 'look.picture' }, { v: 'colorSymbols', l: 'look.chart' }, { v: 'realistic', l: 'look.stitched' }], look, (v) => { look = v; view.redraw(); }, 'look.label');
+  const preview = h('div', { class: 'es-preview' }, h('div', { class: 'es-prev-head' }, lookSeg, h('span', { class: 'ed-spacer' }), h('a', { class: 'ed-btn', href: '#/view/' + encodeURIComponent(key) }, iconEl('zoomIn'), t('sch.open'))), prevBox);
+  main.append(h('nav', { class: 'es-crumbs', 'aria-label': t('es.breadcrumbs') }, h('a', { href: '#/' }, t('nav.catalog')), h('span', {}, '›'), h('a', { href: '#/?cat=' + encodeURIComponent(item.category || 'other') }, categoryName(item.category)), h('span', {}, '›'), h('span', {}, title)));
+  const facts = h('dl', { class: 'es-facts' });
+  const countSel = select([11, 14, 16, 18, 20, 22, 25, 28].map((v) => ({ v, l: '=' + t('sch.countN', { n: v }) })), st.count, (v) => { setSettings({ count: +v }); renderFacts(); renderLegend(); });
+  const strandsSel = select([1, 2, 3, 4, 6].map((v) => ({ v, l: '=' + t('sch.strandsN', { n: v }) })), st.strands, (v) => { setSettings({ strands: +v }); renderLegend(); });
+  function renderFacts() {
+    const count = settings().count;
+    const cap = pageCapacity({ paper: settings().paper, cellMm: settings().cellMm, landscape: settings().landscape });
+    const pg = paginate(scheme.width, scheme.height, { cols: cap.cols, rows: cap.rows, overlap: settings().overlap });
+    facts.textContent = '';
+    const row = (k, ...v) => facts.append(h('dt', {}, t(k)), h('dd', {}, ...v));
+    row('sch.stitchSize', `${scheme.width} × ${scheme.height}`);
+    row('sch.finished', sizeText(scheme.width, scheme.height, count), ' ', countSel);
+    row('sch.fabric', fabricText(scheme, count), h('span', { class: 'es-swatch', style: { background: scheme.fabric.color }, title: scheme.fabric.color }));
+    row('sch.colors', String(scheme.palette.length) + (S.blends ? ' · ' + t('sch.blends', { n: S.blends }) : ''));
+    row('sch.stitches', fmtNum(S.full) + (S.parts ? ' · ' + t('sch.parts', { n: fmtNum(S.parts) }) : '') + (S.backLength ? ' · ' + t('sch.back', { n: fmtNum(S.backLength) }) : '') + (S.knots ? ' · ' + t('sch.knots', { n: S.knots }) : '') + (S.beads ? ' · ' + t('sch.beads', { n: S.beads }) : ''));
+    row('es.difficulty', difficultyEl(scheme.meta.difficulty || S.difficulty), ' ', t('diff.' + (scheme.meta.difficulty || S.difficulty)));
+    row('sch.time', t('sch.hours', { a: S.hours[0], b: S.hours[1] }));
+    row('sch.pages', t('sch.pagesN', { n: pg.pages.length, paper: settings().paper.toUpperCase() }));
+    if (item.designer || scheme.meta.designer) row('sch.designer', h('a', { href: '#/?designer=' + encodeURIComponent(item.designer || scheme.meta.designer) }, item.designer || scheme.meta.designer));
+    if (scheme.meta.license || item.license) row('sch.license', scheme.meta.license || item.license);
+  }
+  renderFacts();
+  const pct = progress && progress.total ? Math.round((100 * progress.doneCount) / progress.total) : 0;
+  const actions = h('div', { class: 'es-actions' },
+    h('a', { class: 'ed-btn ed-primary es-big', href: '#/view/' + encodeURIComponent(key) }, iconEl('play'), progress ? t('sch.continue', { pct }) : t('sch.stitch')),
+    h('button', { type: 'button', class: 'ed-btn', onclick: () => editCopy() }, iconEl('edit'), item.src === 'my' ? t('sch.edit') : t('sch.editCopy')),
+    h('button', { type: 'button', class: 'ed-btn', onclick: (e) => downloadMenu(e.currentTarget) }, iconEl('download'), t('sch.download'), iconEl('chevDown')),
+    h('button', { type: 'button', class: 'ed-btn', onclick: () => printScheme(scheme) }, iconEl('print'), t('sch.print')),
+    h('button', { type: 'button', class: 'ed-btn', onclick: () => copyText(location.href, t('sch.linkCopied')) }, iconEl('link'), t('sch.copyLink')),
+    info && item.src === 'my' ? h('button', { type: 'button', class: 'ed-btn', onclick: () => sendToSite(scheme) }, iconEl('send'), t('sch.submit')) : null,
+    item.src === 'my' ? h('button', { type: 'button', class: 'ed-btn ed-danger', onclick: () => remove() }, iconEl('trash'), t('sch.delete')) : null);
+  const tags = h('div', { class: 'es-tags' }, chip(categoryName(item.category || scheme.meta.category)), ...(scheme.meta.tags.length ? scheme.meta.tags : item.tags || []).map((tg) => h('a', { class: 'ed-chip es-chip', href: '#/?tag=' + encodeURIComponent(tg) }, '#' + tagName(tg))));
+  const desc = itemDescription(item) || scheme.meta.description;
+  const progressBox = progress ? progressSummary(scheme, progress) : null;
+  main.append(h('div', { class: 'es-scheme' }, preview,
+    h('div', { class: 'es-info' },
+      h('h1', { class: 'es-title', 'data-spa-focus': '' }, title),
+      tags, actions, progressBox, facts,
+      desc ? h('div', { class: 'es-desc' }, ...desc.split(/\n{2,}/).map((p) => h('p', {}, p))) : null,
+      scheme.meta.notes ? h('details', { class: 'es-notes' }, h('summary', {}, t('sch.notes')), h('p', {}, scheme.meta.notes)) : null)));
+
+  const view = createChartView(prevBox, {
+    scheme, layer: () => flat, rulers: false, keyboard: true, cellLimits: [0.5, 40],
+    options: () => ({ mode: look, grid: look !== 'color' && look !== 'realistic', dark: document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches), done: null }),
+  });
+
+  // The key: symbols, threads (in another brand on request), stitches, skeins; then the shopping list.
+  const legendBox = h('section', { class: 'ap-card es-legend' });
+  main.append(legendBox);
+  let brandAlt = '';
+  function renderLegend() {
+    const rows = legend(scheme, { count: settings().count, strands: settings().strands, layer: flat });
+    const shop = shoppingList(scheme, { count: settings().count, strands: settings().strands });
+    legendBox.textContent = '';
+    legendBox.append(
+      h('div', { class: 'es-legend-head' }, h('h2', { class: 'ap-card-h' }, t('key.title')), h('span', { class: 'ed-spacer' }),
+        h('label', { class: 'es-inline' }, t('key.strands'), strandsSel),
+        h('label', { class: 'es-inline' }, t('key.also'), select([{ v: '', l: 'key.none' }, ...brandList().filter((b) => b.v !== (scheme.palette[0] && scheme.palette[0].catalog))], brandAlt, (v) => { brandAlt = v; renderLegend(); }))),
+      h('div', { class: 'es-tablewrap' }, h('table', { class: 'es-table' },
+        h('thead', {}, h('tr', {}, h('th', {}, t('key.symbol')), h('th', {}, t('key.number')), h('th', {}, t('key.name')), brandAlt ? h('th', {}, t('key.in', { brand: brandList().find((b) => b.v === brandAlt).l.slice(1) })) : null, h('th', { class: 'num' }, t('key.stitches')), h('th', { class: 'num' }, t('key.backstitch')), h('th', { class: 'num' }, t('key.skeins')))),
+        h('tbody', {}, rows.map((r) => {
+          const eq = brandAlt ? equivalent(r.entry, brandAlt) : null;
+          return h('tr', {},
+            h('td', {}, symbolSwatch(r.entry)),
+            h('td', { class: 'es-code' }, entryLabel(r.entry)),
+            h('td', {}, r.name || ''),
+            brandAlt ? h('td', { class: 'es-code' }, eq ? `${eq.brand} ${eq.code}` : '—') : null,
+            h('td', { class: 'num' }, stitchesText(r)),
+            // Backstitch length: units are cells; cm = cells * 2.54 / count.
+            h('td', { class: 'num' }, r.back + r.straight ? Math.round(((r.back + r.straight) * 2.54) / settings().count) + ' ' + t('u.cm') : ''),
+            h('td', { class: 'num es-skeins' }, r.entry.kind === 'bead' ? t('key.beadsN', { n: r.beads }) : String(r.skeins)));
+        })))),
+      scheme.palette.some((e) => e.blend) ? h('p', { class: 'ed-hint' }, t('key.blendNote')) : null,
+      h('h3', { class: 'es-subh' }, t('key.shopping')),
+      h('div', { class: 'es-shop' }, shop.map((x) => h('div', { class: 'es-shop-i' }, h('span', { class: 'es-dot', style: { background: x.hex } }), h('b', {}, (x.brand ? x.brand + ' ' : '') + x.code), h('span', { class: 'ed-muted' }, x.name || ''), h('span', { class: 'es-shop-n' }, x.bead ? t('key.beadsN', { n: x.beads }) : t('key.skeinsN', { n: x.skeins }))))),
+      h('p', { class: 'ed-hint' }, t('key.estimateNote', { count: settings().count, strands: settings().strands })));
+  }
+  renderLegend();
+
+  function downloadMenu(anchor) {
+    openMenu(anchor, [
+      { label: t('dl.pdf'), icon: 'file', action: () => pdfDialog(scheme) },
+      { label: t('dl.oxs'), icon: 'export', action: () => { exportScheme(scheme, 'oxs'); if (item.src === 'srv') serverHit(item.id, 'download'); } },
+      { label: t('dl.json'), icon: 'save', action: () => exportScheme(scheme, 'json') },
+      { label: t('dl.png'), icon: 'image', action: () => exportScheme(scheme, 'png') },
+      { label: t('dl.svg'), icon: 'image', action: () => exportScheme(scheme, 'svg') },
+    ], { label: t('sch.download') });
+  }
+  // Catalogue charts are never edited in place: editing makes a copy in "my schemes" that remembers its source.
+  async function editCopy() {
+    if (item.src === 'my') { go('edit/' + encodeURIComponent(key)); return; }
+    const s = cloneScheme(scheme);
+    s.id = newId('s');
+    s.meta.title = title;
+    s.meta.source = key;
+    await saveMine(s, { origin: 'copy', from: key });
+    toast(t('my.copied'), 'ok');
+    go('edit/' + encodeURIComponent('my:' + s.id));
+  }
+  async function remove() {
+    if (!(await confirmDialog(t('sch.delete'), t('my.deleteQ', { name: title }), t('sch.delete'), true))) return;
+    await deleteMine(item.id);
+    dropMineFromCache(item.id);
+    toast(t('my.deleted'), 'ok');
+    go('my');
+  }
+  return { destroy: () => view.destroy() };
+}
+
+// Symbol ink picks white or black by the thread colour's luminance (Rec. 709 weights on the 8-bit values, threshold
+// 128): a quick contrast rule good enough for a legend cell.
+export function symbolSwatch(entry, { size = 'm' } = {}) {
+  const el = h('span', { class: 'es-sym es-sym-' + size, style: { background: entry.hex }, title: entryLabel(entry) });
+  const ink = luminanceDark(entry.hex) ? '#fff' : '#000';
+  if (entry.symbol) {
+    const d = SYMBOLS[entry.symbol] && SYMBOLS[entry.symbol].d;
+    if (d) el.innerHTML = `<svg viewBox="0 0 100 100" aria-hidden="true"><path d="${d}" fill="${ink}"/></svg>`;
+    else { el.textContent = entry.symbol; el.style.color = ink; }
+  }
+  return el;
+}
+const luminanceDark = (hex) => { const n = parseInt(hex.slice(1), 16); const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255; return 0.2126 * r + 0.7152 * g + 0.0722 * b < 128; };
+function stitchesText(r) {
+  const parts = [];
+  if (r.full) parts.push(fmtNum(r.full));
+  if (r.half) parts.push(fmtNum(r.half) + ' ½');
+  if (r.three) parts.push(fmtNum(r.three) + ' ¾');
+  if (r.quarter) parts.push(fmtNum(r.quarter) + ' ¼');
+  if (r.petite) parts.push(fmtNum(r.petite) + ' ' + t('key.petite'));
+  if (r.knots) parts.push(r.knots + ' ' + t('key.knot'));
+  return parts.join(' · ') || '—';
+}
+
+// PDF options: paper, orientation, cell size, chart style, overlap; the file follows.
+// Live page count while choosing paper, orientation and cell size (pagination is cheap); the chosen options become
+// the new defaults.
+export async function pdfDialog(scheme) {
+  const st = settings();
+  const o = { paper: st.paper, landscape: st.landscape, cellMm: st.cellMm, pdfStyle: st.pdfStyle, overlap: st.overlap };
+  const info = h('p', { class: 'ed-hint' });
+  const upd = () => {
+    const cap = pageCapacity({ paper: o.paper, landscape: o.landscape, cellMm: o.cellMm });
+    const pg = paginate(scheme.width, scheme.height, { cols: cap.cols, rows: cap.rows, overlap: o.overlap });
+    info.textContent = t('pdf.info', { n: pg.pages.length, cols: cap.cols, rows: cap.rows });
+  };
+  const body = h('div', { class: 'ed-fields es-pdfdlg' },
+    h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('pdf.paper')), seg(['a4', 'a3', 'letter', 'legal'].map((v) => ({ v, l: '=' + v.toUpperCase().replace('LETTER', 'Letter').replace('LEGAL', 'Legal') })), o.paper, (v) => { o.paper = v; upd(); })),
+    h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('pdf.orientation')), seg([{ v: false, l: 'pdf.portrait' }, { v: true, l: 'pdf.landscape' }], o.landscape, (v) => { o.landscape = v === true || v === 'true'; upd(); })),
+    h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('pdf.cell')), seg([2.5, 3, 3.5, 4, 5].map((v) => ({ v, l: '=' + v + ' ' + t('u.mm') })), o.cellMm, (v) => { o.cellMm = +v; upd(); })),
+    h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('pdf.style')), seg([{ v: 'color', l: 'pdf.styleColor' }, { v: 'tint', l: 'pdf.styleTint' }, { v: 'symbols', l: 'pdf.styleBW' }, { v: 'blocks', l: 'pdf.styleBlocks' }], o.pdfStyle, (v) => { o.pdfStyle = v; })),
+    h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('pdf.overlapCells')), seg([0, 1, 2, 3, 5].map((v) => ({ v, l: '=' + v })), o.overlap, (v) => { o.overlap = +v; upd(); })),
+    info);
+  upd();
+  const r = await openDialog({ title: t('dl.pdf'), body, buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('pdf.make'), value: 'ok', primary: true }] });
+  if (r !== 'ok') return;
+  setSettings(o);
+  exportScheme(scheme, 'pdf');
+}
+
+// Upload goes to the moderation queue (server re-validates everything); the contact field is optional and only
+// visible to the moderator.
+async function sendToSite(scheme) {
+  const contact = h('input', { class: 'ed-input', type: 'text', maxlength: 200, placeholder: t('up.contactPh') });
+  const r = await openDialog({ title: t('sch.submit'), body: h('div', { class: 'ed-fields' }, h('p', {}, t('up.lead')), h('label', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('up.contact')), contact)), buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('up.send'), value: 'ok', primary: true }] });
+  if (r !== 'ok') return;
+  try {
+    const res = await upload({ scheme: JSON.parse(toJSON(scheme)), thumb: thumbURL(scheme, 200), contact: contact.value });
+    toast(t('up.sent', { id: res.id }), 'ok');
+  } catch (e) { toast(t('err.generic', { msg: e.message }), 'error'); }
+}
+
+function notFound(msg) {
+  return h('div', { class: 'es-empty' }, iconEl('warn'), h('h2', {}, t('err.notFoundT')), h('p', {}, msg || t('err.notFound')), h('a', { class: 'ed-btn', href: '#/' }, t('nav.catalog')));
+}
+
+// --- my schemes --------------------------------------------------------------------------------------------------------
+
+export async function renderMine(main, { go }) {
+  const list = await listMine().catch(() => []);
+  const progress = await listProgress().catch(() => []);
+  const all = await loadCatalog();
+  main.append(h('div', { class: 'es-pagehead' }, h('h1', { 'data-spa-focus': '' }, t('my.title')), h('span', { class: 'ed-spacer' }),
+    h('a', { class: 'ed-btn ed-primary', href: '#/new' }, iconEl('filePlus'), t('home.new')),
+    h('a', { class: 'ed-btn', href: '#/convert' }, iconEl('image'), t('home.convert')),
+    h('button', { type: 'button', class: 'ed-btn', onclick: () => importFiles(go) }, iconEl('upload'), t('home.open')),
+    h('button', { type: 'button', class: 'ed-btn', onclick: (e) => moreMenu(e.currentTarget) }, iconEl('more'))));
+  const started = progress.filter((p) => p.doneCount > 0).sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
+  if (started.length) {
+    main.append(h('section', { class: 'ap-card' }, h('h2', { class: 'ap-card-h' }, t('my.inProgress')),
+      h('div', { class: 'es-cards es-cards-s' }, started.map((p) => { const it = all.find((x) => x.key === p.key); return it ? card(it, p) : null; }))));
+  }
+  main.append(h('section', { class: 'ap-card' }, h('h2', { class: 'ap-card-h' }, t('my.charts', { n: list.length })),
+    list.length ? h('div', { class: 'es-cards es-cards-s' }, list.map((r) => card(all.find((x) => x.key === 'my:' + r.id) || { key: 'my:' + r.id, src: 'my', id: r.id, title: r.title, width: r.width, height: r.height, colors: r.colors, tags: [], thumb: r.thumb }, progress.find((p) => p.key === 'my:' + r.id))))
+      : h('div', { class: 'es-empty' }, iconEl('grid'), h('p', {}, t('my.empty')))));
+  main.append(h('p', { class: 'ed-hint' }, t('my.storageNote')));
+
+  async function moreMenu(anchor) {
+    openMenu(anchor, [
+      { label: t('my.backup'), icon: 'download', action: () => backup(list) },
+      { label: t('my.publishPack'), icon: 'globe', action: () => publishPack(list) },
+    ]);
+  }
+  return {};
+}
+
+// Backup = every own chart as JSON plus all progress records in one ZIP; file names sanitised, ids appended so
+// equal titles do not collide.
+async function backup(list) {
+  const files = list.map((r) => ({ name: safeName(r.title) + '-' + r.id + '.stitch.json', data: r.json }));
+  for (const p of await listProgress()) files.push({ name: 'progress/' + p.key.replace(/[^\w.-]+/g, '_') + '.json', data: JSON.stringify(p) });
+  download(await writeZip(files), 'embroidery-backup.zip', 'application/zip');
+}
+
+// A pack for the static site: catalog/index.json (metadata and thumbnails) and catalog/<id>.json; upload the folder
+// next to the site's index.html and the catalogue shows these schemes.
+// Static publishing without a server: the ZIP contains exactly the files remote.js siteIndex / siteScheme read
+// (catalog/index.json + catalog/<id>.json), so unpacking it next to the page makes a serverless build show them.
+async function publishPack(list) {
+  const items = [], files = [];
+  for (const r of list) {
+    const s = fromJSON(r.json);
+    const S = schemeStats(s);
+    items.push({ id: r.id, title: r.title, designer: s.meta.designer, category: s.meta.category || 'other', tags: s.meta.tags, difficulty: s.meta.difficulty || S.difficulty, width: s.width, height: s.height, colors: s.palette.length, stitches: Math.round(S.stitches), created: s.meta.created || r.created, updated: r.updated, description: s.meta.description, license: s.meta.license, brand: s.palette[0] ? s.palette[0].brand : '', thumb: r.thumb });
+    files.push({ name: 'catalog/' + r.id + '.json', data: toJSON(s) });
+  }
+  files.unshift({ name: 'catalog/index.json', data: JSON.stringify({ version: 1, generated: new Date().toISOString(), items }, null, 1) });
+  download(await writeZip(files), 'scheme-site-catalog.zip', 'application/zip');
+  toast(t('my.packDone', { n: items.length }), 'ok');
+}
+
+export { UI_STATE };

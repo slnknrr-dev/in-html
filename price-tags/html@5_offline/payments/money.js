@@ -1,0 +1,7 @@
+const EXP={BIF:0,CLP:0,DJF:0,GNF:0,ISK:0,JPY:0,KMF:0,KRW:0,PYG:0,RWF:0,UGX:0,UYI:0,VND:0,VUV:0,XAF:0,XOF:0,XPF:0,XAU:0,XAG:0,XPT:0,XPD:0,XDR:0,BHD:3,IQD:3,JOD:3,KWD:3,LYD:3,OMR:3,TND:3,CLF:4,UYW:4,};const COMMON_CURRENCIES=['EUR','USD','GBP','GEL','CHF','PLN','CZK','SEK','NOK','DKK','UAH','TRY','AMD','AZN','KZT','CAD','AUD','JPY'];const isCurrency=(c)=>typeof c==='string'&&/^[A-Z]{3}$/.test(c);function minorUnits(cur){const c=String(cur||'').toUpperCase();return Object.prototype.hasOwnProperty.call(EXP,c)?EXP[c]:2;}
+function decimalString(n,digits=2){const v=Number(n);if(!Number.isFinite(v))return'0';const d=Math.max(0,Math.min(8,digits|0));return(Math.round(v*10**d)/10**d).toFixed(d);}
+const fmtCache=new Map();function formatMoney(n,cur,lang='en',opts={}){const v=Number(n)||0;const c=isCurrency(cur)?cur:'EUR';const whole=opts.whole===true||(opts.whole!==false&&Number.isInteger(v));const key=lang+'|'+c+'|'+whole;let f=fmtCache.get(key);if(!f){try{f=new Intl.NumberFormat(lang,{style:'currency',currency:c,currencyDisplay:'narrowSymbol',...(whole?{minimumFractionDigits:0,maximumFractionDigits:0}:{})});}catch{try{f=new Intl.NumberFormat(lang,{style:'currency',currency:c});}catch{f=null;}}
+if(fmtCache.size<200)fmtCache.set(key,f);}
+if(f){try{return f.format(v);}catch{}}
+return decimalString(v,whole?0:minorUnits(c))+' '+c;}
+export{minorUnits,formatMoney,COMMON_CURRENCIES};

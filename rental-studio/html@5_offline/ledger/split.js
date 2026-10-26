@@ -1,0 +1,3 @@
+import"./minor.js";import{cleanId}from"./parties.js";const PCT_SCALE=100;const PCT_FULL=100*PCT_SCALE;function toPct(v){const n=Number(String(v??'').trim().replace(',','.'));if(!Number.isFinite(n))return 0;return Math.max(0,Math.min(PCT_FULL,Math.round(n*PCT_SCALE)));}
+const fromPct=(p)=>(Math.trunc(Number(p))||0)/PCT_SCALE;const clampPct=(v)=>Math.max(0,Math.min(PCT_FULL,Math.trunc(Number(v))||0));function allocationOp(a){const amount=Math.trunc(Number(a&&a.amount))||0;return{partyId:cleanId(a&&a.partyId),article:String((a&&a.article)||''),kind:amount<0?'deduction':'accrual',amount:Math.abs(amount),};}
+export{toPct,clampPct,PCT_FULL,allocationOp,fromPct};

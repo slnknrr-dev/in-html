@@ -1,0 +1,379 @@
+/* kdbx-app/app.css — the password vault: lock screen, toolbar, three panes (groups, entries, details), the entry
+   editor, the KeePass icons and the icon picker, the password generator and strength meter, multiple selection. Loaded
+   after ui/base.css + ui/app.css. Narrow screens show one pane at a time.
+   
+   CONTRACT
+   - Namespace kx-. Shared ed- / ap- classes are only extended in context.
+   - Specificity budget: one class; two for state (.kx-row.kx-sel, .kx-node.kx-on). Pane switching on phones uses
+     .kx-panes[data-view] (0,2,0) so JS sets one attribute instead of toggling classes on three panes.
+   - Tokens on :root: icon accent colours (--kx-ic-*), strength levels (--kx-q-*), password colouring (--kx-c-*), with
+     dark variants declared twice (media query guarded by :not([data-theme="light"]) and explicit [data-theme="dark"]) so
+     a forced scheme wins over the OS. On :root (not .kx-main) because dialogs render outside the main element.
+   - No !important.
+   
+   OVERLAY EDITOR (.kx-pwb-*): the generated password is an editable transparent <textarea> over a coloured copy of the
+   text (digits / symbols / other alphabets coloured, as KeePassXC). Both layers share font, padding, wrapping and
+   letter-spacing; any difference would misplace the colours under the caret. */
+
+/* Accent colours of the standard icons (icons.js) and the quality levels of the strength meter (KeePassXC: bad and
+   poor red, weak orange, good and excellent green) */
+:root {
+  /* Icon accents: one hue per meaning (amber folders, red warnings…), lighter steps in dark mode. */
+  --kx-ic-amber: #d97706; --kx-ic-blue: #2563eb; --kx-ic-red: #dc2626; --kx-ic-green: #16a34a; --kx-ic-purple: #7c3aed;
+  --kx-ic-orange: #ea580c; --kx-ic-teal: #0d9488; --kx-ic-pink: #db2777; --kx-ic-slate: #64748b;
+  --kx-q-bad: var(--ed-danger); --kx-q-poor: var(--ed-danger); --kx-q-weak: var(--ed-warn); --kx-q-good: #65a30d; --kx-q-excellent: var(--ed-ok);
+  --kx-c-digit: #2563eb; --kx-c-symbol: #c2410c; --kx-c-other: #9333ea;
+  /* Selection tint mixed from the accent with transparent: readable on hover and on the panel colour alike. */
+  --kx-tile-bg: #eef1f6; --kx-sel-bg: color-mix(in srgb, var(--ed-accent) 14%, transparent);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --kx-ic-amber: #fbbf24; --kx-ic-blue: #60a5fa; --kx-ic-red: #f87171; --kx-ic-green: #4ade80; --kx-ic-purple: #a78bfa;
+    --kx-ic-orange: #fb923c; --kx-ic-teal: #2dd4bf; --kx-ic-pink: #f472b6; --kx-ic-slate: #94a3b8;
+    --kx-q-good: #a3e635; --kx-c-digit: #7aa2ff; --kx-c-symbol: #fb923c; --kx-c-other: #c084fc; --kx-tile-bg: #262c36; --kx-ic-tint: 1.45;
+  }
+}
+:root[data-theme="dark"] {
+  --kx-ic-amber: #fbbf24; --kx-ic-blue: #60a5fa; --kx-ic-red: #f87171; --kx-ic-green: #4ade80; --kx-ic-purple: #a78bfa;
+  --kx-ic-orange: #fb923c; --kx-ic-teal: #2dd4bf; --kx-ic-pink: #f472b6; --kx-ic-slate: #94a3b8;
+  --kx-q-good: #a3e635; --kx-c-digit: #7aa2ff; --kx-c-symbol: #fb923c; --kx-c-other: #c084fc; --kx-tile-bg: #262c36; --kx-ic-tint: 1.45;
+}
+
+.kx-main { padding-top: 14px; padding-bottom: 10px; }
+.kx-ellipsis { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Visually hidden but announced (clip technique); display:none would hide it from screen readers too. */
+.kx-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.kx-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; align-items: end; }
+.kx-grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+/* Fields inside flex/grid containers are spaced by gap; the shared field margins are cancelled here (one rule for all containers). */
+.ap-card .ed-fields > .ed-field + .ed-field, .ed-dlg-body .ed-field + .ed-field, .kx-grid2 > .ed-field, .kx-grid3 > .ed-field, .kx-editor .ed-field + .ed-field { margin-top: 0; }
+.kx-error { color: var(--ed-danger); font-size: 13px; min-height: 0; }
+/* Error line takes no space until it has text: no layout jump when it appears. */
+.kx-error:empty { display: none; }
+.kx-pw-row, .kx-key-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.kx-pw-row > .ed-input { flex: 1 1 auto; font-family: var(--ed-mono); }
+.kx-key-row { flex-wrap: wrap; }
+.kx-key-row > .kx-ellipsis { flex: 1 1 80px; color: var(--ed-muted); font-size: 12.5px; }
+.kx-progress { display: flex; flex-direction: column; gap: 6px; }
+.kx-progress-l { font-size: 12.5px; color: var(--ed-muted); font-variant-numeric: tabular-nums; }
+.kx-progress-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.kx-progress-t { font-size: 12px; font-variant-numeric: tabular-nums; }
+.kx-link { padding: 0; border: 0; background: none; color: var(--ed-accent); text-align: left; font: inherit; cursor: pointer; }
+.kx-link:hover { text-decoration: underline; }
+.kx-sec-h { margin: 6px 0 -2px; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-muted); }
+
+/* Lock screen */
+/* Lock screen centred with viewport-relative top padding (4vh): scales from phones to desktops. */
+.kx-lock { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 4vh 0 2vh; }
+.kx-lock-card { width: min(440px, 100%); display: flex; flex-direction: column; gap: 14px; padding: 22px 22px 20px; }
+.kx-lock-icon { align-self: center; display: grid; place-items: center; width: 56px; height: 56px; border-radius: 16px; color: var(--ed-accent-text);
+  background: linear-gradient(135deg, var(--ed-accent), color-mix(in srgb, var(--ed-accent) 55%, #9333ea)); box-shadow: var(--ed-shadow); }
+.kx-lock-icon .ed-ic, .kx-lock-icon svg { width: 28px; height: 28px; }
+.kx-lock-h { margin: 0; text-align: center; font-size: 19px; }
+.kx-lock-card .ap-drop { min-height: 92px; }
+.kx-file-line { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; min-height: 22px; font-size: 13px; }
+.kx-kdf-line { flex-basis: 100%; font-size: 12px; }
+.kx-file-line .ed-ic { color: var(--ed-accent); }
+.kx-wide { width: 100%; height: 38px; font-size: 14px; }
+.kx-or { display: flex; align-items: center; gap: 10px; color: var(--ed-faint); font-size: 12px; }
+/* "or" divider: two flexible hairlines around the label, no extra markup. */
+.kx-or::before, .kx-or::after { content: ""; flex: 1; height: 1px; background: var(--ed-border); }
+.kx-lock-note { display: flex; gap: 8px; align-items: center; max-width: 440px; margin: 0; color: var(--ed-muted); font-size: 12.5px; }
+.kx-lock-note .ed-ic { color: var(--ed-ok); }
+
+/* Vault frame */
+/* Vault fills the viewport below the shell (100vh, then 100dvh where supported); panes scroll inside, the page does not.
+   150px = shell header + footer allowance. */
+.kx-app { display: flex; flex-direction: column; gap: 10px; height: calc(100vh - 150px); height: calc(100dvh - 150px); min-height: 520px; }
+.kx-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.kx-db { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 280px; font-size: 15px; }
+.kx-db .ed-ic { color: var(--ed-accent); }
+.kx-dirty { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--ed-warn); }
+.kx-search-wrap { position: relative; flex: 1 1 220px; min-width: 160px; max-width: 520px; }
+.kx-search-wrap > .ed-ic { position: absolute; left: 9px; top: 7px; color: var(--ed-faint); pointer-events: none; }
+.kx-search { padding-left: 32px; height: 34px; border-radius: 999px; }
+.kx-tools { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.kx-tb { height: 34px; }
+/* Three columns: tree 200–250px, list 240–330px, details takes the rest (minmax(0,1fr) so long values wrap, never widen). */
+.kx-panes { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(200px, 250px) minmax(240px, 330px) minmax(0, 1fr); gap: 12px; }
+/* min-height:0 lets a grid item shrink below its content so overflow:auto can scroll it. */
+.kx-pane { min-height: 0; overflow: auto; background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: 14px; box-shadow: var(--ed-shadow-sm); }
+/* Sticky pane header with translucent background + backdrop blur: content scrolls visibly underneath. */
+.kx-pane-h { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px; min-height: 42px; padding: 6px 8px 6px 14px;
+  background: color-mix(in srgb, var(--ed-panel) 92%, transparent); backdrop-filter: blur(6px); border-bottom: 1px solid var(--ed-border);
+  font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-muted); }
+.kx-pane-h > span:first-child, .kx-pane-h > .kx-back + span { flex: 0 1 auto; }
+.kx-pane-h > .ed-iconbtn:last-child { margin-left: auto; }
+.kx-count { padding: 0 7px; border-radius: 999px; background: var(--ed-hover); font-size: 11px; font-weight: 600; color: var(--ed-muted); letter-spacing: 0; text-transform: none; }
+.kx-back { display: none; }
+
+/* Tree (role tree: treeitems hold their subgroups) */
+.kx-tree-body { padding: 6px; min-height: calc(100% - 42px); }
+.kx-ti { outline: none; }
+/* Tree items contain their subgroups, so a focus ring on the item would surround the whole subtree; the ring goes on the row (.kx-node) instead. */
+.kx-ti:focus-visible { box-shadow: none; }
+.kx-ti:focus-visible > .kx-node { box-shadow: var(--ed-focus); }
+.kx-node { display: flex; align-items: center; gap: 7px; min-height: 32px; padding-inline-end: 4px; border-radius: 8px; cursor: pointer; }
+.kx-node:hover { background: var(--ed-hover); }
+.kx-node.kx-on { background: var(--ed-accent-weak); }
+.kx-node.kx-on .kx-node-name { color: var(--ed-accent); font-weight: 600; }
+/* Drop target while dragging entries onto a group; negative offset keeps the dashed outline inside the row. */
+.kx-node.kx-drop { outline: 2px dashed var(--ed-accent); outline-offset: -2px; background: var(--ed-accent-weak); }
+.kx-twist { flex: none; display: inline-grid; place-items: center; width: 18px; height: 28px; margin-inline-end: -4px; color: var(--ed-faint); }
+.kx-twist[data-twist="1"]:hover { color: var(--ed-text); }
+.kx-twist .ed-ic, .kx-twist svg { width: 14px; height: 14px; }
+.kx-node > .kx-ico { color: var(--ed-muted); }
+.kx-node.kx-on > .kx-ico { color: var(--ed-accent); }
+.kx-node-name { flex: 1 1 auto; }
+.kx-node .kx-count { flex: none; }
+/* visibility (not display): the hidden button keeps its space, so rows do not shift on hover. */
+.kx-node-more { visibility: hidden; flex: none; }
+.kx-node:hover .kx-node-more, .kx-node.kx-on .kx-node-more { visibility: visible; }
+.kx-bin .kx-node-name { color: var(--ed-muted); }
+
+/* Icons: the standard KeePass icons (inline SVG) and custom PNG icons; tiles in the list and the details */
+/* line-height:0 removes the inline baseline gap under inline SVG / img icons. */
+.kx-ico { display: inline-flex; flex: none; align-items: center; justify-content: center; line-height: 0; }
+.kx-ico svg { display: block; }
+.kx-ico-img { object-fit: contain; image-rendering: auto; }
+/* Tile radius proportional to the tile size (28%): the same shape at 32px in the list and larger in the details. */
+.kx-tile { --kx-tile: 32px; flex: none; display: inline-grid; place-items: center; width: var(--kx-tile); height: var(--kx-tile);
+  border-radius: calc(var(--kx-tile) * .28); background: var(--kx-tile-bg); color: var(--ed-text); }
+.kx-tile-img { background: var(--ed-panel-2); box-shadow: inset 0 0 0 1px var(--ed-border); }
+.kx-icon-btn { flex: none; display: inline-grid; padding: 0; border: 0; border-radius: 12px; background: none; position: relative; }
+.kx-icon-btn:hover .kx-tile { box-shadow: inset 0 0 0 2px var(--ed-accent); }
+/* Edit badge drawn as a pseudo-element with an inline SVG data URI: no extra element, no request. */
+.kx-icon-btn:hover::after { content: ""; position: absolute; right: -3px; bottom: -3px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--ed-accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round'%3E%3Cpath d='M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z'/%3E%3C/svg%3E") center / 9px no-repeat; }
+
+/* Entry list (listbox with multiple selection) */
+.kx-list-body { display: flex; flex-direction: column; min-height: calc(100% - 42px); }
+.kx-list-body > .ap-empty { flex: 1 1 auto; }
+.kx-rows { display: flex; flex-direction: column; padding: 6px; gap: 2px; }
+/* Entry row = listbox option (role=option): focus ring via box-shadow, outline removed. */
+.kx-row { position: relative; display: flex; align-items: center; gap: 10px; width: 100%; min-height: 50px; padding: 6px 8px; border-radius: 10px; cursor: pointer; outline: none; }
+.kx-row:hover { background: var(--ed-hover); }
+.kx-row:focus-visible { box-shadow: var(--ed-focus); }
+.kx-row.kx-sel { background: var(--kx-sel-bg); }
+.kx-row.kx-on { background: var(--ed-accent-weak); }
+/* Adjacent selected rows merge into one block: shared edges lose their radius; :has() handles the row before. */
+.kx-row.kx-sel + .kx-row.kx-sel { margin-top: -2px; border-top-left-radius: 0; border-top-right-radius: 0; }
+.kx-row.kx-sel:has(+ .kx-row.kx-sel) { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
+.kx-row.kx-on .kx-row-title { color: var(--ed-accent); }
+.kx-row-text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.kx-row-title { font-weight: 600; }
+.kx-row-sub { color: var(--ed-muted); font-size: 12.5px; }
+.kx-row-flag { flex: none; color: var(--ed-faint); }
+.kx-row-flag .ed-ic, .kx-row-flag svg { width: 15px; height: 15px; }
+/* Expired entries struck through, as in KeePass. */
+.kx-expired .kx-row-title { text-decoration: line-through; color: var(--ed-muted); }
+.kx-check { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--ed-border-strong); background: var(--ed-panel); color: var(--ed-accent-text); }
+.kx-sel .kx-check { background: var(--ed-accent); border-color: var(--ed-accent); }
+.kx-check .ed-ic, .kx-check svg { width: 14px; height: 14px; stroke-width: 3; }
+.kx-selbar { gap: 4px; padding-left: 8px; text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--ed-text); background: color-mix(in srgb, var(--ed-accent-weak) 85%, var(--ed-panel)); }
+.kx-selbar > .kx-ellipsis { font-weight: 650; }
+.kx-selbar .ed-iconbtn.ed-sm { width: 30px; height: 30px; }
+
+/* Details */
+.kx-detail { padding: 0 0 18px; }
+.kx-detail-h { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 12px; padding: 12px 16px; background: color-mix(in srgb, var(--ed-panel) 94%, transparent);
+  backdrop-filter: blur(6px); border-bottom: 1px solid var(--ed-border); }
+.kx-detail-h h2 { margin: 0; font-size: 17px; }
+.kx-detail-t { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; font-size: 12.5px; }
+.kx-detail-a { display: flex; gap: 6px; align-items: center; }
+.kx-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; height: 100%; min-height: 220px; color: var(--ed-faint); text-align: center; padding: 20px; }
+.kx-placeholder .ed-ic, .kx-placeholder svg { width: 40px; height: 40px; }
+.kx-warn { display: flex; gap: 8px; align-items: center; margin: 12px 16px 0; padding: 8px 12px; border-radius: 10px; background: color-mix(in srgb, var(--ed-warn) 16%, transparent); font-size: 13px; }
+.kx-fields { display: flex; flex-direction: column; padding: 8px 8px 0; }
+/* Field row: label 120px | value | actions. The value column is minmax(0,1fr) so long passwords and URLs wrap anywhere. */
+.kx-field { display: grid; grid-template-columns: 120px minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; min-height: 44px; padding: 4px 8px; border-radius: 10px; }
+.kx-field:hover { background: var(--ed-hover); }
+.kx-field-l { color: var(--ed-muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; }
+.kx-field-v { min-width: 0; overflow-wrap: anywhere; user-select: text; }
+.kx-mono { font-family: var(--ed-mono); font-size: 13px; }
+/* Masked value: dots spaced out and muted, so it reads as hidden rather than as text. */
+.kx-masked { letter-spacing: .12em; color: var(--ed-muted); }
+.kx-field-a { display: flex; gap: 2px; }
+.kx-hint-row { margin: 2px 8px 6px 140px; }
+.kx-ref { display: inline-flex; vertical-align: -3px; margin-inline-start: 4px; color: var(--ed-accent); }
+.kx-ref .ed-ic, .kx-ref svg { width: 14px; height: 14px; }
+.kx-totp { display: flex; align-items: center; gap: 10px; }
+.kx-totp-code { font: 600 20px/1.2 var(--ed-mono); letter-spacing: .06em; color: var(--ed-accent); }
+.kx-totp-left { font-size: 12px; color: var(--ed-muted); font-variant-numeric: tabular-nums; }
+/* TOTP countdown as a conic gradient driven by --kx-p (fraction of the period left, set every second from JS). */
+.kx-totp-ring { --kx-p: 1; flex: none; width: 18px; height: 18px; border-radius: 50%;
+  background: conic-gradient(var(--ed-accent) calc(var(--kx-p) * 360deg), var(--ed-border) 0); transition: background .3s; }
+.kx-totp-ring.kx-low { background: conic-gradient(var(--ed-danger) calc(var(--kx-p) * 360deg), var(--ed-border) 0); }
+.kx-block { margin: 14px 16px 0; }
+.kx-block h3 { margin: 0 0 6px; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-muted); }
+/* Notes keep their line breaks (pre-wrap) and stay selectable for copying. */
+.kx-notes { white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px 12px; border-radius: 10px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); user-select: text; }
+.kx-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.kx-atts { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.kx-att { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 34px; padding: 2px 8px; border-radius: 8px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.kx-att > .kx-link, .kx-att > .kx-ellipsis { flex: 1 1 auto; }
+.kx-att .ed-muted { font-size: 12px; white-space: nowrap; }
+.kx-times .ap-kv { font-size: 12.5px; }
+
+/* Editor */
+.kx-editor { padding-bottom: 8px; }
+.kx-editor > .ed-fields { padding: 14px 16px 0; gap: 12px; }
+.kx-editor > .kx-error { margin: 10px 16px 0; }
+.kx-editor .kx-block { margin: 6px 0 0; }
+.kx-custom { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.kx-custom-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto auto; gap: 6px; align-items: center; width: 100%; }
+.kx-custom-row .ed-check-inline .ed-ic { color: var(--ed-muted); }
+.kx-notes-in { min-height: 90px; }
+
+/* Dialog content */
+.kx-history { display: flex; flex-direction: column; gap: 8px; }
+.kx-hist-item { border: 1px solid var(--ed-border); border-radius: 10px; padding: 8px 10px; }
+.kx-hist-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kx-hist-h .ed-spacer { flex: 1; }
+.kx-hist-item .ap-kv { margin-top: 8px; }
+.kx-att-view { display: grid; place-items: center; }
+.kx-att-view img { max-width: 100%; max-height: 70vh; }
+.kx-att-text { max-height: 60vh; }
+/* Busy overlay above dialogs (z-index 450 in the base.css stacking scale): saving or key derivation blocks the UI deliberately. */
+.kx-busy { z-index: 450; }
+.kx-busy-box { align-items: center; gap: 14px; padding: 24px; width: min(360px, 100%); }
+.kx-busy-box .ap-progress { width: 100%; }
+
+/* Several entries selected */
+.kx-multi-tiles { display: flex; flex: none; }
+.kx-multi-tiles > .kx-tile { box-shadow: 0 0 0 2px var(--ed-panel); }
+/* Several selected entries: icon tiles overlap like a stack (negative margin, ring in the panel colour). */
+.kx-multi-tiles > .kx-tile + .kx-tile { margin-inline-start: -14px; }
+.kx-multi { padding: 14px 16px; display: flex; flex-direction: column; gap: 14px; }
+.kx-multi-a { display: flex; flex-wrap: wrap; gap: 6px; }
+.kx-multi-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.kx-multi-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, .8fr); align-items: center; gap: 10px; min-height: 30px; padding: 2px 8px; border-radius: 8px; }
+.kx-multi-list li:nth-child(odd) { background: var(--ed-panel-2); }
+
+/* Entry editor: icon next to the title */
+.kx-ed-top { display: flex; align-items: flex-end; gap: 12px; }
+.kx-ed-title { flex: 1 1 auto; min-width: 0; }
+
+/* Strength meter (0..200 bit, marks at KeePassXC's thresholds 40 / 75 / 100) */
+/* Strength meter: --kx-q set per quality level via data-q; bar, label and marks read it. */
+.kx-sm { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; --kx-q: var(--ed-accent); }
+.kx-sm[data-q="bad"] { --kx-q: var(--kx-q-bad); } .kx-sm[data-q="poor"] { --kx-q: var(--kx-q-poor); } .kx-sm[data-q="weak"] { --kx-q: var(--kx-q-weak); }
+.kx-sm[data-q="good"] { --kx-q: var(--kx-q-good); } .kx-sm[data-q="excellent"] { --kx-q: var(--kx-q-excellent); }
+.kx-sm-bar { position: relative; height: 6px; border-radius: 999px; background: var(--ed-border); overflow: hidden; }
+.kx-sm-bar > i { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--kx-q); transition: width .15s; }
+.kx-sm-bar > b { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--ed-panel); opacity: .9; }
+.kx-sm-text { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 10px; font-size: 12.5px; }
+.kx-sm-bits { font-weight: 650; font-variant-numeric: tabular-nums; }
+.kx-sm-q { font-weight: 650; color: var(--kx-q); }
+.kx-sm-note { color: var(--ed-muted); }
+.kx-sm-fb { display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--ed-muted); }
+.kx-sm-fb:empty { display: none; }
+.kx-sm-warn { display: flex; align-items: center; gap: 6px; color: var(--ed-text); }
+.kx-sm-warn .ed-ic { color: var(--ed-warn); width: 15px; height: 15px; }
+.kx-sm-warn .ed-ic svg { width: 15px; height: 15px; }
+.kx-sm-compact { margin-top: 6px; }
+.kx-sm-compact .kx-sm-bar { height: 4px; }
+
+/* Password generator: an editable, coloured result */
+.kx-gen-dlg { width: min(560px, 100%); }
+.kx-gen { gap: 12px; }
+.kx-wideseg { display: flex; width: 100%; }
+.kx-wideseg .ed-seg-btn { flex: 1 1 0; min-height: 30px; }
+.kx-gen-row { display: flex; gap: 4px; align-items: center; }
+.kx-gen-btns { display: flex; flex: none; gap: 2px; }
+.kx-pwb { flex: 1 1 auto; min-width: 0; }
+.kx-pwb-box { position: relative; border: 1px solid var(--ed-border-strong); border-radius: var(--ed-radius); background: var(--ed-panel-2); }
+.kx-pwb-box:focus-within { border-color: var(--ed-accent); box-shadow: var(--ed-focus); }
+/* Identical text metrics for both layers (font, padding, wrapping, letter-spacing, tab-size): required for the overlay. */
+.kx-pwb-hl, .kx-pwb-ta { margin: 0; padding: 11px 13px; font: 500 19px/1.45 var(--ed-mono); letter-spacing: .02em; white-space: pre-wrap; overflow-wrap: anywhere;
+  word-break: break-all; tab-size: 4; text-align: start; }
+/* Highlight layer defines the box height (in flow); pointer-events:none so clicks reach the textarea above. */
+.kx-pwb-hl { min-height: calc(19px * 1.45 + 22px); color: var(--ed-text); pointer-events: none; }
+/* Transparent textarea on top: invisible glyphs (color and -webkit-text-fill-color), visible caret and selection. */
+.kx-pwb-ta { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; outline: none; resize: none; overflow: hidden; background: transparent;
+  color: transparent; caret-color: var(--ed-text); -webkit-text-fill-color: transparent; }
+.kx-pwb-ta::selection { background: color-mix(in srgb, var(--ed-accent) 32%, transparent); color: transparent; -webkit-text-fill-color: transparent; }
+.kx-pwb-ta::placeholder { color: var(--ed-faint); -webkit-text-fill-color: var(--ed-faint); }
+.kx-c-d { color: var(--kx-c-digit); }
+.kx-c-s { color: var(--kx-c-symbol); }
+.kx-c-x { color: var(--kx-c-other); }
+.kx-pwb-pw { height: 48px; font: 500 19px var(--ed-mono); letter-spacing: .1em; }
+.kx-gen-undo { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 10px; border-radius: var(--ed-radius); background: var(--ed-accent-weak); font-size: 12.5px; }
+.kx-gen-undo > span:not(.ed-ic) { flex: 1 1 auto; }
+.kx-gen-undo .ed-ic { color: var(--ed-accent); }
+.kx-gen-hint { margin: -2px 0 0; }
+.kx-gen-more { border-top: 1px solid var(--ed-border); padding-top: 8px; }
+.kx-gen-more > summary { cursor: pointer; padding: 4px 0; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-muted); }
+.kx-gen-opts { padding-top: 8px; }
+.kx-gen-info { margin: 0; }
+.kx-rangenum { display: flex; align-items: center; gap: 10px; }
+.kx-rangenum .ed-range { flex: 1 1 auto; }
+.kx-num { width: 72px; flex: none; font-variant-numeric: tabular-nums; }
+.kx-cgroup { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+.kx-cgroup-h { font-size: 11.5px; color: var(--ed-muted); }
+.kx-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.kx-gchip { height: 30px; font-family: var(--ed-mono); font-size: 12.5px; }
+.kx-mono-in { font-family: var(--ed-mono); }
+.kx-own { min-height: 80px; font: 12.5px/1.45 var(--ed-mono); }
+
+/* Icon picker */
+.kx-ip-dlg { width: min(560px, 100%); }
+.kx-ip { display: flex; flex-direction: column; gap: 8px; }
+.kx-ip-now { display: flex; align-items: center; gap: 12px; padding: 4px 0 6px; }
+.kx-ip-now-t { display: flex; flex-direction: column; min-width: 0; }
+.kx-ip-now-t strong { font-size: 15px; }
+.kx-ip-now-t .ed-muted { font-size: 12px; }
+/* Icon grid: auto-fill 42px cells; keyboard navigation computes columns from the rendered layout (iconpicker.js). */
+.kx-ip-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(42px, 1fr)); gap: 4px; padding: 2px; }
+.kx-ip-cell { display: inline-grid; place-items: center; height: 42px; padding: 0; border: 1px solid transparent; border-radius: 9px; background: var(--ed-panel-2); color: var(--ed-text); }
+.kx-ip-cell:hover { border-color: var(--ed-border-strong); background: var(--ed-hover); }
+.kx-ip-cell[aria-selected="true"] { border-color: var(--ed-accent); background: var(--ed-accent-weak); box-shadow: inset 0 0 0 1px var(--ed-accent); }
+.kx-ip-cell img { width: 24px; height: 24px; object-fit: contain; }
+.kx-ip-ch, .kx-ip-cbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kx-ip-ch .kx-sec-h { margin: 8px 0 0; }
+.kx-ip-cbar { font-size: 12px; }
+/* Hides the custom-icon toolbar when empty, or when no button is visible and the info is empty. KNOWN DEFECT: one invalid selector drops the whole selector list, so engines without :has() lose even the :empty case. Fix: give :empty its own rule. */
+.kx-ip-cbar:empty, .kx-ip-cbar:not(:has(> .ed-btn:not([hidden]), > .kx-ip-cinfo:not(:empty))) { display: none; }
+.kx-ip-custom { min-height: 46px; }
+.kx-ip-empty { grid-column: 1 / -1; align-self: center; padding: 10px 4px; font-size: 12.5px; }
+.kx-ip-apply { margin-top: 4px; }
+.kx-ip .ed-hint { margin: 0; }
+
+/* Narrow screens: one pane at a time, with back buttons */
+/* Phones: one pane at a time, chosen by data-view on .kx-panes; back buttons appear; toolbar labels collapse to icons. */
+@media (max-width: 860px) {
+  .kx-app { height: auto; min-height: 0; }
+  .kx-panes { display: block; }
+  .kx-pane { min-height: 60vh; }
+  .kx-panes[data-view="tree"] .kx-list, .kx-panes[data-view="tree"] .kx-detail,
+  .kx-panes[data-view="list"] .kx-tree, .kx-panes[data-view="list"] .kx-detail,
+  .kx-panes[data-view="entry"] .kx-tree, .kx-panes[data-view="entry"] .kx-list { display: none; }
+  .kx-back { display: inline-flex; }
+  .kx-tb-l { display: none; }
+  .kx-tb { width: 36px; padding: 0; }
+  .kx-tools { margin-left: 0; }
+  .kx-search-wrap { flex-basis: 100%; max-width: none; order: 5; }
+  .kx-field { grid-template-columns: minmax(0, 1fr) auto; }
+  .kx-field-l { grid-column: 1 / -1; margin-bottom: -6px; }
+  .kx-hint-row { margin-left: 8px; }
+  .kx-node-more { visibility: visible; }
+  .kx-row { min-height: 56px; }
+  .kx-multi-list li { grid-template-columns: auto minmax(0, 1fr); }
+  .kx-multi-list li > .ed-muted { display: none; }
+  .kx-custom-row { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .kx-custom-row > .ed-input:first-child { grid-column: 1 / -1; }
+}
+@media (max-width: 520px) {
+  .kx-grid2, .kx-grid3 { grid-template-columns: minmax(0, 1fr); }
+  .kx-detail-h { padding: 10px 12px; gap: 8px; }
+  .kx-detail-a .ed-btn { padding: 0 8px; }
+  .kx-pwb-hl, .kx-pwb-ta { font-size: 17px; padding: 10px 11px; }
+  .kx-pwb-hl { min-height: calc(17px * 1.45 + 20px); }
+  .kx-ip-grid { grid-template-columns: repeat(auto-fill, minmax(40px, 1fr)); }
+  .kx-ed-top { align-items: center; }
+}
+/* Touch: taller tree rows and icon cells (comfortable targets). */
+@media (pointer: coarse) {
+  .kx-node { min-height: 40px; }
+  .kx-ip-cell { height: 46px; }
+}

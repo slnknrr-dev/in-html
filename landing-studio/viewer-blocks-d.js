@@ -1,0 +1,844 @@
+// landing-studio/viewer-blocks-d.js - landing blocks, part D: carousel (images or mixed slides), tabs,
+// comparison table, before / after image slider, announcement bar, countdown, video (a file, or an external embed that
+// loads only after the visitor's click); the carousel markup shared with the testimonials' quote slider
+// (carouselHTML). Generic primitives only: the domain lives in the texts and pictures.
+import { uid } from '../util/id.js';
+import { escapeAttr, escapeHTML } from '../html/escape.js';
+import { isObj, num, oneOf, str } from '../util/value.js';
+import { htmlToText, pickText } from '../i18n/text.js';
+import { uiText } from '../doc/dict.js';
+import { attOf, attSrc, imgAttr, isImage, mimeBase } from '../doc/attach.js';
+import { addItemBox, altAttr, di, feature, fld, grp, has, hrefAttr, icon, needUi, noItems, plainIn, txt, ui } from '../doc/render.js';
+import { optList } from '../doc/schema.js';
+import { mediaBox, objectHTML } from './viewer-render.js';
+import { TONES } from './viewer-base.js';
+import { formatDay } from './viewer-blocks-c.js';
+//
+// Design rules shared by every block in this part (the same contract as the other viewer-blocks-* modules):
+// - render(b, ctx) returns an HTML string; ctx.edit selects the editor canvas (every item visible, fields editable via
+//   fld(), no runtime controls) versus the export (empty items dropped, controls added). Never mix: an edit-only
+//   attribute leaking into an export is dead weight, a runtime control in the canvas steals clicks from editing.
+// - Progressive enhancement: the exported markup works with JavaScript off (scroll-snap carousel, stacked tabs,
+//   side-by-side before/after). Controls that need script carry .lp-js-only and are revealed when rtCore adds
+//   html.lp-js; CSS keyed on html:not(.lp-js) restyles the no-script fallback.
+// - feature(ctx, name) is called only when a runtime control is actually emitted, so pages that use a block without
+//   its interactive part do not ship the runtime feature (exports include exactly the features used).
+// - All user text passes through escapeHTML / escapeAttr / fld / txt; nothing is concatenated raw.
+// - Multilingual exports: grp() emits one span per language and rtI18n toggles them; attributes that cannot hold
+//   spans use bdAttrI18n (a JSON map in data-lp-i18n).
+
+const bdArr = (v) => (Array.isArray(v) ? v : []);
+const BD_RATIOS = ['21/9', '16/9', '3/2', '4/3', '1/1', '3/4'];
+const bdRatioOpts = (...r) => r.map((v) => ({ v, text: v.replace('/', ':') }));
+
+// Plain-text lines of a per-language value in language l ('' lines dropped).
+const bdLines = (ctx, i18n, l) => str(pickText(i18n, l, ctx.pd)).split(/\r?\n/).map((x) => x.trim()).filter(Boolean);
+
+// data-lp-i18n attribute (rtI18n switches allowlisted attributes) + the default-language value: ` aria-label="…"…`.
+// The JSON map is emitted only when the languages actually differ: identical labels would just bloat every page.
+function bdAttrI18n(ctx, attr, fn) {
+  const first = str(fn(ctx.defaultLang || ctx.lang));
+  let s = ` ${attr}="${escapeAttr(first)}"`;
+  if (ctx.edit || ctx.langs.length < 2) return s;
+  const m = {};
+  let diff = false;
+  for (const l of ctx.langs) { m[l] = str(fn(l)); if (m[l] !== first) diff = true; }
+  if (diff) s += ` data-lp-i18n="${escapeAttr(JSON.stringify({ [attr]: m }))}"`;
+  return s;
+}
+
+/* ---------- carousel markup (carousel block, testimonials quote slider) ---------- */
+
+// slides: [{ html, i (item index) }]; o = { cls, d / t / p (slides per view on desktop / tablet / phone), gap (px),
+// ratio, ov (overlay 0..1), auto (seconds, 0 = off), loop, arrows, dots, label (grouped html of the hidden name) }.
+// View: a scroll-snap track (swipe / scroll / keyboard without JavaScript) + JS-only controls (feature carousel):
+// previous / next, one dot per slide, pause / play when it plays by itself. Edit: every slide in a wrapping row.
+// Why scroll-snap instead of transform-based sliding: the browser owns swipe physics, momentum, keyboard scrolling and
+// RTL, so the no-script page is already a working carousel and the runtime only adds buttons that call scrollTo.
+// Slides-per-view are CSS custom properties resolved by container queries, not JS measurement: no layout thrash,
+// and the carousel adapts to its column width rather than to the viewport.
+// a11y: region + hidden label, slides as role=group with 'k / n' names (APG carousel pattern); controls point at the
+// track with aria-controls.
+function carouselHTML(ctx, bid, slides, o) {
+  const id = 'lp-car-' + escapeAttr(bid);
+  const n = slides.length;
+  let vars = `--lp-car-d:${o.d};--lp-car-t:${o.t};--lp-car-p:${o.p};--lp-car-gap:${o.gap}px`;
+  if (o.ratio) vars += ';--lp-ratio:' + o.ratio;
+  if (o.ov != null) vars += ';--lp-ov:' + o.ov;
+  const cls = 'lp-car' + (o.cls ? ' ' + o.cls : '');
+  const lis = slides.map((s, k) => `<li class="lp-car-slide"${ctx.edit ? di(ctx, s.i) : ` role="group" aria-label="${k + 1} / ${n}"`}>${s.html}</li>`).join('');
+  if (ctx.edit) return `<div class="lp-carw"><div class="${cls}" style="${vars}"><ul class="lp-car-track">${lis}</ul></div></div>`;
+  let ctl = '';
+  if (n > 1 && (o.arrows || o.dots || o.auto)) {
+    const btn = (dir, ic) => `<button type="button" class="lp-car-btn lp-car-${dir}" data-lp-car-go="${dir}" aria-controls="${id}">`
+      + `${icon(ctx, ic)}<span class="lp-sr">${ui(ctx, dir)}</span></button>`;
+    const dots = o.dots ? '<div class="lp-car-dots">' + slides.map((s, k) => `<button type="button" class="lp-car-dot" data-lp-car-dot="${k}"`
+      + ` aria-controls="${id}"><span class="lp-sr">${ui(ctx, 'carGo', { n: k + 1 })}</span></button>`).join('') + '</div>' : '';
+    const pause = o.auto ? '<button type="button" class="lp-car-btn lp-car-pause" data-lp-car-pause aria-pressed="false">'
+      + `${icon(ctx, 'pause', 'lp-i-pause')}${icon(ctx, 'play', 'lp-i-play')}<span class="lp-sr">${ui(ctx, 'carPause')}</span></button>` : '';
+    ctl = `<div class="lp-car-ctl lp-js-only">${o.arrows ? btn('prev', 'chevronLeft') : ''}${dots}${pause}${o.arrows ? btn('next', 'chevronRight') : ''}</div>`;
+    feature(ctx, 'carousel');
+  }
+  const auto = o.auto ? ` data-lp-car-auto="${Math.round(o.auto)}"` : '';
+  return `<div class="lp-carw"><div class="${cls}" data-lp-car${auto}${o.loop ? ' data-lp-car-loop' : ''} style="${vars}" role="region" aria-labelledby="${id}-l">`
+    + `<span class="lp-sr" id="${id}-l">${o.label}</span><ul class="lp-car-track" id="${id}" data-lp-car-track tabindex="0" aria-labelledby="${id}-l">${lis}</ul>${ctl}</div></div>`;
+}
+
+/* ---------- carousel block ---------- */
+
+const CAR_VARIANTS = ['cards', 'hero', 'images'];
+
+function bdCarousel(b, ctx) {
+  if (noItems(ctx, b)) return addItemBox(ctx);
+  const v = oneOf(b.variant, CAR_VARIANTS, 'cards');
+  const hero = v === 'hero';
+  const slides = [];
+  bdArr(b.items).forEach((it, i) => {
+    if (!isObj(it)) return;
+    const p = `items.${i}.`;
+    const img = mediaBox(ctx, it.image, {
+      ratio: hero ? 'auto' : oneOf(b.ratio, BD_RATIOS, '16/9'), fit: 'cover', cls: hero ? 'lp-car-bg' : 'lp-car-img', path: p + 'image', icon: 'image',
+      alt: (l) => (v === 'images' ? plainIn(ctx, it.title, l) : ''),
+    });
+    const title = v === 'images' ? fld(ctx, b, p + 'title', 'plain', 'p', 'lp-car-cap', 'phd.caption', { ecls: 'lp-opt' })
+      : fld(ctx, b, p + 'title', 'plain', 'h3', 'lp-car-t', 'phd.slideTitle', { ecls: 'lp-opt' });
+    const text = v === 'images' ? '' : fld(ctx, b, p + 'html', 'rich', 'div', 'lp-car-x lp-rich', 'phd.slideText', { ecls: 'lp-opt' });
+    let btn = '';
+    if (v !== 'images') {
+      if (ctx.edit) btn = `<span class="lp-btn lp-btn-${hero ? 'primary' : 'secondary'} lp-btn-sm lp-car-a">${fld(ctx, b, p + 'label', 'plain', 'span', '', 'ph.btn', { ecls: 'lp-opt' })}</span>`;
+      else {
+        const l = txt(ctx, it.label);
+        const h = l ? hrefAttr(ctx, it.href) : '';
+        if (h) btn = `<a class="lp-btn lp-btn-${hero ? 'primary' : 'secondary'} lp-btn-sm lp-car-a"${h}>${l}</a>`;
+      }
+    }
+    if (!ctx.edit && !img && !title && !text) return;
+    const body = title || text || btn ? `<div class="lp-car-body">${title}${text}${btn}</div>` : '';
+    slides.push({ i, html: `<div class="lp-car-in${img ? '' : ' lp-car-noimg'}">${img}${body}</div>` });
+  });
+  if (!slides.length) return '';
+  // Tablet / phone counts are clamped to the desktop count: more slides on a narrower screen would be nonsense.
+  // The hero variant forces one slide everywhere.
+  const d = Math.round(num(b.perView, 3, 1, 6));
+  return carouselHTML(ctx, b.id, slides, {
+    cls: 'lp-car-' + v, d: hero ? 1 : d, t: hero ? 1 : Math.min(d, Math.round(num(b.perViewT, 2, 1, 4))), p: hero ? 1 : Math.min(d, Math.round(num(b.perViewP, 1, 1, 2))),
+    gap: Math.round(num(b.gap, 20, 0, 48)), ratio: oneOf(b.ratio, BD_RATIOS, '16/9'), ov: hero ? Math.round(num(b.overlay, 45, 0, 90)) / 100 : null,
+    auto: Math.round(num(b.autoplay, 0, 0, 30)), loop: !!b.loop, arrows: b.arrows !== false, dots: b.dots !== false,
+    label: has(ctx, b.label) ? txt(ctx, b.label) : ui(ctx, 'carLabel'),
+  });
+}
+
+/* ---------- tabs ---------- */
+
+const TAB_VARIANTS = ['line', 'pills', 'vertical'];
+
+// APG tabs pattern: role=tablist/tab/tabpanel, roving tabindex (only the selected tab is in the Tab order, arrows move
+// between tabs in rtTabs). Without JS the tablist is hidden (.lp-js-only) and every panel shows with its own heading
+// (.lp-tab-h), so content is never trapped behind a control that cannot work. Items lacking a label or content are
+// skipped and k counts only emitted tabs, keeping ids contiguous for the runtime.
+function bdTabs(b, ctx) {
+  if (noItems(ctx, b)) return addItemBox(ctx);
+  const v = oneOf(b.variant, TAB_VARIANTS, 'line');
+  const id = 'lp-tab-' + escapeAttr(b.id);
+  let tabs = '';
+  let panels = '';
+  let k = 0;
+  bdArr(b.items).forEach((it, i) => {
+    if (!isObj(it)) return;
+    const p = `items.${i}.`;
+    const ic = it.icon ? icon(ctx, it.icon, 'lp-tab-ic') : '';
+    const img = mediaBox(ctx, it.image, { ratio: '16/9', fit: 'cover', cls: 'lp-tab-img', path: p + 'image' });
+    const text = fld(ctx, b, p + 'html', 'rich', 'div', 'lp-tab-x lp-rich', 'phd.tabText');
+    if (ctx.edit) {
+      panels += `<section class="lp-tab-p lp-card"${di(ctx, i)}><h3 class="lp-tab-h">${ic}${fld(ctx, b, p + 'label', 'plain', 'span', '', 'phd.tab')}</h3>${text}${img}</section>`;
+      return;
+    }
+    const label = txt(ctx, it.label);
+    if (!label || (!text && !img)) return;
+    const on = k === 0;
+    tabs += `<button type="button" role="tab" class="lp-tab" id="${id}-t${k}" aria-controls="${id}-p${k}" aria-selected="${on}" tabindex="${on ? 0 : -1}">${ic}<span class="lp-tab-l">${label}</span></button>`;
+    panels += `<section class="lp-tab-p" id="${id}-p${k}" role="tabpanel" aria-labelledby="${id}-t${k}" tabindex="0"><h3 class="lp-tab-h">${ic}${label}</h3>`
+      + `<div class="lp-tab-body${img ? ' lp-tab-media' : ''}">${text ? `<div class="lp-tab-c">${text}</div>` : ''}${img}</div></section>`;
+    k++;
+  });
+  if (ctx.edit) return `<div class="lp-tabs lp-tabs-${v} lp-tabs-edit">${panels}</div>`;
+  if (!k) return '';
+  feature(ctx, 'tabs');
+  return `<div class="lp-tabs lp-tabs-${v}" data-lp-tabs><div class="lp-tabs-list lp-js-only" role="tablist"${v === 'vertical' ? ' aria-orientation="vertical"' : ''}>${tabs}</div>`
+    + `<div class="lp-tabs-panels">${panels}</div></div>`;
+}
+
+/* ---------- comparison table ---------- */
+
+// Cell vocabulary for yes/no marks in all UI languages (plus symbols); matched whole-cell, case-insensitive, so
+// 'no limit' stays text. Icons get a screen-reader word because a bare check glyph is announced as nothing or 'image'.
+const CMP_YES = /^(\+|✓|✔|yes|y|true|да|так|ja|oui|sí|si|კი|დიახ)$/i;
+const CMP_NO = /^(-|−|–|—|✗|✕|×|no|n|false|нет|ні|nein|non|არა)$/i;
+
+function bdCmpCell(ctx, v, l) {
+  if (!v) return '';
+  if (CMP_YES.test(v)) return `${icon(ctx, 'check', 'lp-cmp-yes')}<span class="lp-sr">${escapeHTML(uiText('cmpYes', l, ctx.doc))}</span>`;
+  if (CMP_NO.test(v)) return `${icon(ctx, 'minus', 'lp-cmp-no')}<span class="lp-sr">${escapeHTML(uiText('cmpNo', l, ctx.doc))}</span>`;
+  return escapeHTML(v);
+}
+
+// Column count is the maximum across languages: translations may list a different number of columns, and a fixed n
+// keeps the grid rectangular (missing cells render empty). Row headers are sticky (CSS) so a wide table scrolled
+// horizontally keeps its labels; the wrapper is a focusable region so keyboard users can scroll it.
+function bdCompare(b, ctx) {
+  if (noItems(ctx, b)) return addItemBox(ctx);
+  const langs = ctx.edit ? [ctx.lang] : ctx.langs;
+  const cols = (l) => bdLines(ctx, b.cols, l);
+  const n = Math.max(1, ...langs.map((l) => cols(l).length));
+  const feat = Math.round(num(b.featured, 0, 0, 8));
+  const fc = (c) => (c + 1 === feat ? ' class="lp-cmp-feat"' : '');
+  let head = `<tr><td class="lp-cmp-corner"><span class="lp-sr">${ui(ctx, 'cmpFeature')}</span></td>`;
+  for (let c = 0; c < n; c++) head += `<th scope="col"${fc(c)}>${grp(ctx, (l) => escapeHTML(cols(l)[c] || ''))}</th>`;
+  head += '</tr>';
+  let rows = '';
+  bdArr(b.items).forEach((it, i) => {
+    if (!isObj(it)) return;
+    const p = `items.${i}.`;
+    const label = fld(ctx, b, p + 'label', 'plain', 'span', 'lp-cmp-l', 'phd.cmpRow');
+    if (!ctx.edit && !label) return;
+    if (it.group) {
+      rows += `<tr class="lp-cmp-grp"${di(ctx, i)}><th scope="colgroup" colspan="${n + 1}">${label}</th></tr>`;
+      return;
+    }
+    let tds = '';
+    for (let c = 0; c < n; c++) tds += `<td${fc(c)}>${grp(ctx, (l) => bdCmpCell(ctx, bdLines(ctx, it.values, l)[c] || '', l))}</td>`;
+    rows += `<tr${di(ctx, i)}><th scope="row">${label}${has(ctx, it.note) ? `<small class="lp-cmp-note">${txt(ctx, it.note)}</small>` : ''}</th>${tds}</tr>`;
+  });
+  if (!rows) return '';
+  const cap = has(ctx, b.caption) || ctx.edit ? `<caption class="lp-cmp-cap">${fld(ctx, b, 'caption', 'plain', 'span', '', 'phd.caption', { ecls: 'lp-opt' })}</caption>` : '';
+  return `<div class="lp-cmp"${ctx.edit ? '' : ' tabindex="0" role="region" aria-label="' + escapeAttr(htmlToText(str(pickText(b.caption, ctx.defaultLang, ctx.pd))) || uiText('cmpLabel', ctx.defaultLang, ctx.doc)) + '"'}>`
+    + `<table class="lp-cmp-t lp-cmp-n${Math.min(n, 6)}">${cap}<thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
+}
+
+/* ---------- before / after ---------- */
+
+// Before/after: both images stacked, the 'before' clipped by clip-path driven by --lp-ba. The control is a native
+// <input type=range> stretched over the image with opacity 0: keyboard, touch, screen readers and RTL come for free,
+// unlike a custom drag handle. touch-action:pan-y (CSS) keeps vertical page scroll working over the slider.
+function bdBeforeAfter(b, ctx) {
+  const A = attOf(ctx, b.before);
+  const B = attOf(ctx, b.after);
+  const okA = A && isImage(A) && attSrc(ctx, A);
+  const okB = B && isImage(B) && attSrc(ctx, B);
+  const start = Math.round(num(b.start, 50, 0, 100));
+  const ratio = oneOf(b.ratio, BD_RATIOS, '16/9');
+  const img = (a, path) => mediaBox(ctx, a ? a.id : null, { ratio: 'auto', fit: 'cover', cls: 'lp-ba-m', path, icon: 'image', eager: false });
+  if (!ctx.edit && !okA && !okB) return '';
+  const tag = (k, key, cls) => {
+    const v = has(ctx, b[k]) ? txt(ctx, b[k]) : ui(ctx, key);
+    return ctx.edit ? `<span class="lp-ba-tag ${cls}">${fld(ctx, b, k, 'plain', 'span', '', key === 'baBefore' ? 'phd.before' : 'phd.after')}</span>` : `<span class="lp-ba-tag ${cls}">${v}</span>`;
+  };
+  const cap = fld(ctx, b, 'caption', 'plain', 'figcaption', 'lp-ba-cap', 'phd.caption', { ecls: 'lp-opt' });
+  // One picture only (view): shown as it is.
+  if (!ctx.edit && (!okA || !okB)) return `<figure class="lp-ba lp-ba-one" style="--lp-ratio:${ratio}"><div class="lp-ba-box">${img(okA ? A : B, '')}</div>${cap}</figure>`;
+  let range = '';
+  if (!ctx.edit) {
+    feature(ctx, 'ba');
+    range = `<input type="range" class="lp-ba-range lp-js-only" min="0" max="100" step="1" value="${start}"${bdAttrI18n(ctx, 'aria-label', (l) => uiText('baRange', l, ctx.doc))}>`
+      + `<span class="lp-ba-line lp-js-only" aria-hidden="true"><span class="lp-ba-knob">${icon(ctx, 'chevronLeft')}${icon(ctx, 'chevronRight')}</span></span>`;
+  }
+  return `<figure class="lp-ba" data-lp-ba style="--lp-ba:${start}%;--lp-ratio:${ratio}"><div class="lp-ba-box">`
+    + `<div class="lp-ba-img lp-ba-after">${img(B, 'after')}${tag('afterLabel', 'baAfter', 'lp-ba-ta')}</div>`
+    + `<div class="lp-ba-img lp-ba-before">${img(A, 'before')}${tag('beforeLabel', 'baBefore', 'lp-ba-tb')}</div>${range}</div>${cap}</figure>`;
+}
+
+/* ---------- announcement bar ---------- */
+
+// Short, stable signature of a text: a dismissed announcement shows again once its text changes.
+// djb2 hash: not cryptographic, only needs to change when the text changes; >>> 0 keeps it an unsigned 32-bit int.
+function bdSig(s) {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+function bdAnnounce(b, ctx) {
+  const tone = oneOf(b.tone, TONES, 'accent');
+  const text = fld(ctx, b, 'html', 'inline', 'span', 'lp-ann-t', 'phd.annText');
+  if (!ctx.edit && !text) return '';
+  const ic = b.icon ? icon(ctx, b.icon, 'lp-ann-ic') : '';
+  let link = '';
+  if (ctx.edit) link = `<span class="lp-ann-a">${fld(ctx, b, 'label', 'plain', 'span', '', 'ph.btn', { ecls: 'lp-opt' })}${icon(ctx, 'arrowRight')}</span>`;
+  else {
+    const l = txt(ctx, b.label);
+    const h = l ? hrefAttr(ctx, b.href) : '';
+    if (h) link = `<a class="lp-ann-a"${h}>${l}${icon(ctx, 'arrowRight')}</a>`;
+  }
+  let close = '';
+  let data = '';
+  if (b.dismiss) {
+    close = `<button type="button" class="lp-ann-x${ctx.edit ? '' : ' lp-js-only'}"${ctx.edit ? ' tabindex="-1"' : ' data-lp-ann-x'}>${icon(ctx, 'close')}<span class="lp-sr">${ui(ctx, 'annClose')}</span></button>`;
+    if (!ctx.edit) {
+      feature(ctx, 'announce');
+      data = ` data-lp-ann="${escapeAttr(b.id)}" data-lp-ann-v="${bdSig(JSON.stringify([b.html, b.label, b.href]))}"`;
+    }
+  }
+  return `<div class="lp-ann${tone !== 'auto' ? ' lp-tone-' + tone : ''}"${data}><div class="lp-wrap lp-ann-in">${ic}<p class="lp-ann-p">${text}${link}</p>${close}</div></div>`;
+}
+
+/* ---------- countdown ---------- */
+
+const CD_UNITS = ['dhms', 'dhm', 'dh', 'd'];
+const CD_KEYS = { d: 'cdD', h: 'cdH', m: 'cdM', s: 'cdS' };
+
+// '+04:00' for 4, '-03:30' for -3.5.
+// The countdown target is serialized as an ISO string with this explicit offset so every visitor counts down to the
+// same instant; without tz the string has no offset and Date parses it as the visitor's local time (intended for
+// 'midnight wherever you are' events).
+function bdOffset(h) {
+  const m = Math.round(Math.abs(h) * 60);
+  return (h < 0 ? '-' : '+') + String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+}
+
+function bdCountdown(b, ctx) {
+  const v = oneOf(b.variant, ['cards', 'plain'], 'cards');
+  const units = oneOf(b.units, CD_UNITS, 'dhms');
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(str(b.date)) ? b.date : '';
+  const hasTime = /^\d{2}:\d{2}$/.test(str(b.time));
+  const time = hasTime ? b.time : '00:00';
+  const tz = b.tz == null || b.tz === '' ? null : num(b.tz, 0, -12, 14);
+  const title = fld(ctx, b, 'title', 'plain', 'h2', 'lp-h lp-h3 lp-cd-t', 'phd.cdTitle', { ecls: 'lp-opt' });
+  if (!ctx.edit && !day) return '';
+  const when = day ? grp(ctx, (l) => escapeHTML(formatDay(day, l, ctx.doc) + (hasTime ? ', ' + time : '') + (tz != null ? ' (UTC' + (tz ? bdOffset(tz).replace(':00', '') : '') + ')' : ''))) : '';
+  // Placeholder digits are an en dash in exports: the real values need script, and '00' would read as 'it is over'.
+  // role=timer with aria-live=off: announcing every second would flood screen readers.
+  const cells = units.split('').map((u) => `<div class="lp-cd-u"><span class="lp-cd-n" data-lp-cd-n="${u}">${ctx.edit ? '00' : '–'}</span>`
+    + `<span class="lp-cd-l" data-lp-cd-l="${u}">${ui(ctx, CD_KEYS[u], { n: 0 })}</span></div>`).join('');
+  let done = '';
+  if (has(ctx, b.done) || ctx.edit) done = ctx.edit ? `<p class="lp-cd-done">${fld(ctx, b, 'done', 'plain', 'span', '', 'phd.cdDone', { ecls: 'lp-opt' })}</p>` : `<p class="lp-cd-done" data-lp-cd-done hidden>${txt(ctx, b.done)}</p>`;
+  let data = '';
+  if (!ctx.edit && day) {
+    feature(ctx, 'countdown');
+    needUi(ctx, ...units.split('').map((u) => CD_KEYS[u]));
+    data = ` data-lp-cd="${escapeAttr(day + 'T' + time + (tz != null ? bdOffset(tz) : ''))}" data-lp-cd-u="${units}"`;
+  }
+  return `<div class="lp-cd lp-cd-${v}"${data}>${title}<div class="lp-cd-units${ctx.edit ? '' : ' lp-js-only'}" role="timer" aria-live="off">${cells}</div>`
+    + `${when ? `<p class="lp-cd-when">${when}</p>` : ''}${done}</div>`;
+}
+
+/* ---------- video ---------- */
+
+// An external video link → { src (embed URL), host, open (the page to open it on) } or null. YouTube (privacy-enhanced
+// youtube-nocookie.com), Vimeo (do-not-track player), PeerTube watch links; any other https link is embedded as is.
+// Click-to-load (two-click) embeds: no third-party request until the visitor presses play, which is both a privacy
+// requirement (GDPR-style consent for YouTube/Vimeo cookies) and a performance win (no heavy iframe on load).
+// Only https URLs without quote/angle characters are accepted, so the value is safe in an attribute and in iframe src.
+function videoEmbed(raw) {
+  const s = str(raw).trim();
+  if (!/^https:\/\/[^\s"'<>]+$/i.test(s)) return null;
+  let u;
+  try { u = new URL(s); } catch (e) { return null; }
+  const host = u.hostname.replace(/^(www|m)\./i, '').toLowerCase();
+  // YouTube ids are 11 chars of base64url today; the looser range tolerates format changes without accepting junk.
+  const ID = /^[A-Za-z0-9_-]{6,20}$/;
+  let id = '';
+  if (host === 'youtu.be') id = u.pathname.slice(1).split('/')[0];
+  else if (/(^|\.)youtube(-nocookie)?\.com$/.test(host)) {
+    id = u.searchParams.get('v') || '';
+    const m = /^\/(?:embed|shorts|live|v)\/([^/?#]+)/.exec(u.pathname);
+    if (!id && m) id = m[1];
+  }
+  if (id && ID.test(id)) {
+    const t = parseInt(u.searchParams.get('t') || u.searchParams.get('start') || '', 10);
+    return { src: `https://www.youtube-nocookie.com/embed/${id}${t > 0 ? '?start=' + t : ''}`, host: 'youtube.com', open: `https://www.youtube.com/watch?v=${id}` };
+  }
+  if (host === 'vimeo.com' || host === 'player.vimeo.com') {
+    const m = /\/(?:video\/)?(\d{5,12})(?:\/|$)/.exec(u.pathname);
+    if (m) return { src: `https://player.vimeo.com/video/${m[1]}?dnt=1`, host: 'vimeo.com', open: `https://vimeo.com/${m[1]}` };
+  }
+  const pt = /^\/(?:w|videos\/watch)\/([A-Za-z0-9-]{6,40})$/.exec(u.pathname);
+  if (pt) return { src: `https://${u.host}/videos/embed/${pt[1]}`, host, open: s };
+  return { src: s, host, open: s };
+}
+
+const normVideoURL = (v) => (videoEmbed(v) ? str(v).trim() : '');
+
+function bdVideo(b, ctx) {
+  // `from`, not `source`: that key is the common content-collection binding of list blocks.
+  const src = oneOf(b.from, ['file', 'url'], 'file');
+  const ratio = oneOf(b.ratio, BD_RATIOS, '16/9');
+  const titleOf = (l) => plainIn(ctx, b.title, l);
+  const cap = fld(ctx, b, 'caption', 'plain', 'figcaption', 'lp-vid-cap', 'phd.caption', { ecls: 'lp-opt' });
+  if (src === 'file') {
+    const a = attOf(ctx, b.att);
+    const ok = a && /^video\//.test(mimeBase(a.mime));
+    if (!ok) return ctx.edit ? `<figure class="lp-vid"><div class="lp-vid-box lp-vid-empty" style="--lp-ratio:${ratio}" data-att-key="att">${icon(ctx, 'video')}</div>${cap}</figure>` : '';
+    const player = objectHTML(ctx, a, { player: 'native', ratio: ratio === '16/9' || ratio === '4/3' ? ratio : '16/9', poster: b.poster, title: titleOf(ctx.lang) || a.name });
+    return player ? `<figure class="lp-vid lp-vid-file">${player}${cap}</figure>` : '';
+  }
+  const e = videoEmbed(b.url);
+  if (!e) return ctx.edit ? `<figure class="lp-vid"><div class="lp-vid-box lp-vid-empty" style="--lp-ratio:${ratio}">${icon(ctx, 'video')}<span>${escapeHTML(uiText('phd.vidURL', ctx.uiLang, ctx.doc))}</span></div>${cap}</figure>` : '';
+  const pa = attOf(ctx, b.poster);
+  const ps = pa && isImage(pa) ? attSrc(ctx, pa) : '';
+  const poster = ps ? `<img class="lp-vid-poster" src="${escapeAttr(ps)}"${altAttr(ctx, () => '')}${imgAttr(ctx, pa)} loading="lazy" decoding="async">` : '';
+  const host = escapeHTML(e.host);
+  const note = `<p class="lp-vid-note">${grp(ctx, (l) => escapeHTML(uiText('vidNote', l, ctx.doc, { host: e.host })))} `
+    + `<a class="lp-vid-open" href="${escapeAttr(e.open)}" target="_blank" rel="noopener noreferrer">${grp(ctx, (l) => escapeHTML(uiText('vidOpen', l, ctx.doc, { host: e.host })))}</a></p>`;
+  const play = ctx.edit ? `<span class="lp-vid-play">${icon(ctx, 'play')}</span>`
+    : `<button type="button" class="lp-vid-play lp-js-only" data-lp-vid-play${bdAttrI18n(ctx, 'aria-label', (l) => uiText('vidPlay', l, ctx.doc, { title: titleOf(l) || host }))}>${icon(ctx, 'play')}</button>`;
+  if (!ctx.edit) feature(ctx, 'video');
+  const t = titleOf(ctx.defaultLang || ctx.lang);
+  return `<figure class="lp-vid lp-vid-ext"${ctx.edit ? '' : ` data-lp-vid="${escapeAttr(e.src)}" data-lp-vid-title="${escapeAttr(t)}"`}>`
+    + `<div class="lp-vid-box" style="--lp-ratio:${ratio}">${poster}<div class="lp-vid-gate${poster ? ' lp-vid-over' : ''}">${play}${note}</div></div>${cap}</figure>`;
+}
+
+/* ---------- registry ---------- */
+
+const BT_D = {
+  carousel: {
+    category: 'media', icon: 'images', container: false, variants: ['variant'],
+    i18nFields: ['label'], itemI18nFields: ['title', 'html', 'label'], itemRichFields: { html: 'rich' }, itemLabel: 'title',
+    defaults: () => ({ variant: 'cards', label: {}, ratio: '16/9', perView: 3, perViewT: 2, perViewP: 1, gap: 20, overlay: 45, autoplay: 0, loop: true, arrows: true, dots: true, items: [] }),
+    schema: [
+      { key: 'variant', type: 'select', label: 'f.variant', options: optList(...CAR_VARIANTS) },
+      { key: 'ratio', type: 'select', label: 'f.ratio', options: bdRatioOpts(...BD_RATIOS) },
+      { key: 'perView', type: 'range', label: 'f.perView', min: 1, max: 6, step: 1, when: { variant: ['cards', 'images'] } },
+      { key: 'perViewT', type: 'range', label: 'f.perViewT', min: 1, max: 4, step: 1, when: { variant: ['cards', 'images'] } },
+      { key: 'perViewP', type: 'range', label: 'f.perViewP', min: 1, max: 2, step: 1, when: { variant: ['cards', 'images'] } },
+      { key: 'gap', type: 'range', label: 'f.gap', min: 0, max: 48, step: 2, unit: 'px' },
+      { key: 'overlay', type: 'range', label: 'f.overlay', min: 0, max: 90, step: 5, unit: '%', when: { variant: 'hero' } },
+      { key: 'autoplay', type: 'range', label: 'f.autoplay', hint: 'fh.autoplay', min: 0, max: 15, step: 1, unit: ' s' },
+      { key: 'loop', type: 'checkbox', label: 'f.loop' },
+      { key: 'arrows', type: 'checkbox', label: 'f.arrows' },
+      { key: 'dots', type: 'checkbox', label: 'f.dots' },
+      { key: 'label', type: 'i18n', label: 'f.carLabel', hint: 'fh.carLabel' },
+    ],
+    itemSchema: [
+      { key: 'image', type: 'att', label: 'f.image', accept: 'image/' },
+      { key: 'title', type: 'i18n', label: 'f.title' },
+      { key: 'label', type: 'i18n', label: 'f.btnLabel' },
+      { key: 'href', type: 'text', label: 'f.href', suggest: 'anchors', placeholder: 'pl.href' },
+    ],
+    itemDefaults: () => ({ id: uid(), image: null, title: {}, html: {}, label: {}, href: '' }),
+    render: bdCarousel,
+  },
+  tabs: {
+    category: 'content', icon: 'layout', container: false, variants: ['variant'],
+    i18nFields: [], itemI18nFields: ['label', 'html'], itemRichFields: { html: 'rich' }, itemLabel: 'label',
+    defaults: () => ({ variant: 'line', items: [] }),
+    schema: [{ key: 'variant', type: 'select', label: 'f.variant', options: optList(...TAB_VARIANTS) }],
+    itemSchema: [
+      { key: 'label', type: 'i18n', label: 'f.tabLabel' },
+      { key: 'icon', type: 'icon', label: 'f.icon' },
+      { key: 'image', type: 'att', label: 'f.image', accept: 'image/' },
+    ],
+    itemDefaults: () => ({ id: uid(), label: {}, icon: '', html: {}, image: null }),
+    render: bdTabs,
+  },
+  compare: {
+    category: 'content', icon: 'table', container: false, variants: [],
+    i18nFields: ['cols', 'caption'], itemI18nFields: ['label', 'values', 'note'], itemLabel: 'label',
+    defaults: () => ({ cols: {}, caption: {}, featured: 0, items: [] }),
+    schema: [
+      { key: 'cols', type: 'i18n', label: 'f.cmpCols', hint: 'fh.cmpCols', multiline: true, rows: 4 },
+      { key: 'featured', type: 'number', label: 'f.cmpFeatured', hint: 'fh.featured', min: 0, max: 8, step: 1 },
+      { key: 'caption', type: 'i18n', label: 'f.caption' },
+    ],
+    itemSchema: [
+      { key: 'label', type: 'i18n', label: 'f.cmpRow' },
+      { key: 'values', type: 'i18n', label: 'f.cmpValues', hint: 'fh.cmpValues', multiline: true, rows: 4 },
+      { key: 'note', type: 'i18n', label: 'f.cmpNote' },
+      { key: 'group', type: 'checkbox', label: 'f.cmpGroup' },
+    ],
+    itemDefaults: () => ({ id: uid(), label: {}, values: {}, note: {}, group: false }),
+    render: bdCompare,
+  },
+  beforeafter: {
+    category: 'media', icon: 'image', container: false, variants: [],
+    i18nFields: ['beforeLabel', 'afterLabel', 'caption'],
+    defaults: () => ({ before: null, after: null, beforeLabel: {}, afterLabel: {}, start: 50, ratio: '16/9', caption: {} }),
+    schema: [
+      { key: 'before', type: 'att', label: 'f.before', accept: 'image/' },
+      { key: 'after', type: 'att', label: 'f.after', accept: 'image/' },
+      { key: 'start', type: 'range', label: 'f.baStart', min: 0, max: 100, step: 1, unit: '%' },
+      { key: 'ratio', type: 'select', label: 'f.ratio', options: bdRatioOpts(...BD_RATIOS) },
+    ],
+    render: bdBeforeAfter,
+  },
+  announce: {
+    category: 'structure', icon: 'flag', container: false, full: true, region: 'header', regionStart: true, variants: ['tone'],
+    i18nFields: ['label'], richFields: { html: 'inline' },
+    defaults: () => ({ html: {}, label: {}, href: '', icon: 'sparkle', tone: 'accent', dismiss: true }),
+    schema: [
+      { key: 'tone', type: 'select', label: 'f.tone', options: TONES.map((v) => ({ v, l: v === 'auto' ? 'o.toneAuto' : 'o.' + v })) },
+      { key: 'icon', type: 'icon', label: 'f.icon' },
+      { key: 'href', type: 'text', label: 'f.href', suggest: 'anchors', placeholder: 'pl.href' },
+      { key: 'dismiss', type: 'checkbox', label: 'f.dismiss', hint: 'fh.dismiss' },
+    ],
+    render: bdAnnounce,
+  },
+  countdown: {
+    category: 'content', icon: 'clock', container: false, variants: ['variant'],
+    i18nFields: ['title', 'done'],
+    defaults: () => ({ title: {}, date: '', time: '', tz: null, units: 'dhms', variant: 'cards', done: {} }),
+    schema: [
+      { key: 'date', type: 'day', label: 'f.cdDate' },
+      { key: 'time', type: 'time', label: 'f.cdTime' },
+      { key: 'tz', type: 'number', label: 'f.tz', hint: 'fh.tz', min: -12, max: 14, step: 0.5, nullable: true },
+      { key: 'units', type: 'select', label: 'f.cdUnits', options: CD_UNITS.map((v) => ({ v, l: 'o.cd.' + v })) },
+      { key: 'variant', type: 'select', label: 'f.variant', options: optList('cards', 'plain') },
+    ],
+    render: bdCountdown,
+  },
+  video: {
+    category: 'media', icon: 'video', container: false, variants: [],
+    i18nFields: ['title', 'caption'],
+    defaults: () => ({ from: 'file', att: null, url: '', poster: null, title: {}, caption: {}, ratio: '16/9' }),
+    schema: [
+      { key: 'from', type: 'select', label: 'f.vidSource', options: [{ v: 'file', l: 'o.vid.file' }, { v: 'url', l: 'o.vid.url' }] },
+      { key: 'att', type: 'att', label: 'f.vidFile', accept: 'video/', when: { from: 'file' } },
+      { key: 'url', type: 'text', label: 'f.vidURL', hint: 'fh.vidURL', placeholderText: 'https://www.youtube.com/watch?v=…', when: { from: 'url' }, norm: normVideoURL },
+      { key: 'poster', type: 'att', label: 'f.poster', accept: 'image/' },
+      { key: 'title', type: 'i18n', label: 'f.vidTitle' },
+      { key: 'ratio', type: 'select', label: 'f.ratio', options: bdRatioOpts(...BD_RATIOS) },
+    ],
+    render: bdVideo,
+  },
+};
+
+/* ---------- CSS ---------- */
+
+// Carousel CSS (shared with the testimonials quote slider, hence exported separately).
+// - The wrapper is the size container (container-type inline-size), so slides-per-view follow the column width.
+// - Slide width = (100% - (n-1)*gap) / n: exact fit of n slides with n-1 gaps inside the track.
+// - Scrollbar hidden only when script provides controls (html.lp-js); the no-script page keeps a thin scrollbar as
+//   the only visible affordance that more slides exist.
+// - Smooth scrolling only under prefers-reduced-motion:no-preference; print and edit mode unwrap the track so every
+//   slide is visible.
+// - Buttons and dots are 44px tall: WCAG 2.5.5 target size; dots are thin visually but keep the 44px hit area.
+const BD_CAR_CSS = `
+.lp-carw{container:lp-car/inline-size;min-width:0}
+.lp-car{--lp-car-n:var(--lp-car-d,3);position:relative}
+.lp-car-track{display:flex;gap:var(--lp-car-gap,20px);margin:0;padding:4px 2px 6px;list-style:none;overflow-x:auto;overscroll-behavior-x:contain;scroll-snap-type:x mandatory;scrollbar-width:none;border-radius:var(--lp-radius)}
+.lp-car-track::-webkit-scrollbar{display:none}
+html:not(.lp-js) .lp-car-track{scrollbar-width:thin;padding-bottom:12px}
+.lp-car-track:focus-visible{outline:2px solid var(--lp-accent);outline-offset:3px}
+.lp-car-slide{flex:0 0 calc((100% - (var(--lp-car-n) - 1) * var(--lp-car-gap,20px)) / var(--lp-car-n));min-width:0;scroll-snap-align:start;display:flex}
+.lp-car-in{flex:1;display:flex;flex-direction:column;min-width:0}
+.lp-car-ctl{display:flex;align-items:center;justify-content:center;gap:10px;margin-top:14px}
+.lp-car-btn{display:inline-flex;align-items:center;justify-content:center;flex:none;width:44px;height:44px;padding:0;border:1px solid var(--lp-border);border-radius:50%;background:var(--lp-surface);color:var(--lp-text);font:inherit;cursor:pointer;transition:background-color .2s,color .2s,border-color .2s}
+.lp-car-btn:hover{background:var(--lp-accent);border-color:var(--lp-accent);color:var(--lp-on-accent)}
+.lp-car-btn:focus-visible,.lp-car-dot:focus-visible{outline:2px solid var(--lp-accent);outline-offset:2px}
+.lp-car-btn[aria-disabled=true]{opacity:.4;cursor:default;background:var(--lp-surface);color:var(--lp-text);border-color:var(--lp-border)}
+.lp-car-btn .lp-ic{width:20px;height:20px}
+[dir=rtl] .lp-car-prev .lp-ic,[dir=rtl] .lp-car-next .lp-ic{transform:scaleX(-1)}
+.lp-car-pause .lp-i-play,.lp-car-pause[aria-pressed=true] .lp-i-pause{display:none}
+.lp-car-pause[aria-pressed=true] .lp-i-play{display:inline}
+.lp-car-dots{display:flex;flex-wrap:wrap;justify-content:center;gap:2px;min-width:0}
+.lp-car-dot{display:inline-flex;align-items:center;justify-content:center;width:28px;height:44px;padding:0;border:0;background:none;cursor:pointer}
+.lp-car-dot::before{content:"";width:9px;height:9px;border-radius:99px;background:color-mix(in srgb,var(--lp-text) 28%,transparent);transition:width .25s var(--lp-ease,ease),background-color .25s}
+.lp-car-dot[aria-current=true]::before{width:22px;background:var(--lp-accent)}
+.lp-car-one .lp-car-ctl{display:none}
+@container lp-car (max-width:900px){.lp-car{--lp-car-n:var(--lp-car-t,2)}}
+@container lp-car (max-width:560px){.lp-car{--lp-car-n:var(--lp-car-p,1)}.lp-car-dot{width:22px}}
+@media (prefers-reduced-motion:no-preference){.lp-car-track{scroll-behavior:smooth}}
+@media (prefers-reduced-motion:reduce){.lp-car-dot::before{transition:none}}
+@media print{.lp-car-track{flex-wrap:wrap;overflow:visible}.lp-car-ctl{display:none}}
+.lp-root[data-mode=edit] .lp-car-track{flex-wrap:wrap;overflow:visible;scroll-snap-type:none}
+`;
+
+// Per-block CSS, included in an export only for blocks the page uses (OWN_D maps selectors back to their block so
+// the CSS library can prune). Notable decisions:
+// - tabs: html.lp-js hides the per-panel headings that serve as the no-script fallback.
+// - compare: min-width scales with the column count (--lp-cmp-cols via .lp-cmp-nN), so narrow screens scroll the
+//   table instead of crushing cells; sticky row headers keep labels in view.
+// - beforeafter: without JS the two images sit side by side (grid), because a clipped stack with no slider would
+//   show only half of each picture.
+// - announce: when the header holds an announcement and a sticky nav, the header becomes display:contents and the nav
+//   itself sticks, so the bar scrolls away while the navigation stays (a sticky header would pin both).
+// - Georgian (:lang(ka)) opts out of uppercase + letter-spacing: Mkhedruli has no case, and tracking hurts it.
+const CSS_BLOCKS_D = {
+  carousel: BD_CAR_CSS + `
+.lp-car-cards .lp-car-in{border:1px solid var(--lp-border);border-radius:var(--lp-radius);background:var(--lp-surface);overflow:hidden}
+.lp-car-img{--lp-ratio:inherit;border-radius:0}
+.lp-car-body{display:flex;flex-direction:column;gap:10px;padding:clamp(16px,2.2cqi,24px)}
+.lp-car-t{margin:0;font-family:var(--lp-font-h);font-size:clamp(1.08em,1em + .5cqi,1.3em);line-height:1.25;overflow-wrap:break-word}
+.lp-car-x{color:var(--lp-muted)}
+.lp-car-a{align-self:flex-start;margin-top:auto}
+.lp-car-cap{margin:8px 2px 0;color:var(--lp-muted);font-size:.9em;line-height:1.45}
+.lp-car-images .lp-car-img{border-radius:var(--lp-radius);overflow:hidden}
+.lp-car-images .lp-car-body{padding:0}
+.lp-car-hero .lp-car-in{position:relative;isolation:isolate;justify-content:flex-end;min-height:240px;aspect-ratio:var(--lp-ratio,16/9);border-radius:calc(var(--lp-radius) * 1.4);overflow:hidden;background:var(--lp-surface);color:var(--lp-text)}
+.lp-car-hero .lp-car-in:not(.lp-car-noimg){color:#fff}
+.lp-car-hero .lp-car-bg{position:absolute;inset:0;z-index:-2;height:100%}
+.lp-car-hero .lp-car-bg img{width:100%;height:100%;object-fit:cover}
+.lp-car-hero .lp-car-in:not(.lp-car-noimg)::after{content:"";position:absolute;inset:0;z-index:-1;background:linear-gradient(to top,rgba(0,0,0,calc(var(--lp-ov,.45) + .2)),rgba(0,0,0,calc(var(--lp-ov,.45) * .35)) 70%)}
+.lp-car-hero .lp-car-body{max-width:44rem;padding:clamp(22px,5cqi,56px)}
+.lp-car-hero .lp-car-t{font-size:clamp(1.5em,1.1em + 2.4cqi,2.6em);line-height:1.12;letter-spacing:-.015em}
+.lp-car-hero .lp-car-in:not(.lp-car-noimg) .lp-car-x{color:rgba(255,255,255,.88)}
+.lp-car-hero .lp-car-a{margin-top:8px}
+@container lp-car (max-width:560px){.lp-car-hero .lp-car-in{aspect-ratio:4/5}}
+.lp-root[data-mode=edit] .lp-car-hero .lp-car-slide{flex-basis:100%}
+`,
+  tabs: `
+.lp-b-tabs{container:lp-tab/inline-size}
+.lp-tabs-list{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:clamp(18px,2.6cqi,28px)}
+.lp-tab{display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:8px 16px;border:0;background:none;color:var(--lp-muted);font:inherit;font-weight:600;line-height:1.3;text-align:start;cursor:pointer;transition:color .2s,background-color .2s,border-color .2s}
+.lp-tab:hover{color:var(--lp-text)}
+.lp-tab[aria-selected=true]{color:var(--lp-accent)}
+.lp-tab:focus-visible{outline:2px solid var(--lp-accent);outline-offset:2px;border-radius:var(--lp-radius-s,6px)}
+.lp-tab-ic{width:20px;height:20px;flex:none}
+.lp-tab-h{display:flex;align-items:center;gap:10px;margin:0 0 12px;font-family:var(--lp-font-h);font-size:1.2em;line-height:1.3}
+html.lp-js [data-lp-tabs] .lp-tab-h{display:none}
+html:not(.lp-js) .lp-tab-p+.lp-tab-p{margin-top:clamp(24px,3.4cqi,40px)}
+.lp-tab-p:focus-visible{outline:2px solid var(--lp-accent);outline-offset:4px;border-radius:var(--lp-radius)}
+.lp-tab-body{min-width:0}
+.lp-tab-media{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:clamp(20px,3.4cqi,44px);align-items:center}
+.lp-tab-img{border-radius:var(--lp-radius);overflow:hidden}
+@container lp-tab (max-width:700px){.lp-tab-media{grid-template-columns:minmax(0,1fr)}.lp-tabs-list{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin}.lp-tab{flex:none}}
+.lp-tabs-edit{display:grid;gap:16px}
+.lp-tabs-edit .lp-tab-h{display:flex}
+`,
+  compare: `
+.lp-b-compare{container:lp-cmp/inline-size}
+.lp-cmp{overflow-x:auto;overscroll-behavior-x:contain;border:1px solid var(--lp-border);border-radius:var(--lp-radius);background:var(--lp-surface)}
+.lp-cmp:focus-visible{outline:2px solid var(--lp-accent);outline-offset:2px}
+.lp-cmp-t{width:100%;min-width:max(100%,calc(10em + var(--lp-cmp-cols,3) * 7.5em));border-collapse:separate;border-spacing:0;font-size:.96em;line-height:1.4}
+.lp-cmp-n1{--lp-cmp-cols:1}.lp-cmp-n2{--lp-cmp-cols:2}.lp-cmp-n3{--lp-cmp-cols:3}.lp-cmp-n4{--lp-cmp-cols:4}.lp-cmp-n5{--lp-cmp-cols:5}.lp-cmp-n6{--lp-cmp-cols:6}
+.lp-cmp-cap{caption-side:top;padding:14px 18px 4px;text-align:start;font-weight:600;color:var(--lp-muted)}
+.lp-cmp-t th,.lp-cmp-t td{padding:12px 16px;border-bottom:1px solid var(--lp-border);text-align:center;vertical-align:middle;overflow-wrap:anywhere}
+.lp-cmp-t thead th{font-family:var(--lp-font-h);font-size:1.05em;line-height:1.25;color:var(--lp-text)}
+.lp-cmp-t tbody th{text-align:start;font-weight:500}
+.lp-cmp-t tbody tr:last-child>*{border-bottom:0}
+.lp-cmp-t tbody tr:hover>*{background:color-mix(in srgb,var(--lp-text) 3%,transparent)}
+.lp-cmp-t th[scope=row],.lp-cmp-corner{position:sticky;inset-inline-start:0;z-index:1;background:var(--lp-surface);min-width:9em}
+.lp-cmp-feat{background:color-mix(in srgb,var(--lp-accent) 8%,transparent)}
+thead .lp-cmp-feat{color:var(--lp-accent)!important;box-shadow:inset 0 3px 0 var(--lp-accent)}
+.lp-cmp-grp th{padding-top:18px;background:var(--lp-tint,color-mix(in srgb,var(--lp-accent) 7%,transparent));color:var(--lp-text);font-size:.82em;font-weight:700;letter-spacing:.05em;text-transform:uppercase;text-align:start}
+.lp-cmp-grp th:lang(ka){text-transform:none;letter-spacing:0}
+.lp-cmp-note{display:block;margin-top:2px;color:var(--lp-muted);font-size:.84em;font-weight:400}
+.lp-cmp-yes{width:22px;height:22px;color:var(--lp-accent);stroke-width:2.4}
+.lp-cmp-no{width:20px;height:20px;color:color-mix(in srgb,var(--lp-text) 35%,transparent)}
+@container lp-cmp (max-width:600px){.lp-cmp-t th,.lp-cmp-t td{padding:10px 10px}.lp-cmp-t{font-size:.9em}}
+`,
+  beforeafter: `
+.lp-ba{margin:0}
+.lp-ba-box{position:relative;overflow:hidden;aspect-ratio:var(--lp-ratio,16/9);border-radius:var(--lp-radius);background:var(--lp-surface);touch-action:pan-y;-webkit-user-select:none;user-select:none}
+.lp-ba-img{position:absolute;inset:0}
+.lp-ba-m{height:100%}
+.lp-ba-m img{width:100%;height:100%;object-fit:cover}
+.lp-ba-before{clip-path:inset(0 calc(100% - var(--lp-ba,50%)) 0 0)}
+[dir=rtl] .lp-ba-before{clip-path:inset(0 0 0 calc(100% - var(--lp-ba,50%)))}
+.lp-ba-tag{position:absolute;top:12px;z-index:1;max-width:45%;padding:4px 12px;border-radius:99px;background:rgba(0,0,0,.62);color:#fff;font-size:.8em;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+.lp-ba-tb{inset-inline-start:12px}
+.lp-ba-ta{inset-inline-end:12px}
+.lp-ba-range{position:absolute;inset:0;z-index:2;width:100%;height:100%;margin:0;opacity:0;cursor:ew-resize;-webkit-appearance:none;appearance:none;background:transparent}
+.lp-ba-line{position:absolute;top:0;bottom:0;inset-inline-start:var(--lp-ba,50%);z-index:1;width:3px;margin-inline-start:-1.5px;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.18);pointer-events:none}
+.lp-ba-knob{position:absolute;top:50%;left:50%;display:flex;align-items:center;justify-content:center;width:46px;height:46px;border-radius:50%;background:#fff;color:#111;box-shadow:0 4px 18px rgba(0,0,0,.28);transform:translate(-50%,-50%)}
+.lp-ba-knob .lp-ic{width:16px;height:16px;stroke-width:2.6}
+.lp-ba-range:focus-visible~.lp-ba-line .lp-ba-knob{outline:3px solid var(--lp-accent);outline-offset:2px}
+.lp-ba-cap{margin-top:10px;color:var(--lp-muted);font-size:.92em;text-align:center}
+html:not(.lp-js) .lp-ba-box{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;aspect-ratio:auto;overflow:visible;background:none}
+html:not(.lp-js) .lp-ba-img{position:relative;aspect-ratio:var(--lp-ratio,16/9);clip-path:none;overflow:hidden;border-radius:var(--lp-radius)}
+html:not(.lp-js) .lp-ba-before{order:-1}
+.lp-ba-one .lp-ba-box{display:block}
+@media print{.lp-ba-box{display:grid;grid-template-columns:1fr 1fr;gap:8px;aspect-ratio:auto}.lp-ba-img{position:relative;aspect-ratio:var(--lp-ratio,16/9);clip-path:none}}
+`,
+  announce: `
+.lp-ann{position:relative;background:var(--lp-bg);color:var(--lp-text);font-size:.92em;line-height:1.45}
+.lp-ann:not([class*=lp-tone-]){background:var(--lp-tint,var(--lp-surface))}
+.lp-ann-in{display:flex;align-items:center;justify-content:center;gap:10px;min-height:44px;padding-block:8px}
+.lp-ann-ic{flex:none;width:18px;height:18px}
+.lp-ann-p{margin:0;min-width:0;text-align:center;overflow-wrap:anywhere}
+.lp-ann-t a{color:inherit;text-decoration:underline;text-underline-offset:.16em}
+.lp-ann-a{display:inline-flex;align-items:center;gap:4px;margin-inline-start:10px;color:inherit;font-weight:700;text-decoration:underline;text-underline-offset:.18em;white-space:nowrap}
+.lp-ann-a .lp-ic{width:15px;height:15px}
+[dir=rtl] .lp-ann-a .lp-ic{transform:scaleX(-1)}
+.lp-ann-x{display:inline-flex;align-items:center;justify-content:center;flex:none;width:36px;height:36px;margin-inline-start:auto;padding:0;border:0;border-radius:50%;background:transparent;color:inherit;cursor:pointer;opacity:.8}
+.lp-ann-x:hover{opacity:1;background:color-mix(in srgb,currentColor 12%,transparent)}
+.lp-ann-x:focus-visible{outline:2px solid currentColor;outline-offset:1px;opacity:1}
+.lp-ann-x .lp-ic{width:18px;height:18px}
+.lp-ann-in:has(.lp-ann-x)::before{content:"";flex:none;width:36px}
+.lp-root[data-mode=view] .lp-header:has(>.lp-b-announce):has(.lp-nav-sticky:not(.lp-nav-over)){display:contents}
+.lp-root[data-mode=view] .lp-header:has(>.lp-b-announce) .lp-b-nav:has(>.lp-nav-sticky:not(.lp-nav-over)){position:sticky;top:0;z-index:40}
+@container lp (max-width:600px){.lp-ann-in:has(.lp-ann-x)::before{display:none}.lp-ann-in{justify-content:flex-start}.lp-ann-p{text-align:start}.lp-ann-a{margin-inline-start:6px}}
+`,
+  countdown: `
+.lp-cd{text-align:center}
+.lp-cd-t{margin:0 0 16px}
+.lp-cd-units{display:flex;flex-wrap:wrap;justify-content:center;gap:clamp(8px,1.6cqi,16px)}
+.lp-cd-u{display:flex;flex-direction:column;align-items:center;min-width:clamp(68px,12cqi,110px)}
+.lp-cd-n{font-family:var(--lp-font-h);font-size:clamp(2em,1.4em + 3cqi,3.4em);font-weight:700;line-height:1.05;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.lp-cd-l{margin-top:6px;color:var(--lp-muted);font-size:.82em;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.lp-cd-l:lang(ka){text-transform:none;letter-spacing:0}
+.lp-cd-cards .lp-cd-u{padding:clamp(14px,2cqi,22px) clamp(10px,1.6cqi,18px);border:1px solid var(--lp-border);border-radius:var(--lp-radius);background:var(--lp-surface);box-shadow:var(--lp-shadow)}
+.lp-cd-when{margin:16px 0 0;color:var(--lp-muted)}
+.lp-cd-done{margin:12px 0 0;font-family:var(--lp-font-h);font-size:1.25em;font-weight:600}
+.lp-cd-over .lp-cd-units{display:none}
+`,
+  video: `
+.lp-vid{margin:0}
+.lp-vid-box{position:relative;overflow:hidden;aspect-ratio:var(--lp-ratio,16/9);border-radius:var(--lp-radius);background:#0b0d12;color:#fff}
+.lp-vid-file .lp-att-prev{border-radius:var(--lp-radius);overflow:hidden}
+.lp-vid-poster{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.lp-vid-gate{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:18px;text-align:center;background:radial-gradient(circle at 50% 40%,#2a3140,#0b0d12)}
+.lp-vid-over{background:linear-gradient(to top,rgba(0,0,0,.78),rgba(0,0,0,.25) 60%,rgba(0,0,0,.35))}
+.lp-vid-play{display:inline-flex;align-items:center;justify-content:center;width:76px;height:76px;padding:0;border:0;border-radius:50%;background:var(--lp-accent);color:var(--lp-on-accent);cursor:pointer;box-shadow:0 8px 30px rgba(0,0,0,.35);transition:transform .2s var(--lp-ease,ease)}
+.lp-vid-play:hover{transform:scale(1.06)}
+.lp-vid-play:focus-visible{outline:3px solid #fff;outline-offset:3px}
+.lp-vid-play .lp-ic{width:30px;height:30px;margin-inline-start:4px}
+.lp-vid-note{max-width:34rem;margin:0;color:rgba(255,255,255,.86);font-size:.84em;line-height:1.45}
+.lp-vid-open{color:#fff;font-weight:600;text-decoration:underline;text-underline-offset:.16em;white-space:nowrap}
+.lp-vid-frame{position:absolute;inset:0;width:100%;height:100%;border:0}
+.lp-vid-cap{margin-top:10px;color:var(--lp-muted);font-size:.92em;text-align:center}
+.lp-vid-empty{display:flex;align-items:center;justify-content:center;gap:10px;background:var(--lp-tint,var(--lp-surface));color:var(--lp-muted)}
+.lp-vid-empty .lp-ic{width:36px;height:36px}
+@media (prefers-reduced-motion:reduce){.lp-vid-play{transition:none}}
+@container lp (max-width:480px){.lp-vid-note{font-size:.76em}.lp-vid-play{width:60px;height:60px}}
+`,
+};
+
+const CSS_VARIANTS_D = {
+  carousel: { 'variant=cards': '', 'variant=hero': '', 'variant=images': '' },
+  tabs: {
+    'variant=line': `
+.lp-tabs-line .lp-tabs-list{border-bottom:1px solid var(--lp-border);gap:0}
+.lp-tabs-line .lp-tab{margin-bottom:-1px;border-bottom:2px solid transparent}
+.lp-tabs-line .lp-tab[aria-selected=true]{border-bottom-color:var(--lp-accent)}
+`,
+    'variant=pills': `
+.lp-tabs-pills .lp-tabs-list{padding:5px;border-radius:999px;background:var(--lp-surface);border:1px solid var(--lp-border);width:max-content;max-width:100%;margin-inline:auto}
+.lp-tabs-pills .lp-tab{border-radius:999px}
+.lp-tabs-pills .lp-tab[aria-selected=true]{background:var(--lp-accent);color:var(--lp-on-accent)}
+`,
+    'variant=vertical': `
+.lp-tabs-vertical{display:grid;grid-template-columns:minmax(12em,.36fr) minmax(0,1fr);gap:clamp(20px,3.4cqi,44px);align-items:start}
+.lp-tabs-vertical .lp-tabs-list{flex-direction:column;flex-wrap:nowrap;margin:0;border-inline-start:1px solid var(--lp-border)}
+.lp-tabs-vertical .lp-tab{justify-content:flex-start;margin-inline-start:-1px;border-inline-start:2px solid transparent}
+.lp-tabs-vertical .lp-tab[aria-selected=true]{border-inline-start-color:var(--lp-accent);background:color-mix(in srgb,var(--lp-accent) 7%,transparent)}
+html:not(.lp-js) .lp-tabs-vertical{display:block}
+@container lp-tab (max-width:700px){.lp-tabs-vertical{display:block}.lp-tabs-vertical .lp-tabs-list{flex-direction:row;overflow-x:auto;margin-bottom:18px;border-inline-start:0;border-bottom:1px solid var(--lp-border)}.lp-tabs-vertical .lp-tab{margin:0 0 -1px;border-inline-start:0;border-bottom:2px solid transparent}.lp-tabs-vertical .lp-tab[aria-selected=true]{border-bottom-color:var(--lp-accent);background:none}}
+`,
+  },
+  announce: { 'tone=auto': '', 'tone=muted': '', 'tone=dark': '', 'tone=accent': '', 'tone=light': '' },
+  countdown: { 'variant=cards': '', 'variant=plain': '' },
+};
+
+// Shared CSS groups each block needs (media boxes, cards, attachments); the CSS builder includes them once.
+const BLOCK_DEPS_D = { carousel: ['media'], tabs: ['media', 'card'], compare: [], beforeafter: ['media'], announce: [], countdown: [], video: ['media', 'att'] };
+
+// Selector-to-block ownership for CSS pruning: a rule whose selector matches belongs to that block and is dropped when
+// the block is unused. Regexes use \b so '.lp-ba' does not claim '.lp-badge'.
+const OWN_D = [
+  [/\.lp-carw?\b|\.lp-car-/, 'carousel'], [/\.lp-tabs?\b|\.lp-tabs?-/, 'tabs'], [/\.lp-cmp/, 'compare'], [/\.lp-ba\b|\.lp-ba-/, 'beforeafter'],
+  [/\.lp-ann/, 'announce'], [/\.lp-cd\b|\.lp-cd-/, 'countdown'], [/\.lp-vid/, 'video'],
+];
+
+/* ---------- viewer UI strings ----------
+   car* carousel · cmp* comparison table · ba* before / after · ann* announcement · cd* countdown (plural forms;
+   runtime keys) · vid* video consent · mq* logo strip · ts* testimonial summary · phd.* edit-mode hints */
+
+const UI_D = {
+  en: {
+    carLabel: 'Slides', carGo: 'Go to slide {n}', carPause: 'Pause automatic slides',
+    cmpFeature: 'Feature', cmpYes: 'Included', cmpNo: 'Not included', cmpLabel: 'Comparison',
+    baBefore: 'Before', baAfter: 'After', baRange: 'Move to compare before and after',
+    annClose: 'Close the announcement',
+    cdD: { one: 'day', other: 'days' }, cdH: { one: 'hour', other: 'hours' }, cdM: { one: 'minute', other: 'minutes' }, cdS: { one: 'second', other: 'seconds' },
+    vidPlay: 'Play video: {title}', vidNote: 'This video is hosted by {host}. Playing it loads content from that site, which may set cookies.', vidOpen: 'Open on {host}',
+    mqPause: 'Pause the moving logos',
+    tsAvg: { one: '{avg} out of 5 · {n} review', other: '{avg} out of 5 · {n} reviews' }, tsVia: 'via {source}',
+    'phd.slideTitle': 'Slide title', 'phd.slideText': 'Slide text', 'phd.caption': 'Caption', 'phd.tab': 'Tab name', 'phd.tabText': 'Tab content',
+    'phd.cmpRow': 'Row', 'phd.before': 'Before', 'phd.after': 'After', 'phd.annText': 'Announcement text', 'phd.cdTitle': 'Countdown title',
+    'phd.cdDone': 'Text after the date', 'phd.vidURL': 'Paste a video link in the block settings', 'phd.source': 'Source',
+  },
+  ru: {
+    carLabel: 'Слайды', carGo: 'К слайду {n}', carPause: 'Остановить автопрокрутку',
+    cmpFeature: 'Характеристика', cmpYes: 'Есть', cmpNo: 'Нет', cmpLabel: 'Сравнение',
+    baBefore: 'До', baAfter: 'После', baRange: 'Сдвиньте, чтобы сравнить «до» и «после»',
+    annClose: 'Закрыть объявление',
+    cdD: { one: 'день', few: 'дня', many: 'дней', other: 'дня' }, cdH: { one: 'час', few: 'часа', many: 'часов', other: 'часа' },
+    cdM: { one: 'минута', few: 'минуты', many: 'минут', other: 'минуты' }, cdS: { one: 'секунда', few: 'секунды', many: 'секунд', other: 'секунды' },
+    vidPlay: 'Смотреть видео: {title}', vidNote: 'Видео размещено на {host}. При воспроизведении загружается содержимое этого сайта, он может установить cookie.', vidOpen: 'Открыть на {host}',
+    mqPause: 'Остановить движение логотипов',
+    tsAvg: { one: '{avg} из 5 · {n} отзыв', few: '{avg} из 5 · {n} отзыва', many: '{avg} из 5 · {n} отзывов', other: '{avg} из 5 · {n} отзыва' }, tsVia: 'источник: {source}',
+    'phd.slideTitle': 'Заголовок слайда', 'phd.slideText': 'Текст слайда', 'phd.caption': 'Подпись', 'phd.tab': 'Название вкладки', 'phd.tabText': 'Содержимое вкладки',
+    'phd.cmpRow': 'Строка', 'phd.before': 'До', 'phd.after': 'После', 'phd.annText': 'Текст объявления', 'phd.cdTitle': 'Заголовок отсчёта',
+    'phd.cdDone': 'Текст после даты', 'phd.vidURL': 'Вставьте ссылку на видео в настройках блока', 'phd.source': 'Источник',
+  },
+  uk: {
+    carLabel: 'Слайди', carGo: 'До слайда {n}', carPause: 'Зупинити автопрокручування',
+    cmpFeature: 'Характеристика', cmpYes: 'Є', cmpNo: 'Немає', cmpLabel: 'Порівняння',
+    baBefore: 'До', baAfter: 'Після', baRange: 'Посуньте, щоб порівняти «до» і «після»',
+    annClose: 'Закрити оголошення',
+    cdD: { one: 'день', few: 'дні', many: 'днів', other: 'дня' }, cdH: { one: 'година', few: 'години', many: 'годин', other: 'години' },
+    cdM: { one: 'хвилина', few: 'хвилини', many: 'хвилин', other: 'хвилини' }, cdS: { one: 'секунда', few: 'секунди', many: 'секунд', other: 'секунди' },
+    vidPlay: 'Дивитися відео: {title}', vidNote: 'Відео розміщено на {host}. Під час відтворення завантажується вміст цього сайту, він може встановити cookie.', vidOpen: 'Відкрити на {host}',
+    mqPause: 'Зупинити рух логотипів',
+    tsAvg: { one: '{avg} з 5 · {n} відгук', few: '{avg} з 5 · {n} відгуки', many: '{avg} з 5 · {n} відгуків', other: '{avg} з 5 · {n} відгуку' }, tsVia: 'джерело: {source}',
+    'phd.slideTitle': 'Заголовок слайда', 'phd.slideText': 'Текст слайда', 'phd.caption': 'Підпис', 'phd.tab': 'Назва вкладки', 'phd.tabText': 'Вміст вкладки',
+    'phd.cmpRow': 'Рядок', 'phd.before': 'До', 'phd.after': 'Після', 'phd.annText': 'Текст оголошення', 'phd.cdTitle': 'Заголовок відліку',
+    'phd.cdDone': 'Текст після дати', 'phd.vidURL': 'Вставте посилання на відео в налаштуваннях блоку', 'phd.source': 'Джерело',
+  },
+  de: {
+    carLabel: 'Folien', carGo: 'Zu Folie {n}', carPause: 'Automatischen Wechsel anhalten',
+    cmpFeature: 'Merkmal', cmpYes: 'Enthalten', cmpNo: 'Nicht enthalten', cmpLabel: 'Vergleich',
+    baBefore: 'Vorher', baAfter: 'Nachher', baRange: 'Verschieben, um vorher und nachher zu vergleichen',
+    annClose: 'Hinweis schließen',
+    cdD: { one: 'Tag', other: 'Tage' }, cdH: { one: 'Stunde', other: 'Stunden' }, cdM: { one: 'Minute', other: 'Minuten' }, cdS: { one: 'Sekunde', other: 'Sekunden' },
+    vidPlay: 'Video abspielen: {title}', vidNote: 'Dieses Video liegt bei {host}. Beim Abspielen werden Inhalte dieser Website geladen, die Cookies setzen kann.', vidOpen: 'Auf {host} öffnen',
+    mqPause: 'Laufende Logos anhalten',
+    tsAvg: { one: '{avg} von 5 · {n} Bewertung', other: '{avg} von 5 · {n} Bewertungen' }, tsVia: 'über {source}',
+    'phd.slideTitle': 'Folientitel', 'phd.slideText': 'Folientext', 'phd.caption': 'Bildunterschrift', 'phd.tab': 'Name des Reiters', 'phd.tabText': 'Inhalt des Reiters',
+    'phd.cmpRow': 'Zeile', 'phd.before': 'Vorher', 'phd.after': 'Nachher', 'phd.annText': 'Text des Hinweises', 'phd.cdTitle': 'Titel des Countdowns',
+    'phd.cdDone': 'Text nach dem Datum', 'phd.vidURL': 'Fügen Sie in den Blockeinstellungen einen Videolink ein', 'phd.source': 'Quelle',
+  },
+  fr: {
+    carLabel: 'Diapositives', carGo: 'Aller à la diapositive {n}', carPause: 'Mettre en pause le défilement',
+    cmpFeature: 'Caractéristique', cmpYes: 'Inclus', cmpNo: 'Non inclus', cmpLabel: 'Comparaison',
+    baBefore: 'Avant', baAfter: 'Après', baRange: 'Faites glisser pour comparer avant et après',
+    annClose: 'Fermer l’annonce',
+    cdD: { one: 'jour', other: 'jours' }, cdH: { one: 'heure', other: 'heures' }, cdM: { one: 'minute', other: 'minutes' }, cdS: { one: 'seconde', other: 'secondes' },
+    vidPlay: 'Lire la vidéo : {title}', vidNote: 'Cette vidéo est hébergée par {host}. La lire charge du contenu de ce site, qui peut déposer des cookies.', vidOpen: 'Ouvrir sur {host}',
+    mqPause: 'Arrêter le défilement des logos',
+    tsAvg: { one: '{avg} sur 5 · {n} avis', other: '{avg} sur 5 · {n} avis' }, tsVia: 'via {source}',
+    'phd.slideTitle': 'Titre de la diapositive', 'phd.slideText': 'Texte de la diapositive', 'phd.caption': 'Légende', 'phd.tab': 'Nom de l’onglet', 'phd.tabText': 'Contenu de l’onglet',
+    'phd.cmpRow': 'Ligne', 'phd.before': 'Avant', 'phd.after': 'Après', 'phd.annText': 'Texte de l’annonce', 'phd.cdTitle': 'Titre du compte à rebours',
+    'phd.cdDone': 'Texte après la date', 'phd.vidURL': 'Collez un lien vidéo dans les réglages du bloc', 'phd.source': 'Source',
+  },
+  es: {
+    carLabel: 'Diapositivas', carGo: 'Ir a la diapositiva {n}', carPause: 'Pausar el pase automático',
+    cmpFeature: 'Característica', cmpYes: 'Incluido', cmpNo: 'No incluido', cmpLabel: 'Comparación',
+    baBefore: 'Antes', baAfter: 'Después', baRange: 'Desliza para comparar antes y después',
+    annClose: 'Cerrar el aviso',
+    cdD: { one: 'día', other: 'días' }, cdH: { one: 'hora', other: 'horas' }, cdM: { one: 'minuto', other: 'minutos' }, cdS: { one: 'segundo', other: 'segundos' },
+    vidPlay: 'Reproducir vídeo: {title}', vidNote: 'Este vídeo está alojado en {host}. Al reproducirlo se carga contenido de ese sitio, que puede usar cookies.', vidOpen: 'Abrir en {host}',
+    mqPause: 'Detener los logotipos en movimiento',
+    tsAvg: { one: '{avg} de 5 · {n} opinión', other: '{avg} de 5 · {n} opiniones' }, tsVia: 'vía {source}',
+    'phd.slideTitle': 'Título de la diapositiva', 'phd.slideText': 'Texto de la diapositiva', 'phd.caption': 'Pie de foto', 'phd.tab': 'Nombre de la pestaña', 'phd.tabText': 'Contenido de la pestaña',
+    'phd.cmpRow': 'Fila', 'phd.before': 'Antes', 'phd.after': 'Después', 'phd.annText': 'Texto del aviso', 'phd.cdTitle': 'Título de la cuenta atrás',
+    'phd.cdDone': 'Texto tras la fecha', 'phd.vidURL': 'Pega un enlace de vídeo en los ajustes del bloque', 'phd.source': 'Fuente',
+  },
+  ka: {
+    carLabel: 'სლაიდები', carGo: 'სლაიდზე {n} გადასვლა', carPause: 'ავტომატური გადახვევის შეჩერება',
+    cmpFeature: 'მახასიათებელი', cmpYes: 'შედის', cmpNo: 'არ შედის', cmpLabel: 'შედარება',
+    baBefore: 'მანამდე', baAfter: 'შემდეგ', baRange: 'გადაწიეთ „მანამდე“ და „შემდეგ“ შესადარებლად',
+    annClose: 'განცხადების დახურვა',
+    cdD: { one: 'დღე', other: 'დღე' }, cdH: { one: 'საათი', other: 'საათი' }, cdM: { one: 'წუთი', other: 'წუთი' }, cdS: { one: 'წამი', other: 'წამი' },
+    vidPlay: 'ვიდეოს ჩართვა: {title}', vidNote: 'ვიდეო განთავსებულია {host}-ზე. ჩართვისას იტვირთება ამ საიტის შიგთავსი, რომელმაც შეიძლება cookie დააყენოს.', vidOpen: 'გახსნა {host}-ზე',
+    mqPause: 'მოძრავი ლოგოების შეჩერება',
+    tsAvg: { one: '{avg} 5-დან · {n} შეფასება', other: '{avg} 5-დან · {n} შეფასება' }, tsVia: 'წყარო: {source}',
+    'phd.slideTitle': 'სლაიდის სათაური', 'phd.slideText': 'სლაიდის ტექსტი', 'phd.caption': 'წარწერა', 'phd.tab': 'ჩანართის სახელი', 'phd.tabText': 'ჩანართის შიგთავსი',
+    'phd.cmpRow': 'სტრიქონი', 'phd.before': 'მანამდე', 'phd.after': 'შემდეგ', 'phd.annText': 'განცხადების ტექსტი', 'phd.cdTitle': 'უკუთვლის სათაური',
+    'phd.cdDone': 'ტექსტი თარიღის შემდეგ', 'phd.vidURL': 'ჩასვით ვიდეოს ბმული ბლოკის პარამეტრებში', 'phd.source': 'წყარო',
+  },
+};
+
+export {
+  BD_CAR_CSS,
+  BD_RATIOS,
+  BLOCK_DEPS_D,
+  BT_D,
+  CSS_BLOCKS_D,
+  CSS_VARIANTS_D,
+  OWN_D,
+  UI_D,
+  bdAttrI18n,
+  carouselHTML,
+  videoEmbed
+};

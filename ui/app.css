@@ -1,0 +1,197 @@
+/* ui/app.css — layout of the single-page tools (ui/app.js): header, workspace (controls + stage), cards, drop zone,
+   output panes, tables and footer badge. Loaded SECOND: after ui/base.css (tokens, controls, overlays), before the
+   app's own stylesheet.
+
+   CONTRACT
+   - Namespace: `ap-` ("app shell"). Classes are emitted by ui/app.js (renderTop / renderFoot / dropZone / card) or
+     written by apps in their HTML. Never restyles `ed-` primitives globally; it adjusts them only in shell context
+     (`.ap-theme .ed-seg-btn`, `.ap-card .ed-field + .ed-field`), at two classes, so apps can still override.
+   - Opt-in by `body.ap`: editors share base.css but not this layout; the class on <body> switches the document from
+     the editor model (100% height, panes scroll) to the document model (page scrolls, header sticks).
+   - Specificity budget: one class; two for variants/context (`.ap-work.ap-work-r`, `.ap-surface.ap-plain`). Tag
+     qualifiers only where the element type matters (`textarea.ap-mono`, `.ap-surface > canvas`).
+   - Colours only via --ed-* tokens. color-mix() derives tints from tokens so they follow the theme (one literal
+     exception: the logo gradient's purple, a brand constant).
+   - Breakpoints: 860px (workspace collapses to one column), 560px (phone header). Must agree with ui/app.js, which
+     tests `(max-width: 560px)` to decide the theme button's stepping behaviour.
+   - !important only in @media print (beats display set by JS / inline styles). */
+
+/* base.css fixes body at 100% (editor shells): tool pages grow with their content so the sticky header stays sticky.
+   A flex column lets .ap-main (flex: 1 0 auto) push the footer to the bottom of short pages. 100vh first, then
+   100dvh: engines without dvh drop the second declaration and keep the first; mobile engines with dvh use the
+   dynamic viewport (excludes the collapsing URL bar, which 100vh includes → a needless scroll). (0,1,1) beats the
+   base `body` rule (0,0,1). */
+body.ap {
+  display: flex; flex-direction: column; height: auto; min-height: 100vh; min-height: 100dvh;
+  font-size: 14px; line-height: 1.5;
+}
+/* Thin scrollbars for every scroller of the tool. scrollbar-width does not inherit, hence the universal descendant
+   selector rather than setting it once on body. */
+body.ap * { scrollbar-width: thin; }
+
+/* Header — sticky glass bar. color-mix(panel 88%, transparent) + backdrop-filter: content scrolling underneath is
+   blurred, not hidden; where backdrop-filter is unsupported the 88% panel alone still keeps text legible.
+   z-index 30: above page content, below #ed-overlays (100). flex-wrap: on narrow screens the page tabs drop to a
+   second row (see media queries) instead of overflowing. */
+.ap-top {
+  position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 10px;
+  min-height: 56px; padding: 8px 16px; background: color-mix(in srgb, var(--ed-panel) 88%, transparent);
+  border-bottom: 1px solid var(--ed-border); backdrop-filter: blur(10px); flex-wrap: wrap;
+}
+/* min-width:0 lets the brand shrink so .ap-name can ellipsize instead of pushing the controls off-screen. */
+.ap-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+/* Logo tile: accent → accent mixed with a fixed purple. The mix keeps the start colour theme-aware; the purple is a
+   brand constant (no token). Foreground accent-text = readable on accent in both themes. */
+.ap-logo {
+  display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; flex: none;
+  border-radius: 10px; color: var(--ed-accent-text); background: linear-gradient(135deg, var(--ed-accent), color-mix(in srgb, var(--ed-accent) 55%, #9333ea));
+  box-shadow: var(--ed-shadow-sm);
+}
+/* <h1>: margin reset (UA h1 margins). Ellipsis needs all three: nowrap + overflow:hidden + text-overflow. */
+.ap-name { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Page tabs as a pill track; the current page is a filled accent pill (ui/app.js sets .ap-on + aria-current). */
+.ap-pages { display: flex; gap: 2px; padding: 3px; margin-left: 8px; border-radius: 999px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.ap-page { padding: 4px 12px; border-radius: 999px; color: var(--ed-muted); text-decoration: none; font-weight: 550; font-size: 13px; }
+.ap-page:hover { color: var(--ed-text); background: var(--ed-hover); }
+/* (0,2,0) after :hover (0,2,0): the current tab keeps its fill when hovered. */
+.ap-page.ap-on { color: var(--ed-accent-text); background: var(--ed-accent); }
+/* Language <select> (also .ed-input, whose width:100% would stretch it): auto width, capped. */
+.ap-lang { width: auto; max-width: 150px; }
+/* Theme switch is icon-only: tighter padding than the base segmented button. (0,2,0) beats .ed-seg-btn (0,1,0). */
+.ap-theme .ed-seg-btn { padding: 0 8px; }
+
+/* Main column and workspace */
+/* flex: 1 0 auto — grows to fill the body column (footer stays at the bottom), never shrinks below content. */
+.ap-main { flex: 1 0 auto; width: 100%; max-width: 1280px; margin: 0 auto; padding: 20px 16px 28px; }
+.ap-main.ap-wide { max-width: none; }
+/* 70ch: comfortable reading measure for the intro paragraph regardless of the container width. */
+.ap-lead { margin: 0 0 18px; color: var(--ed-muted); max-width: 70ch; }
+/* Controls column + stage. minmax(280px,340px) bounds the controls; minmax(0,1fr) (not 1fr = minmax(auto,1fr))
+   lets the stage shrink below the min-content width of a wide canvas/table instead of overflowing the grid.
+   align-items:start — columns keep their own heights, required for the sticky side panel. */
+.ap-work { display: grid; grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); gap: 18px; align-items: start; }
+/* Mirrored variant: controls on the right. */
+.ap-work.ap-work-r { grid-template-columns: minmax(0, 1fr) minmax(280px, 340px); }
+/* Sticky controls: top 76px = header min-height 56 + 20px gap; max-height = viewport − top − bottom margin, with its
+   own scroll, so a long panel is never cut off below the fold. padding-right:2px keeps focus rings off the scrollbar. */
+.ap-side { display: flex; flex-direction: column; gap: 14px; position: sticky; top: 76px; max-height: calc(100vh - 92px); overflow: auto; padding-right: 2px; }
+.ap-stage { min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+/* Responsive card grid without media queries: auto-fit + minmax(260px,1fr). */
+.ap-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+/* ≤860px: one column, controls first (DOM order). Sticky is turned off — a sticky panel taller than a phone screen
+   would trap its own lower half. The page tabs move to their own row (order:5 > other header items' 0). */
+@media (max-width: 860px) {
+  .ap-work, .ap-work.ap-work-r { grid-template-columns: minmax(0, 1fr); }
+  .ap-side { position: static; max-height: none; overflow: visible; }
+  .ap-pages { order: 5; margin-left: 0; }
+}
+/* Phones: brand, language and colour scheme on one row (the scheme as one button that steps through auto / light /
+   dark), the pages of the app on a full-width row below.
+   - .ap-brand flex: 1 1 0 takes the free space so the spacer is redundant (hidden).
+   - Only the selected theme button is shown; ui/app.js makes a tap on it advance to the next scheme.
+   - .ap-pages flex: 1 0 100% forces its own line; overflow-x:auto scrolls many tabs horizontally, scrollbar hidden
+     (the cut-off tab is the affordance). */
+@media (max-width: 560px) {
+  .ap-top { gap: 8px; padding: 8px 12px; }
+  .ap-brand { flex: 1 1 0; }
+  .ap-top > .ed-spacer { display: none; }
+  .ap-lang { max-width: 112px; }
+  .ap-theme .ed-seg-btn:not(.ed-on) { display: none; }
+  .ap-pages { flex: 1 0 100%; overflow-x: auto; scrollbar-width: none; }
+  .ap-page { flex: none; white-space: nowrap; }
+}
+
+/* Cards — <section class="ap-card"><h2 class="ap-card-h"> from ui/app.js card(). min-width:0 for grid/flex parents. */
+.ap-card {
+  background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: 14px; padding: 14px 16px;
+  box-shadow: var(--ed-shadow-sm); min-width: 0;
+}
+.ap-card-h { margin: 0 0 10px; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-muted); }
+/* Adjacent-sibling spacing: fields placed directly in a card (not inside .ed-fields, which uses gap) get a top
+   margin, the first one none — no :first-child reset needed. */
+.ap-card .ed-field + .ed-field { margin-top: 10px; }
+.ap-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.ap-row > .ed-spacer { flex: 1 1 auto; }
+.ap-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+/* Drop zone — a <button> (ui/app.js dropZone): keyboard-activatable, focus ring for free. .ap-over is toggled
+   during dragover; it shares the hover look so the target is obvious. 1.5px dashed: 1px dashes look dotted on
+   low-DPI screens. Transitions on colours only (cheap, no layout). */
+.ap-drop {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 120px;
+  padding: 18px; border: 1.5px dashed var(--ed-border-strong); border-radius: 14px; background: var(--ed-panel-2);
+  color: var(--ed-muted); font-weight: 550; text-align: center; transition: border-color .15s, background .15s, color .15s;
+}
+.ap-drop:hover, .ap-drop.ap-over { border-color: var(--ed-accent); color: var(--ed-accent); background: var(--ed-accent-weak); }
+.ap-drop .ed-ic, .ap-drop svg { width: 26px; height: 26px; }
+
+/* Stage surfaces (canvas, preview) — transparency checkerboard drawn with two offset 45° gradients (no image).
+   Tile 20px, second layer shifted by half a tile. Squares are --ed-border at 55% over --ed-stage, so the pattern
+   follows the theme. overflow:auto: a zoomed canvas scrolls inside the surface instead of widening the page. */
+.ap-surface {
+  position: relative; display: grid; place-items: center; min-height: 320px; overflow: auto; border-radius: 14px;
+  border: 1px solid var(--ed-border); background-color: var(--ed-stage);
+  background-image: linear-gradient(45deg, color-mix(in srgb, var(--ed-border) 55%, transparent) 25%, transparent 25%, transparent 75%, color-mix(in srgb, var(--ed-border) 55%, transparent) 75%),
+    linear-gradient(45deg, color-mix(in srgb, var(--ed-border) 55%, transparent) 25%, transparent 25%, transparent 75%, color-mix(in srgb, var(--ed-border) 55%, transparent) 75%);
+  background-size: 20px 20px; background-position: 0 0, 10px 10px;
+}
+.ap-surface.ap-plain { background-image: none; }
+/* Media scale down to fit, keeping aspect ratio (height:auto); display:block removes the inline baseline gap. */
+.ap-surface > canvas, .ap-surface > img, .ap-surface > svg, .ap-surface > video { max-width: 100%; height: auto; display: block; }
+
+/* Text output panes — <pre> or <textarea>. pre-wrap + break-all: hashes, base64 and long tokens have no spaces;
+   without break-all they would force horizontal scrolling of the whole pane. */
+.ap-pre, .ap-mono {
+  font: 12.5px/1.5 var(--ed-mono); color: var(--ed-text); background: var(--ed-panel-2); border: 1px solid var(--ed-border);
+  border-radius: 10px; padding: 10px 12px; margin: 0; overflow: auto; white-space: pre-wrap; word-break: break-all; tab-size: 4;
+}
+/* Editable mono field: white-space:pre (no soft wrap) — a user editing structured text needs real line structure.
+   (0,1,1) beats .ap-mono (0,1,0). */
+textarea.ap-mono { width: 100%; min-height: 120px; resize: vertical; white-space: pre; }
+/* Key/value list: labels sized to the longest label (max-content), values take the rest and may shrink/wrap. */
+.ap-kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 13px; }
+.ap-kv dt { color: var(--ed-muted); }
+.ap-kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+/* Big number + unit aligned on the text baseline (not centre), as in "12 KB". */
+.ap-stat { display: inline-flex; align-items: baseline; gap: 4px; font-variant-numeric: tabular-nums; }
+.ap-stat b { font-size: 18px; }
+
+/* Tables — wrapper scrolls both ways (max-height 70vh) so the sticky header works inside it: sticky is relative to
+   the nearest scrolling ancestor. border-collapse:collapse + border-bottom on cells: one hairline per row.
+   Note: with collapsed borders a sticky <th> loses its bottom border while scrolling (the border belongs to the
+   table grid); the panel-2 background still separates it. z-index:1 keeps header cells above body cells that an
+   app positions (position: relative makes later-painted layers that would otherwise scroll over the header). */
+.ap-table-wrap { overflow: auto; border: 1px solid var(--ed-border); border-radius: 10px; max-height: 70vh; }
+.ap-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.ap-table th, .ap-table td { padding: 6px 10px; border-bottom: 1px solid var(--ed-border); text-align: left; vertical-align: top; }
+.ap-table thead th { position: sticky; top: 0; background: var(--ed-panel-2); font-weight: 600; z-index: 1; }
+/* Hover on td, not tr: row backgrounds are painted under cell backgrounds, so a tr background would be hidden by
+   any cell that sets its own. */
+.ap-table tbody tr:hover td { background: var(--ed-hover); }
+
+/* Swatches, chips, progress */
+/* Colour input of ui/app.js colorInput() (the editors use .ed-color). The swatch keeps UA styling here. */
+.ap-color { width: 44px; height: 32px; padding: 2px; border: 1px solid var(--ed-border-strong); border-radius: var(--ed-radius-sm); background: var(--ed-panel); cursor: pointer; }
+/* Progress bar: <div class="ap-progress"><i style="width:N%">. The fill is an <i> sized by JS inline width;
+   overflow:hidden clips its square ends to the track's rounded shape. */
+.ap-progress { width: 100%; height: 6px; border-radius: 999px; overflow: hidden; background: var(--ed-border); }
+.ap-progress > i { display: block; height: 100%; width: 0; background: var(--ed-accent); transition: width .2s; }
+.ap-empty { padding: 28px 12px; text-align: center; color: var(--ed-muted); }
+
+/* Footer */
+/* KNOWN DEFECT (stale comment, harmless rule): this rule was written for a fixed-height body column ("the bars
+   keep their height, the content scrolls"), but body.ap above uses height:auto + min-height, so the column never
+   has to shrink and flex-shrink:0 is inert. Fix: drop the rule, or keep it as insurance if body.ap ever gets a
+   fixed height again. */
+.ap-top, .ap-foot { flex-shrink: 0; }
+.ap-foot { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 14px 16px 18px; color: var(--ed-muted); font-size: 12.5px; }
+/* "Works offline" pill (ui/app.js renderFoot); the icon is ok-green as a trust signal. */
+.ap-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--ed-panel); border: 1px solid var(--ed-border); }
+.ap-badge .ed-ic, .ap-badge svg { width: 15px; height: 15px; color: var(--ed-ok); }
+
+/* Print: only the result. Chrome (header, footer, controls, toasts) is hidden with !important to beat any inline or
+   JS-set display; the workspace grid becomes a block so the stage uses the full paper width. */
+@media print {
+  .ap-top, .ap-foot, .ap-side, .ed-toasts { display: none !important; }
+  .ap-work { display: block; }
+}

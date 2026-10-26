@@ -1,0 +1,390 @@
+/* embroidery-studio/app.css - Embroidery Studio: a warm linen look with a cranberry accent (light and dark), the
+   catalogue, scheme pages, the full-height viewer / editor workspaces, pickers, phones. */
+
+/* CONTRACT
+   - Namespace `es-`; the chart renderer's canvas uses `st-` (stitch/view.js). Primitives `ed-`, shell `ap-`.
+   - Theming: the app redeclares the shared --ed-* tokens on body.es (plus its own --es-accent, --es-gold, --es-linen).
+     Custom properties inherit, so values on <body> shadow the :root values of ui/base.css for every descendant;
+     the specificity of `body.es` vs `:root` is irrelevant because they are different elements.
+   - Dark variant written twice (OS preference guarded by :not([data-theme="light"]), and the explicit
+     [data-theme="dark"]), mirroring ui/base.css, because a media query cannot be OR-ed with an attribute.
+   - State class: bare `.on` (selected chip / row / tool), always compounded with a component class
+     (`.es-cat.on`, 0,2,0), so it never matches alone. Deviation from the strict prefix rule, kept because the
+     compound already scopes it.
+   - Raw colours: the hoop art, thumbnail backgrounds (the colour of linen fabric), symbol cells (black glyph on white
+     like a printed chart) and the logo gradient. They depict physical materials, not UI chrome.
+   - !important: two places, each commented (.es-search-in, .es-de). */
+
+/* The linen texture is two repeating gradients (horizontal and vertical threads) layered over the background
+   colour: no image file, scales at any DPI, and themable (the dark block swaps it). */
+body.es {
+  --es-accent: #8f1d3c;
+  --ed-accent: #9b2246;
+  --ed-accent-hover: #7d1937;
+  --ed-accent-weak: #f8e6ea;
+  --ed-accent-text: #fff;
+  --ed-bg: #f6f2ea;
+  --ed-panel: #fffdf9;
+  --ed-panel-2: #faf6ef;
+  --ed-hover: #f2ebe0;
+  --ed-border: #e7ddcf;
+  --ed-border-strong: #d6c8b4;
+  --es-gold: #c8962e;
+  --es-linen: repeating-linear-gradient(0deg, rgba(120, 90, 50, .035) 0 1px, transparent 1px 4px), repeating-linear-gradient(90deg, rgba(120, 90, 50, .03) 0 1px, transparent 1px 4px);
+  background: var(--es-linen), var(--ed-bg);
+}
+/* Dark: same tokens, night values; the linen becomes a faint light weave instead of a dark one. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) body.es {
+    --ed-accent: #f06b8d; --ed-accent-hover: #ff8aa6; --ed-accent-weak: #3a1d27; --ed-accent-text: #1a0a10;
+    --ed-bg: #141317; --ed-panel: #1c1b20; --ed-panel-2: #222127; --ed-hover: #2a2930; --ed-border: #302e36; --ed-border-strong: #403d47;
+    --es-linen: repeating-linear-gradient(0deg, rgba(255, 255, 255, .018) 0 1px, transparent 1px 4px);
+  }
+}
+:root[data-theme="dark"] body.es {
+  --ed-accent: #f06b8d; --ed-accent-hover: #ff8aa6; --ed-accent-weak: #3a1d27; --ed-accent-text: #1a0a10;
+  --ed-bg: #141317; --ed-panel: #1c1b20; --ed-panel-2: #222127; --ed-hover: #2a2930; --ed-border: #302e36; --ed-border-strong: #403d47;
+  --es-linen: repeating-linear-gradient(0deg, rgba(255, 255, 255, .018) 0 1px, transparent 1px 4px);
+}
+/* (0,1,2) beats the shell logo background from ui/app.css: the header logo takes the brand claret-to-gold. */
+body.es .ap-logo { background: linear-gradient(135deg, #9b2246, #c8962e); }
+/* Hidden iframe that receives generated PDFs for printing; 1px and transparent instead of display:none because some
+   engines refuse to print from an undisplayed frame. */
+.es-printframe { position: fixed; right: 0; bottom: 0; width: 1px; height: 1px; border: 0; opacity: 0; pointer-events: none; }
+.es-foot { display: inline-flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.es-footbtn { height: 28px; }
+
+/* Hero */
+/* Landing hero: text column 1.4fr, art 1fr. The radial accent glow in the corner is derived from the token with
+   color-mix, so it follows the theme. */
+.es-hero { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 28px; align-items: center; padding: 26px 30px; margin-bottom: 22px;
+  border-radius: 22px; border: 1px solid var(--ed-border); background: radial-gradient(120% 140% at 100% 0%, color-mix(in srgb, var(--ed-accent) 14%, transparent), transparent 60%), var(--ed-panel); box-shadow: var(--ed-shadow-sm); }
+.es-kicker { margin: 0 0 6px; color: var(--ed-accent); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: 12px; }
+/* clamp(24px, 3.4vw, 38px): fluid headline between phone and desktop without breakpoints. Serif title stack for a
+   craft / pattern-book feel. */
+.es-hero-t { margin: 0 0 8px; font-size: clamp(24px, 3.4vw, 38px); line-height: 1.12; letter-spacing: -.02em; font-family: Georgia, "Iowan Old Style", "Times New Roman", serif; }
+.es-hero-s { margin: 0 0 18px; color: var(--ed-muted); max-width: 58ch; font-size: 15px; }
+/* Pill search: the visible field is the wrapper; :focus-within puts the focus ring on it while the real input inside
+   is borderless. */
+.es-search { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 14px; border-radius: 999px; background: var(--ed-panel-2); border: 1px solid var(--ed-border-strong); max-width: 560px; }
+.es-search:focus-within { box-shadow: var(--ed-focus); border-color: var(--ed-accent); }
+.es-search .ed-ic { color: var(--ed-muted); flex: none; }
+/* !important x3: the input carries .ed-input, whose base rule sets border and background and whose :focus rule (0,2,0)
+   sets border-color and the focus box-shadow; the wrapper draws all of those, so the input must stay bare in every
+   state, including :hover and :focus variants that would otherwise outrank this (0,1,0) rule. */
+.es-search-in { border: 0 !important; background: transparent !important; box-shadow: none !important; height: 36px; font-size: 15px; }
+.es-hero-acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+.es-hero-art { display: flex; justify-content: center; }
+/* Embroidery hoop drawn with one radial gradient (wood ring bands at 62-70%); raw colours depict wood. */
+.es-hoop { width: min(260px, 70%); aspect-ratio: 1; border-radius: 50%; padding: 14px; background: radial-gradient(circle, #d9b37a 0 62%, #b8884a 63% 70%, #e2c592 71% 100%); box-shadow: 0 10px 30px rgba(80, 50, 20, .25), inset 0 0 0 3px rgba(255, 255, 255, .25); }
+/* image-rendering: pixelated keeps one stitch = a crisp square when a small chart image is scaled up; smoothing
+   would blur cross-stitch cells into mush. */
+.es-hoop-img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; image-rendering: pixelated; background: #fbf8f1; box-shadow: inset 0 0 12px rgba(0, 0, 0, .2); }
+
+/* Catalogue */
+/* Catalogue: fixed 250px filter column + fluid results; the filter panel is sticky with its own scroll. */
+.es-catalog { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 20px; align-items: start; }
+.es-filters { position: sticky; top: 76px; display: flex; flex-direction: column; gap: 16px; padding: 14px; border-radius: 16px; background: var(--ed-panel); border: 1px solid var(--ed-border); max-height: calc(100vh - 92px); overflow: auto; }
+.es-fhead { display: none; }
+.es-fsec h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-muted); }
+.es-cats { display: flex; flex-direction: column; gap: 2px; }
+.es-cat { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; border: 0; border-radius: 8px; background: none; color: var(--ed-text); text-align: left; cursor: pointer; font: inherit; }
+.es-cat:hover { background: var(--ed-hover); }
+.es-cat.on { background: var(--ed-accent-weak); color: var(--ed-accent); font-weight: 650; }
+.es-cat b { font-weight: 500; color: var(--ed-muted); font-size: 12px; }
+.es-diffpick { display: flex; flex-direction: column; gap: 4px; }
+.es-dchip { display: flex; align-items: center; gap: 8px; justify-content: flex-start; cursor: pointer; border: 1px solid var(--ed-border); background: var(--ed-panel-2); }
+.es-dchip.on { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.es-filters .ed-seg { flex-wrap: wrap; }
+.es-reset { align-self: flex-start; }
+.es-results-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.es-count { font-weight: 650; }
+.es-active { display: flex; gap: 6px; flex-wrap: wrap; }
+.es-sort { display: inline-flex; align-items: center; gap: 6px; color: var(--ed-muted); font-size: 13px; }
+.es-sort .ed-select { width: auto; }
+.es-filter-btn { display: none; }
+/* Card grid: auto-fill + minmax(200px, 1fr), as many columns as fit. */
+.es-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 16px; }
+.es-cards-s { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+/* The whole card is a link (<a>); text-decoration reset, colour inherited. Hover lift by transform (no layout). */
+.es-card { position: relative; display: flex; flex-direction: column; border-radius: 16px; overflow: hidden; background: var(--ed-panel); border: 1px solid var(--ed-border); color: inherit; text-decoration: none;
+  box-shadow: var(--ed-shadow-sm); transition: transform .15s ease, box-shadow .15s ease, border-color .15s; }
+.es-card:hover { transform: translateY(-3px); box-shadow: var(--ed-shadow); border-color: var(--ed-border-strong); }
+/* Focus shown as the token ring; overflow:hidden on the card would clip an outside outline. */
+.es-card:focus-visible { outline: none; box-shadow: var(--ed-focus); }
+/* Square thumbnail on a linen-coloured "fabric" so a chart preview looks like stitched cloth. The dark variant below
+   is written twice for the same reason as the tokens. */
+.es-thumb { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; padding: 14px; background: var(--es-linen), #efe8dc; }
+:root[data-theme="dark"] .es-thumb { background: #2a2722; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .es-thumb { background: #2a2722; } }
+.es-thumb img { max-width: 100%; max-height: 100%; image-rendering: pixelated; box-shadow: 0 2px 8px rgba(60, 40, 20, .25); border-radius: 2px; }
+.es-thumb-err { opacity: .5; }
+.es-card-b { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 4px; }
+.es-card-t { margin: 0; font-size: 14.5px; font-weight: 650; line-height: 1.25; }
+.es-card-m, .es-card-d { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--ed-muted); }
+.es-card-d { flex-wrap: nowrap; overflow: hidden; white-space: nowrap; }
+.es-card-d span { overflow: hidden; text-overflow: ellipsis; }
+/* Middle-dot separators via CSS: no separator elements to manage, and the dot never starts a line. */
+.es-card-d span + span::before { content: '·'; margin-right: 8px; }
+/* Buttons rendered as links (download / open) must not show the link underline. */
+a.ed-btn { text-decoration: none; }
+.es-src { position: absolute; top: 10px; left: 10px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 650; background: var(--ed-panel); color: var(--ed-accent); border: 1px solid var(--ed-border); }
+.es-pct { position: absolute; top: 10px; right: 10px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; background: var(--ed-accent); color: var(--ed-accent-text); }
+.es-list { grid-template-columns: 1fr; }
+.es-list .es-card { flex-direction: row; align-items: center; }
+.es-list .es-thumb { width: 96px; flex: none; padding: 8px; }
+.es-more { display: block; margin: 18px auto 0; }
+.es-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 40px 20px; text-align: center; color: var(--ed-muted); grid-column: 1 / -1; }
+.es-empty .ed-ic { width: 36px; height: 36px; opacity: .5; }
+.es-modehint { margin-top: 18px; text-align: center; }
+.es-diff { display: inline-flex; gap: 2px; vertical-align: middle; }
+/* Difficulty pips: 7px squares rotated 45deg = diamonds. */
+.es-diff i { width: 7px; height: 7px; border-radius: 2px; transform: rotate(45deg); background: var(--ed-border-strong); }
+.es-diff i.on { background: var(--ed-accent); }
+.es-loading { display: flex; gap: 10px; align-items: center; justify-content: center; padding: 60px; color: var(--ed-muted); }
+
+/* Scheme page */
+.es-crumbs { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--ed-muted); margin-bottom: 14px; }
+.es-crumbs a { color: inherit; }
+.es-scheme { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 22px; align-items: start; margin-bottom: 22px; }
+.es-preview { border-radius: 18px; overflow: hidden; border: 1px solid var(--ed-border); background: var(--ed-panel); box-shadow: var(--ed-shadow-sm); }
+.es-prev-head { display: flex; gap: 8px; align-items: center; padding: 10px; border-bottom: 1px solid var(--ed-border); flex-wrap: wrap; }
+/* Chart preview area: height bounded by the viewport (64vh, max 620px) with a minimum, so pan/zoom has room. */
+.es-prev-box { position: relative; height: min(64vh, 620px); min-height: 280px; background: var(--ed-stage); }
+.es-title { margin: 0 0 8px; font-size: clamp(22px, 3vw, 32px); line-height: 1.15; font-family: Georgia, "Iowan Old Style", "Times New Roman", serif; letter-spacing: -.01em; }
+.es-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.es-chip { text-decoration: none; color: inherit; }
+.es-chip.on { background: var(--ed-accent-weak); border-color: var(--ed-accent); color: var(--ed-accent); }
+.es-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0; }
+.es-big { height: 42px; padding: 0 18px; font-size: 15px; }
+/* Two-column definition list: max-content labels, fluid values. */
+.es-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; margin: 16px 0; padding: 14px 16px; border-radius: 14px; background: var(--ed-panel); border: 1px solid var(--ed-border); }
+.es-facts dt { color: var(--ed-muted); font-size: 13px; }
+.es-facts dd { margin: 0; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.es-facts .ed-select { width: auto; height: 28px; }
+.es-swatch { display: inline-block; width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--ed-border-strong); }
+.es-desc p { margin: 0 0 10px; }
+.es-notes { margin-top: 10px; }
+.es-progress { padding: 12px 14px; border-radius: 12px; background: var(--ed-accent-weak); }
+.es-bar { height: 8px; border-radius: 999px; background: color-mix(in srgb, var(--ed-border-strong) 60%, transparent); overflow: hidden; }
+/* Progress bar fill as an accent-to-gold gradient; border-radius inherit keeps the pill shape at any width. */
+.es-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--ed-accent), var(--es-gold)); border-radius: inherit; }
+.es-prog-t { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; font-size: 13px; }
+.es-legend-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.es-inline { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--ed-muted); }
+.es-inline .ed-select { width: auto; }
+.es-tablewrap { overflow: auto; }
+.es-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.es-table th { text-align: left; font-size: 12px; color: var(--ed-muted); font-weight: 600; padding: 6px 8px; border-bottom: 1px solid var(--ed-border-strong); white-space: nowrap; }
+.es-table td { padding: 6px 8px; border-bottom: 1px solid var(--ed-border); vertical-align: middle; }
+.es-table .num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.es-code { font-weight: 650; white-space: nowrap; }
+.es-skeins { font-weight: 700; }
+/* Chart symbol cell: like a printed key, a black glyph on the thread colour (inline background from JS). Arial for
+   symbol glyphs: predictable metrics across systems. */
+.es-sym { display: inline-flex; align-items: center; justify-content: center; border-radius: 5px; border: 1px solid rgba(0, 0, 0, .25); font-weight: 800; font-family: Arial, Helvetica, sans-serif; flex: none; line-height: 1; }
+.es-sym svg { width: 78%; height: 78%; }
+.es-sym-m { width: 28px; height: 28px; font-size: 16px; }
+.es-sym-s { width: 24px; height: 24px; font-size: 13px; }
+.es-sym-xs { width: 16px; height: 16px; font-size: 10px; border-radius: 3px; }
+.es-subh { margin: 18px 0 8px; font-size: 15px; }
+.es-shop { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 14px; }
+.es-shop-i { display: flex; gap: 8px; align-items: center; font-size: 13px; padding: 4px 0; border-bottom: 1px dashed var(--ed-border); }
+.es-shop-i .ed-muted { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.es-shop-n { font-weight: 650; white-space: nowrap; }
+.es-dot { display: inline-block; width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(0, 0, 0, .2); flex: none; }
+.es-pagehead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.es-pagehead h1 { margin: 0; font-size: 26px; font-family: Georgia, "Iowan Old Style", serif; }
+.es-pagehead .ap-lead { margin: 0; flex-basis: 100%; }
+body.es .ap-card { border-radius: 16px; }
+body.es .ap-card + .ap-card { margin-top: 16px; }
+.es-pdfdlg .ed-seg { flex-wrap: wrap; }
+
+/* Workspaces (viewer, editor) */
+/* Viewer / editor are full-screen workspaces: body class removes the footer and the main padding / max-width. */
+body.es-fullpage .ap-foot { display: none; }
+body.es-fullpage .ap-main { padding: 0; max-width: none; display: flex; }
+/* Workspace height = viewport minus the shell header (57px = 56px min-height + 1px border). Two declarations: vh
+   fallback, then dvh (excludes the mobile URL bar). */
+.es-app { display: flex; flex-direction: column; width: 100%; height: calc(100vh - 57px); height: calc(100dvh - 57px); min-height: 360px; background: var(--ed-panel-2); }
+/* In fullscreen there is no shell header to subtract. */
+.es-app:fullscreen { height: 100vh; }
+.es-tb { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--ed-border); background: var(--ed-panel); flex-wrap: wrap; min-height: 50px; }
+.es-tb-title { display: flex; flex-direction: column; min-width: 0; max-width: 220px; line-height: 1.2; }
+.es-tb-title b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.es-tpct, .es-saved { font-size: 12px; color: var(--ed-muted); font-weight: 600; }
+/* Save indicator colours driven by a data-state attribute: one element, states switched without class juggling. */
+.es-saved[data-state="dirty"], .es-saved[data-state="saving"] { color: var(--ed-warn); }
+.es-saved[data-state="error"] { color: var(--ed-danger); }
+.es-tb-g { display: flex; align-items: center; gap: 2px; padding: 2px; border-radius: 10px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.es-ib { width: 34px; height: 34px; }
+/* Toggle buttons styled from aria-pressed: the accessible state is the visual state, they cannot disagree. */
+.es-tg[aria-pressed="true"] { background: var(--ed-accent-weak); color: var(--ed-accent); }
+.es-zoom { min-width: 48px; text-align: center; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ed-muted); }
+.es-modes .ed-seg-btn { padding: 0 9px; font-size: 12.5px; }
+.es-body { flex: 1; min-height: 0; display: flex; position: relative; }
+.es-canvas-wrap { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; }
+/* Chart canvas host: overflow hidden, the renderer pans and zooms inside it. */
+.es-canvas { position: relative; flex: 1; min-height: 0; overflow: hidden; background: var(--ed-stage); }
+.es-canvas .st-canvas { display: block; outline: none; }
+/* Cursor per active tool, selected by a data-tool attribute on the host. */
+.es-canvas[data-tool="view"] .st-canvas, .es-canvas[data-tool="pan"] .st-canvas { cursor: grab; }
+.es-canvas[data-tool="mark"] .st-canvas, .es-canvas[data-tool="unmark"] .st-canvas, .es-canvas[data-tool="full"] .st-canvas { cursor: crosshair; }
+/* Overview (minimap) floating at the bottom-left of the canvas; line-height:0 removes the inline-canvas gap. */
+.es-ov { position: absolute; left: 34px; bottom: 12px; padding: 4px; border-radius: 8px; background: var(--ed-panel); border: 1px solid var(--ed-border); box-shadow: var(--ed-shadow); line-height: 0; }
+.es-ov canvas { cursor: crosshair; touch-action: none; border-radius: 4px; }
+.es-ov[hidden] { display: none; }
+/* Right side panel (colours / progress), own scroll; the head sticks to its top. */
+.es-side { width: 320px; flex: none; border-left: 1px solid var(--ed-border); background: var(--ed-panel); overflow: auto; display: flex; flex-direction: column; }
+.es-side-head { padding: 12px 14px; border-bottom: 1px solid var(--ed-border); position: sticky; top: 0; background: var(--ed-panel); z-index: 1; }
+.es-side-n { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 13px; }
+.es-only { display: flex; gap: 8px; align-items: center; padding: 8px 14px; font-size: 13px; color: var(--ed-muted); }
+.es-colors { display: flex; flex-direction: column; padding: 4px 6px 10px; }
+.es-crow { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 0; border-radius: 10px; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.es-crow:hover { background: var(--ed-hover); }
+/* Selected colour row: tint plus an inset 3px accent bar on the left (box-shadow: no layout shift). */
+.es-crow.on { background: var(--ed-accent-weak); box-shadow: inset 3px 0 0 var(--ed-accent); }
+.es-crow-c { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
+.es-crow-c b { font-size: 13px; }
+.es-crow-c small { color: var(--ed-muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.es-crow-p { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; width: 70px; }
+.es-crow-p small { font-size: 11px; color: var(--ed-muted); font-variant-numeric: tabular-nums; }
+.es-crow-n { font-size: 12px; color: var(--ed-muted); font-variant-numeric: tabular-nums; }
+/* Finished colour: struck through in the accent colour. */
+.es-cdone .es-crow-c b { text-decoration: line-through; text-decoration-color: var(--ed-accent); }
+.es-mini { width: 64px; height: 5px; border-radius: 999px; background: var(--ed-border); overflow: hidden; }
+.es-mini i { display: block; height: 100%; background: var(--ed-accent); }
+.es-status { display: flex; gap: 16px; align-items: center; min-height: 28px; padding: 3px 12px; font-size: 12px; border-top: 1px solid var(--ed-border); background: var(--ed-panel); color: var(--ed-text); flex-wrap: wrap; }
+.es-st-c { display: inline-flex; gap: 6px; align-items: center; }
+.es-sidebtn { display: none; }
+
+/* Editor */
+/* Editor tool column: 54px, scrollable without a visible scrollbar for short screens. */
+.es-toolcol { flex: none; width: 54px; border-right: 1px solid var(--ed-border); background: var(--ed-panel); overflow: auto; scrollbar-width: none; }
+.es-tools { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 0; }
+.es-tool { width: 40px; height: 38px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 9px; background: none; color: var(--ed-text); cursor: pointer; flex: none; }
+.es-tool:hover { background: var(--ed-hover); }
+/* Active tool fully inverted (accent background): the strongest state, visible at a glance. */
+.es-tool.on { background: var(--ed-accent); color: var(--ed-accent-text); }
+.es-cur { display: flex; flex-direction: column; align-items: center; gap: 2px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--ed-border); width: 46px; text-align: center; }
+.es-cur small { font-size: 9.5px; line-height: 1.1; word-break: break-all; color: var(--ed-muted); }
+.es-toolopts { display: flex; align-items: center; gap: 8px; padding: 4px 10px; min-height: 40px; border-bottom: 1px solid var(--ed-border); background: var(--ed-panel); flex-wrap: wrap; font-size: 13px; }
+.es-toolopts .ed-hint { margin: 0; }
+.es-edside .es-tabs { margin: 10px; }
+.es-edside .es-tabs .ed-seg-btn { flex: 1; }
+.es-tab { display: flex; flex-direction: column; gap: 8px; padding: 0 10px 14px; }
+.es-tab-acts { display: flex; gap: 6px; }
+.es-tab-acts.es-wrap { flex-wrap: wrap; }
+.es-tab .es-crow { cursor: pointer; }
+.es-symbtn { border: 0; padding: 0; background: none; cursor: pointer; display: inline-flex; }
+.es-layers { display: flex; flex-direction: column; gap: 2px; }
+.es-lrow { display: flex; align-items: center; gap: 4px; padding: 4px; border-radius: 10px; cursor: pointer; }
+.es-lrow:hover { background: var(--ed-hover); }
+.es-lrow.on { background: var(--ed-accent-weak); box-shadow: inset 3px 0 0 var(--ed-accent); }
+.es-lname { flex: 1; font-weight: 600; font-size: 13px; }
+.es-props .ed-field-col { gap: 4px; }
+.es-textdlg .ed-seg { flex-wrap: wrap; }
+.es-textprev { max-width: 100%; border: 1px solid var(--ed-border); border-radius: 6px; image-rendering: pixelated; }
+.es-num { width: 76px; }
+
+/* Pickers */
+.es-pickdlg { width: min(860px, 96vw); }
+.es-picker { display: flex; flex-direction: column; gap: 10px; }
+.es-picker-head { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.es-picker-head .ed-select { width: auto; }
+.es-psearch { flex: 1; min-width: 180px; display: flex; gap: 6px; align-items: center; }
+.es-tnear, .es-tpicked { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.es-tgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 6px; max-height: 46vh; overflow: auto; padding: 2px; }
+/* Thread swatch tile: 2x2 grid, colour chip spanning both rows on the left, code and name on the right. */
+.es-tsw { display: grid; grid-template-columns: 26px 1fr; grid-template-rows: auto auto; column-gap: 6px; align-items: center; padding: 5px; border: 1px solid var(--ed-border); border-radius: 9px; background: var(--ed-panel); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.es-tsw:hover { border-color: var(--ed-border-strong); }
+.es-tsw.on { border-color: var(--ed-accent); box-shadow: 0 0 0 2px var(--ed-accent-weak); }
+.es-tsw-c { grid-row: 1 / 3; width: 26px; height: 26px; border-radius: 6px; border: 1px solid rgba(0, 0, 0, .2); }
+.es-tsw b { font-size: 12.5px; }
+.es-tsw small { font-size: 10.5px; color: var(--ed-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.es-tnear .es-tsw { width: 116px; }
+/* Colour-difference (delta E) line. The element is also matched by .es-tsw small (0,1,1), which outranks .es-de
+   (0,1,0) whatever the order; !important lets this smaller size win. A compound .es-tsw .es-de would do it cleanly. */
+.es-de { grid-column: 2; font-size: 10px !important; }
+.es-sgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 5px; max-height: 44vh; overflow: auto; }
+/* Symbol picker cell: white tile, black glyph (raw: it shows the printed look); used symbols dimmed. */
+.es-ssw { aspect-ratio: 1; border: 1px solid var(--ed-border); border-radius: 8px; background: #fff; cursor: pointer; padding: 6px; }
+.es-ssw svg { width: 100%; height: 100%; fill: #111; }
+.es-ssw.on { border-color: var(--ed-accent); box-shadow: 0 0 0 2px var(--ed-accent); }
+.es-ssw.used { opacity: .35; }
+.es-letter { width: 90px; }
+
+/* Converter */
+.es-origbox { margin-top: 10px; }
+.es-orig { max-width: 100%; max-height: 220px; border-radius: 8px; display: block; }
+/* The original image preview stays hidden until a file sets its src. */
+.es-orig:not([src]) { display: none; }
+.es-conv-box { height: min(62vh, 640px); border-radius: 12px; overflow: hidden; }
+.es-conv-empty { height: 100%; justify-content: center; }
+.es-conv-stats { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
+.es-stat { display: flex; flex-direction: column; padding: 8px 12px; border-radius: 10px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); min-width: 90px; }
+.es-stat small { color: var(--ed-muted); font-size: 11.5px; }
+.es-conv-pal { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.es-pchip { display: inline-flex; gap: 6px; align-items: center; padding: 3px 8px 3px 3px; border-radius: 999px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); font-size: 12px; }
+.es-busy { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--ed-muted); }
+.es-busy[hidden] { display: none; }
+.es-conv .ap-side { top: 70px; }
+
+/* Moderation */
+.es-tokenrow { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.es-tokenrow .ed-field { flex: 1; min-width: 220px; }
+.es-modlist { display: flex; flex-direction: column; gap: 10px; }
+.es-modrow { display: flex; gap: 12px; align-items: center; padding: 10px; border: 1px solid var(--ed-border); border-radius: 12px; flex-wrap: wrap; }
+/* Moderation thumbnails: contain + pixelated, so tiny charts stay legible as stitch grids. */
+.es-modthumb { width: 72px; height: 72px; object-fit: contain; image-rendering: pixelated; background: var(--ed-panel-2); border-radius: 8px; flex: none; }
+.es-modinfo { flex: 1; min-width: 200px; display: flex; flex-direction: column; gap: 2px; }
+.es-modacts { display: flex; gap: 6px; flex-wrap: wrap; }
+.es-modbig { max-width: 100%; image-rendering: pixelated; }
+
+/* Tablets and phones */
+@media (max-width: 1100px) {
+  .es-modes .ed-seg-btn { padding: 0 6px; font-size: 12px; }
+  .es-side { width: 280px; }
+}
+/* Tablets: single-column catalogue; the filter panel becomes an off-canvas drawer toggled by body.es-filters-open. */
+@media (max-width: 960px) {
+  .es-hero { grid-template-columns: 1fr; padding: 20px; }
+  .es-hero-art { display: none; }
+  .es-scheme { grid-template-columns: 1fr; }
+  .es-catalog { grid-template-columns: 1fr; }
+  .es-filter-btn { display: inline-flex; }
+  .es-filters { display: none; position: fixed; inset: 0 0 0 auto; width: min(320px, 88vw); top: 0; max-height: none; z-index: 60; border-radius: 0; box-shadow: var(--ed-shadow-lg); }
+  body.es-filters-open .es-filters { display: flex; }
+  .es-fhead { display: flex; justify-content: space-between; align-items: center; }
+}
+/* Phones: the side panel turns into a bottom sheet (52% height, slides up with transform), tools move to a row
+   above the canvas. 104px = shell header plus the wrapped toolbar row. */
+@media (max-width: 760px) {
+  .es-app { height: calc(100dvh - 104px); }
+  .es-tb { gap: 6px; padding: 6px; }
+  .es-tb-title { max-width: 120px; }
+  .es-modes { order: 10; flex: 1 0 100%; overflow-x: auto; flex-wrap: nowrap; }
+  .es-tb > .ed-seg[role="radiogroup"]:not(.es-modes) { order: 11; }
+  .es-sidebtn { display: inline-flex; }
+  .es-hide-s { display: none; }
+  .es-side { position: absolute; left: 0; right: 0; bottom: 0; width: auto; height: 52%; border-left: 0; border-top: 1px solid var(--ed-border); border-radius: 16px 16px 0 0;
+    box-shadow: var(--ed-shadow-lg); transform: translateY(105%); transition: transform .22s ease; z-index: 20; }
+  .es-app.es-side-open .es-side { transform: none; }
+  .es-body { flex-direction: column; }
+  .es-toolcol { width: auto; border-right: 0; border-bottom: 1px solid var(--ed-border); order: -1; }
+  .es-tools { flex-direction: row; padding: 4px; overflow-x: auto; }
+  .es-cur { flex-direction: row; margin: 0 0 0 6px; padding: 0 0 0 6px; border-top: 0; border-left: 1px solid var(--ed-border); width: auto; }
+  .es-ov { display: none; }
+  .es-status { font-size: 11px; gap: 10px; }
+  .es-cards { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .es-prev-box { height: 52vh; }
+  .es-facts { grid-template-columns: 1fr; }
+  .es-facts dt { margin-top: 6px; }
+}
+/* Small phones: hide secondary toggles and the zoom readout; 92px offset for the smaller wrapped toolbar. */
+@media (max-width: 560px) {
+  .es-app { height: calc(100dvh - 92px); }
+  .es-toggles { display: none; }
+  .es-tb-title { flex: 1; max-width: none; }
+  .es-tb-g .es-zoom { display: none; }
+}

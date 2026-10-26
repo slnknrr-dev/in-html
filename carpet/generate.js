@@ -1,0 +1,409 @@
+// carpet/generate.js - rug designs on a knot grid from traditions as rule sets: Persian (central medallion with
+// pendants, quarter-medallion corners, a floral lattice, a vine border between barber-pole guards), Anatolian
+// (geometric allover repeats in wallpaper groups, prayer niches, kilim bands), Caucasian (stacked hooked medallions,
+// latch-hook and star fillers, reciprocal borders), Turkmen (rows of quartered guls with minor guls on a lattice,
+// elem panels), Nordic rya (soft colour fields), modern abstract compositions, and — as recipes of composition
+// layers (regional.js) — Indian (millefleur, garden panels, niches), Arab and Moroccan (Mamluk octagons, girih
+// stars, Beni Ourain lozenges, boucherouite patchwork), Ottoman Turkish (Uşak stars and medallions, Lotto, Holbein,
+// çintamani), Armenian (dragon lozenges, Chelaberd sunbursts, eternity wheels) and Georgian (borjgali, Tushetian
+// bands, Bolnisi crosses, Khevsur crosses); the mash-up tradition stacks seeded ornaments, fractals and abstractions
+// (compose.js). Any field can take further user layers on top. Every choice comes from a seeded PRNG (prng/), so a
+// seed and the options reproduce the rug exactly.
+//
+//   TRADITIONS { id: rule set }        FIELDS, CORNERS, GUARDS, FIELD_PALETTES
+//   generateRug(opts) -> rug           opts: { tradition, seed, widthCm, lengthCm, kpsi, palette, overrides (role ->
+//                                      hex), field, symmetry, wallpaper, corners, borderMotif, fieldMotif, guards,
+//                                      borders (count of guard pairs), pileMm, fringeCm, motifs (extra user motifs),
+//                                      layers (composition layers painted after the field) }
+//   rug = { format: 'in-html-rug', version: 1, width, height (knots), kpiH, kpiV, pileMm, fringeCm,
+//           palette: [{ role, hex, dye }], cells: Uint8Array (palette index), meta: { tradition, seed, field,
+//           symmetry, wallpaper, corners, borderMotif, fieldMotif, palette, widthCm, lengthCm, kpsi,
+//           fieldLayers (the layers the field itself was built from), field rect { x, y, w, h } } }
+//   knotGrid(widthCm, lengthCm, kpsi) -> { width, height, kpiH, kpiV }
+//   rugRoleAt(rug, x, y) -> role
+
+import { seededRandom } from '../prng/prng.js';
+import { paletteColors, ROLES, PALETTES } from './dyes.js';
+import { MOTIFS, motifSize, motifRole, mirrorMotif } from './motifs.js';
+import { fieldFold, wallpaperFold, WALLPAPER } from './symmetry.js';
+import { paintLayers, randomComposition, normLayer } from './compose.js';
+import { REGIONAL, REGIONAL_FIELDS } from './regional.js';
+
+const CLASSIC = ['medallion', 'allover', 'gulRows', 'stacked', 'kilim', 'prayer', 'rya', 'abstract', 'plain'];
+export const FIELDS = [...CLASSIC, ...REGIONAL_FIELDS, 'composition'];
+export const CORNERS = ['mitre', 'block', 'continuous', 'cut'];
+export const GUARDS = ['solid', 'barber', 'dots', 'reciprocal'];
+
+export const TRADITIONS = {
+  persian: { palettes: ['persian', 'persianNight'], fields: ['medallion', 'medallion', 'allover'], symmetry: ['mirrorXY'], wallpaper: ['cmm', 'pmm', 'p4m'], borderMotifs: ['vine', 'sMotif'], fieldMotifs: ['rosette', 'boteh', 'star8'], corners: ['block', 'mitre'], guards: ['barber', 'reciprocal', 'dots'], borders: [2, 3], mainWidth: 0.1, kpsi: 160 },
+  anatolian: { palettes: ['anatolian'], fields: ['allover', 'prayer', 'kilim'], symmetry: ['mirrorXY', 'mirrorX'], wallpaper: ['pmm', 'cmm', 'pmg', 'p4m', 'pgg'], borderMotifs: ['zigzag', 'crenel', 'sMotif'], fieldMotifs: ['hookDiamond', 'ramsHorn', 'star8', 'latchHook'], corners: ['cut', 'mitre'], guards: ['solid', 'dots'], borders: [1, 2], mainWidth: 0.09, kpsi: 64 },
+  caucasian: { palettes: ['caucasian', 'anatolian'], fields: ['stacked', 'allover'], symmetry: ['mirrorXY'], wallpaper: ['cmm', 'p4m', 'pmm'], borderMotifs: ['trefoil', 'runningDog', 'crenel'], fieldMotifs: ['latchHook', 'star8', 'hookDiamond'], corners: ['mitre', 'block'], guards: ['reciprocal', 'barber', 'solid'], borders: [1, 2], mainWidth: 0.11, kpsi: 81 },
+  turkmen: { palettes: ['turkmen'], fields: ['gulRows'], symmetry: ['mirrorXY'], wallpaper: ['pmm'], borderMotifs: ['zigzag', 'sMotif', 'crenel'], fieldMotifs: ['gul'], corners: ['cut'], guards: ['dots', 'solid'], borders: [1], mainWidth: 0.08, kpsi: 196 },
+  rya: { palettes: ['rya', 'undyed', 'modern'], fields: ['rya'], symmetry: ['none'], wallpaper: ['p1'], borderMotifs: [], fieldMotifs: [], corners: ['cut'], guards: [], borders: [0], mainWidth: 0, kpsi: 9 },
+  modern: { palettes: ['modern', 'undyed', 'rya'], fields: ['abstract'], symmetry: ['none'], wallpaper: ['p1'], borderMotifs: [], fieldMotifs: ['star8', 'rosette'], corners: ['cut'], guards: ['solid'], borders: [0, 1], mainWidth: 0, kpsi: 49 },
+  indian: { palettes: ['mughal', 'mughalIvory'], fields: ['millefleur', 'gardenPanels', 'mughalNiche', 'millefleur'], symmetry: ['mirrorXY'], wallpaper: ['cmm', 'pmm'], borderMotifs: ['tulipVine', 'vine', 'cloudBand'], fieldMotifs: ['lotus', 'palmette', 'rosette'], corners: ['mitre', 'block'], guards: ['barber', 'dots', 'reciprocal'], borders: [2, 3], mainWidth: 0.1, kpsi: 225 },
+  arabic: { palettes: ['mamluk', 'persianNight'], fields: ['mamluk', 'girih', 'berber', 'boucherouite'], symmetry: ['mirrorXY'], wallpaper: ['p4m', 'cmm'], borderMotifs: ['kufic', 'braid', 'meander'], fieldMotifs: ['umbrellaLeaf', 'papyrus', 'star8'], corners: ['mitre', 'block'], guards: ['solid', 'dots', 'barber'], borders: [1, 2], mainWidth: 0.09, kpsi: 100 },
+  turkish: { palettes: ['ottoman', 'usak', 'lotto'], fields: ['usakStar', 'usakMedallion', 'lotto', 'holbein', 'cintamani'], symmetry: ['mirrorXY'], wallpaper: ['pmm', 'cmm'], borderMotifs: ['kufic', 'cloudBand', 'tulipVine', 'cintamaniBand'], fieldMotifs: ['tulip', 'carnation', 'star8'], corners: ['mitre', 'block', 'cut'], guards: ['dots', 'reciprocal', 'solid'], borders: [1, 2], mainWidth: 0.1, kpsi: 121 },
+  armenian: { palettes: ['armenian', 'chelaberd'], fields: ['dragon', 'eagle', 'eternity'], symmetry: ['mirrorXY'], wallpaper: ['cmm', 'p4m'], borderMotifs: ['eternityBand', 'diamondChain', 'runningDog', 'trefoil'], fieldMotifs: ['latchHook', 'star8', 'eternity'], corners: ['mitre', 'block'], guards: ['reciprocal', 'barber', 'solid'], borders: [1, 2], mainWidth: 0.11, kpsi: 81 },
+  georgian: { palettes: ['tushetian', 'georgianSun'], fields: ['borjgali', 'tushetian', 'bolnisi', 'khevsur'], symmetry: ['mirrorXY'], wallpaper: ['pmm', 'p4m'], borderMotifs: ['crossBand', 'stepsBand', 'diamondChain', 'braid'], fieldMotifs: ['bolnisi', 'borjgali', 'khevsurCross'], corners: ['mitre', 'cut', 'block'], guards: ['solid', 'dots', 'barber'], borders: [1, 2], mainWidth: 0.09, kpsi: 64 },
+  mashup: { palettes: ['saffronNight', 'jadeTemple', 'cobaltIce', 'ember', 'persianNight', 'georgianSun', 'mamluk', 'boucherouite', 'modern'], fields: ['composition'], symmetry: ['none'], wallpaper: ['p4m'], borderMotifs: ['meander', 'braid', 'diamondChain', 'kufic', 'eternityBand', 'stepsBand', 'crossBand', 'zigzag', 'waveBand'], fieldMotifs: ['star8', 'rosette', 'bolnisi', 'eternity', 'borjgali', 'holbeinGul', 'lotus', 'palmette', 'bird'], corners: ['mitre', 'block', 'continuous'], guards: ['barber', 'reciprocal', 'dots', 'solid'], borders: [0, 1, 2], mainWidth: 0.08, kpsi: 100 },
+};
+
+// Fields that read best in their own palettes (used when no palette is chosen) and fields woven without borders.
+export const FIELD_PALETTES = {
+  berber: ['berber'], boucherouite: ['boucherouite'], mamluk: ['mamluk'], girih: ['mamluk', 'persianNight', 'ottoman', 'georgianSun'], lotto: ['lotto'],
+  usakStar: ['usak'], usakMedallion: ['usak', 'ottoman'], holbein: ['ottoman', 'usak'], cintamani: ['ottoman'], eagle: ['chelaberd'],
+  tushetian: ['tushetian'], khevsur: ['tushetian'], borjgali: ['georgianSun'], bolnisi: ['georgianSun', 'tushetian'],
+};
+const NO_BORDER = new Set(['berber', 'boucherouite']);
+
+// kpsi (knots per square inch) -> knots per inch on each axis as its square root (square knots assumed), then
+// knots = size in inches * kpi. The 1.5 M knot cap scales both axes equally; kpiH/kpiV are recomputed from the
+// capped grid so physical size stays right while density drops.
+export function knotGrid(widthCm, lengthCm, kpsi) {
+  const kpi = Math.sqrt(Math.max(1, kpsi));
+  let width = Math.max(16, Math.round((widthCm / 2.54) * kpi)), height = Math.max(16, Math.round((lengthCm / 2.54) * kpi));
+  // Keep previews and exports responsive: at most 1.5 million knots.
+  const k = Math.min(1, Math.sqrt(1.5e6 / (width * height)));
+  if (k < 1) { width = Math.round(width * k); height = Math.round(height * k); }
+  return { width, height, kpiH: width / (widthCm / 2.54), kpiV: height / (lengthCm / 2.54) };
+}
+
+const RI = Object.fromEntries(ROLES.map((r, i) => [r, i]));
+
+// Low-frequency value noise in [0, 1) on a lattice of `cell` knots.
+// Value noise: random values on a coarse lattice, bilinear interpolation with smoothstep (t*t*(3-2t)) easing to
+// hide the lattice. Two extra lattice columns/rows cover x = w exactly. Sampling beyond (w, h) is NOT supported.
+function valueNoise(rng, w, h, cell) {
+  const gw = Math.ceil(w / cell) + 2, gh = Math.ceil(h / cell) + 2;
+  const g = new Float32Array(gw * gh).map(() => rng.next());
+  const sm = (t) => t * t * (3 - 2 * t);
+  return (x, y) => {
+    const fx = x / cell, fy = y / cell, ix = Math.floor(fx), iy = Math.floor(fy), tx = sm(fx - ix), ty = sm(fy - iy);
+    const a = g[iy * gw + ix], b = g[iy * gw + ix + 1], c = g[(iy + 1) * gw + ix], d = g[(iy + 1) * gw + ix + 1];
+    return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+  };
+}
+
+// A motif as a function of offset coordinates with an integer scale: role or null.
+function motifAt(m, s, x, y) {
+  if (x < 0 || y < 0) return null;
+  return motifRole(m, Math.floor(x / s), Math.floor(y / s));
+}
+
+// Determinism contract: every random choice comes from one PRNG seeded with tradition + seed, consumed in a fixed
+// code order. pick() draws a number only when the option is absent, so overriding one option can shift the later
+// choices (share codes therefore store every override). Additions that must not disturb existing
+// rugs use rng.fork(name), an independent stream (see the regional palette choice below).
+export function generateRug(o = {}) {
+  const tradition = TRADITIONS[o.tradition] ? o.tradition : 'persian';
+  const T = TRADITIONS[tradition];
+  const seed = String(o.seed || 'rug');
+  const rng = seededRandom(tradition + '/' + seed);
+  const pick = (opt, list) => (opt && list.includes(opt) ? opt : list.length ? rng.pick(list) : null);
+  const widthCm = Math.max(20, Math.min(600, +o.widthCm || 120)), lengthCm = Math.max(20, Math.min(900, +o.lengthCm || 180));
+  const kpsi = Math.max(4, Math.min(900, +o.kpsi || T.kpsi));
+  const { width: W, height: H, kpiH, kpiV } = knotGrid(widthCm, lengthCm, kpsi);
+  const ownPalette = !!(o.palette && PALETTES[o.palette]);
+  let paletteId = ownPalette ? o.palette : rng.pick(T.palettes);
+  const userMotifs = Object.fromEntries((o.motifs || []).map((m) => [m.id, m]));
+  const motif = (id) => userMotifs[id] || MOTIFS[id];
+  const field = o.field && FIELDS.includes(o.field) ? o.field : rng.pick(T.fields);
+  // Regional fields pick from their own palettes on a fork, so the main sequence (and older rugs) stays the same.
+  if (!ownPalette && FIELD_PALETTES[field] && !FIELD_PALETTES[field].includes(paletteId)) paletteId = rng.fork('palette').pick(FIELD_PALETTES[field]);
+  const palette = paletteColors(paletteId, o.overrides || {});
+  const symmetry = o.symmetry || rng.pick(T.symmetry);
+  const wallpaper = o.wallpaper && WALLPAPER.includes(o.wallpaper) ? o.wallpaper : rng.pick(T.wallpaper);
+  const corners = pick(o.corners, CORNERS.filter((c) => T.corners.includes(c)).length ? T.corners : CORNERS);
+  const borderMotif = (o.borderMotif && motif(o.borderMotif)) ? o.borderMotif : T.borderMotifs.length ? rng.pick(T.borderMotifs) : null;
+  const fieldMotif = (o.fieldMotif && motif(o.fieldMotif)) ? o.fieldMotif : T.fieldMotifs.length ? rng.pick(T.fieldMotifs) : 'star8';
+  const guardType = o.guards && GUARDS.includes(o.guards) ? o.guards : T.guards.length ? rng.pick(T.guards) : 'solid';
+  const drawnPairs = o.borders != null ? Math.max(0, Math.min(4, +o.borders | 0)) : rng.pick(T.borders);
+  const bare = NO_BORDER.has(field) && o.borders == null;
+  const guardPairs = bare ? 0 : drawnPairs;
+  const cells = new Uint8Array(W * H).fill(RI.field);
+  const set = (x, y, role) => { if (role && x >= 0 && y >= 0 && x < W && y < H) cells[y * W + x] = RI[role]; };
+  const minSide = Math.min(W, H);
+
+  // --- borders: guards, the main border, guards (from the edge inwards) ---
+  let inset = 0;
+  // Borders are concentric bands painted from the edge inwards; `inset` grows after each band. For each knot the
+  // band computes: across (depth inside the band), along (position along the side, or along the whole perimeter for
+  // 'continuous' corners) and the side, so motif borders can run around the rug. Corner resolution decides how the
+  // two sides meet (mitre = diagonal, block = a separate corner motif, cut = top/bottom sides win).
+  const band = (w, fn) => {
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const d = Math.min(x, y, W - 1 - x, H - 1 - y);
+      if (d < inset || d >= inset + w) continue;
+      const across = d - inset;
+      // Side: the nearest edge; corner cells by the chosen resolution.
+      const inCornerX = x < inset + w || x > W - 1 - inset - w, inCornerY = y < inset + w || y > H - 1 - inset - w;
+      const corner = inCornerX && inCornerY;
+      let side;
+      if (corner && corners === 'cut') side = y < H / 2 ? 'top' : 'bottom';
+      else side = d === y ? 'top' : d === H - 1 - y ? 'bottom' : d === x ? 'left' : 'right';
+      const len = side === 'top' || side === 'bottom' ? W - 2 * inset : H - 2 * inset;
+      let along = side === 'top' ? x - inset : side === 'bottom' ? W - 1 - inset - x : side === 'left' ? H - 1 - inset - y : y - inset;
+      if (corners === 'continuous') {
+        const pw = W - 2 * inset, ph = H - 2 * inset;
+        along = side === 'top' ? x - inset : side === 'right' ? pw + (y - inset) : side === 'bottom' ? pw + ph + (W - 1 - inset - x) : 2 * pw + ph + (H - 1 - inset - y);
+      }
+      set(x, y, fn({ across, along, len, side, corner, x, y }));
+    }
+    inset += w;
+  };
+  const guard = (w, kind) => band(w, ({ across, along }) => {
+    if (w <= 2 || kind === 'solid') return across === 0 || across === w - 1 ? 'outline' : 'guard';
+    if (kind === 'barber') return across === 0 || across === w - 1 ? 'outline' : ((along + across) % 6 < 3 ? 'guard' : 'accent2');
+    if (kind === 'dots') return across === 0 || across === w - 1 ? 'outline' : (across === Math.floor(w / 2) && along % 3 === 1 ? 'accent1' : 'guard');
+    const m = MOTIFS.trefoil, s = motifSize(m);
+    if (across === 0 || across === w - 1) return 'outline';
+    const r = motifRole(m, along % s.w, Math.min(s.h - 1, Math.floor(((across - 1) * s.h) / Math.max(1, w - 2))));
+    return r === 'accent1' ? 'guard' : 'accent2';
+  });
+  const mainBorder = (w, unitId) => {
+    const m = motif(unitId);
+    const sz = motifSize(m);
+    const s = Math.max(1, Math.floor((w - 2) / sz.h));
+    const off = Math.floor((w - sz.h * s) / 2);
+    const cm = MOTIFS.cornerRosette, csz = motifSize(cm), cs = Math.max(1, Math.floor((w - 2) / csz.h));
+    band(w, ({ across, along, len, corner, x, y }) => {
+      if (across === 0 || across === w - 1) return 'outline';
+      if (corner && corners === 'block') {
+        const cx = x < W / 2 ? x - inset : W - 1 - inset - x, cy = y < H / 2 ? y - inset : H - 1 - inset - y;
+        const r = motifAt(cm, cs, cx - Math.floor((w - csz.w * cs) / 2), cy - Math.floor((w - csz.h * cs) / 2));
+        return cx === w - 1 || cy === w - 1 ? 'outline' : r || 'border';
+      }
+      const period = sz.w * s;
+      const start = Math.floor(((len % period) + period) % period / 2);
+      const r = motifAt(m, s, ((along - start) % period + period) % period, across - off);
+      return r || 'border';
+    });
+  };
+  if (!bare && (guardPairs > 0 || T.mainWidth > 0)) {
+    const gw = Math.max(2, Math.round(minSide * 0.022));
+    band(1, () => 'outline');
+    for (let i = 0; i < guardPairs; i++) guard(i === 0 ? gw + 1 : gw, guardType);
+    if (borderMotif && T.mainWidth > 0) mainBorder(Math.max(6, Math.round(minSide * T.mainWidth)), borderMotif);
+    for (let i = 0; i < guardPairs; i++) guard(gw, guardType);
+    if (inset > 1) band(1, () => 'outline');
+  }
+
+  // --- the field ---
+  const fx0 = inset, fy0 = inset, fw = W - 2 * inset, fh = H - 2 * inset;
+  // Every field generator draws only the fundamental region: fieldFold maps each knot to its orbit representative,
+  // so the result is exactly symmetric by construction, whatever the generator does.
+  const draw = (fn, sym = symmetry) => {
+    for (let y = 0; y < fh; y++) for (let x = 0; x < fw; x++) {
+      const [rx, ry] = fieldFold(sym, x, y, fw, fh);
+      const r = fn(rx, ry, x, y);
+      if (r) set(fx0 + x, fy0 + y, r);
+    }
+  };
+  const fm = motif(fieldMotif);
+  const classic = (field) => {
+  if (field === 'plain') return;
+  if (field === 'medallion') {
+    const cx = (fw - 1) / 2, cy = (fh - 1) / 2;
+    const a = Math.min(fw * 0.3, fh * 0.28), b = Math.min(fh * 0.24, fw * 0.36), p = 1.25 + rng.next() * 0.3;
+    const shape = (dx, dy, sa, sb) => (Math.abs(dx) / sa) ** p + (Math.abs(dy) / sb) ** p;
+    const pend = Math.max(3, Math.round(a * 0.25));
+    const lat = Math.max(8, Math.round(minSide * 0.1));
+    const flower = motif(fieldMotif), fsz = motifSize(flower), fs = Math.max(1, Math.floor((lat * 0.7) / Math.max(fsz.w, fsz.h)));
+    draw((x, y) => {
+      const dx = x - cx, dy = y - cy;
+      const t = shape(dx, dy, a, b);
+      if (t <= 1) {
+        if (t > 0.9) return 'outline';
+        if (t > 0.72) return 'accent2';
+        if (t > 0.66) return 'outline';
+        const rose = MOTIFS.rosette, rsz = motifSize(rose), rs = Math.max(1, Math.floor((a * 0.5) / rsz.w));
+        const r = motifAt(rose, rs, dx + (rsz.w * rs) / 2, dy + (rsz.h * rs) / 2);
+        if (r) return r === 'accent1' ? 'accent3' : r;
+        return ((Math.abs(Math.round(dx)) + Math.abs(Math.round(dy))) % 7 === 0) ? 'accent3' : 'accent1';
+      }
+      // Pendants above and below.
+      const pdy = Math.abs(dy) - b - pend * 0.9;
+      if (Math.abs(dx) + Math.abs(pdy) <= pend) return Math.abs(dx) + Math.abs(pdy) > pend - 1.2 ? 'outline' : 'accent2';
+      if (Math.abs(dx) < 0.6 && Math.abs(dy) > b && Math.abs(dy) < b + pend * 0.6) return 'outline';
+      // Quarter medallions in the corners.
+      const ct = shape(Math.min(x, fw - 1 - x), Math.min(y, fh - 1 - y), a * 0.62, b * 0.62);
+      if (ct <= 1) return ct > 0.86 ? 'outline' : ct > 0.6 ? 'accent2' : 'accent1';
+      // Floral lattice on a diamond grid.
+      const u = ((x + y) % lat + lat) % lat, v = ((x - y + 1000 * lat) % lat + lat) % lat;
+      const fr = motifAt(flower, fs, (x % lat) - (lat - fsz.w * fs) / 2, (y % lat) - (lat - fsz.h * fs) / 2);
+      if (fr) return fr === 'outline' ? 'light' : fr === 'accent1' ? 'accent3' : fr === 'accent2' ? 'accent4' : 'light';
+      if (u === 0 || v === 0) return (x + y) % 2 ? 'light' : null;
+      return null;
+    });
+  } else if (field === 'allover') {
+    const sz = motifSize(fm);
+    const s = Math.max(1, Math.round((minSide * 0.12) / Math.max(sz.w, sz.h)));
+    const tw = Math.round(sz.w * s * 1.7) + 2, th = Math.round(sz.h * s * 1.5) + 2;
+    const small = MOTIFS.minorGul, ss = motifSize(small);
+    const roles = [['accent1', 'accent2'], ['accent3', 'accent1'], ['accent2', 'accent4']];
+    // Row colour changes, like village rugs.
+    draw((x, y) => {
+      const [u, v] = wallpaperFold(wallpaper, x - Math.floor((fw % tw) / 2), y - Math.floor((fh % th) / 2), tw, th);
+      const ox = Math.round(tw * 0.18), oy = Math.round(th * 0.15);
+      const r = motifAt(fm, s, u - ox, v - oy);
+      const row = Math.floor((y - Math.floor((fh % th) / 2)) / th);
+      const pair = roles[((row % roles.length) + roles.length) % roles.length];
+      if (r) return r === 'accent1' ? pair[0] : r === 'accent2' ? pair[1] : r;
+      const q = motifAt(small, 1, u - (tw - ss.w - 1), v - (th - ss.h - 1));
+      return q ? (q === 'outline' ? 'outline' : 'light') : null;
+    }, 'none');
+  } else if (field === 'gulRows') {
+    const g = motif('gul'), gs = motifSize(g);
+    const cols = fw > fh ? 4 : fw > 140 ? 4 : 3;
+    const cw = fw / cols;
+    const s = Math.max(1, Math.floor((cw * 0.8) / gs.w));
+    const rh = Math.round(gs.h * s * 1.45);
+    const rows = Math.max(1, Math.floor((fh * 0.86) / rh));
+    const top = Math.floor((fh - rows * rh) / 2);
+    const elemH = Math.max(3, top - 2);
+    const mg = MOTIFS.minorGul, ms = motifSize(mg), mgs = Math.max(1, Math.floor((cw * 0.25) / ms.w));
+    draw((x, y) => {
+      // Elem panels at both ends.
+      if (y < top - 1 || y >= top + rows * rh + 1) {
+        if (y === top - 2 || y === top + rows * rh + 1) return 'outline';
+        const e = MOTIFS.tree, es = motifSize(e), sc = Math.max(1, Math.floor(elemH / es.h));
+        const yy = y < top ? y - Math.floor((top - 2 - es.h * sc) / 2) : y - (top + rows * rh + 2) - Math.floor((fh - top - rows * rh - 2 - es.h * sc) / 2);
+        const r = motifAt(e, sc, x % (es.w * sc + 3), yy);
+        return r ? (r === 'accent1' ? 'accent1' : r) : 'light';
+      }
+      const yy = y - top;
+      const j = Math.floor(yy / rh), ly = yy - j * rh;
+      const i = Math.floor(x / cw), lx = x - i * cw;
+      // Lattice lines through the gul centres.
+      if (Math.abs(lx - cw / 2) < 0.5 || Math.abs(ly - rh / 2) < 0.5) return 'accent2';
+      const gx = lx - (cw - gs.w * s) / 2, gy = ly - (rh - gs.h * s) / 2;
+      const r = motifAt(g, s, gx, gy);
+      if (r) {
+        // Quartered gul: opposite quarters swap colours.
+        const q = (gx < (gs.w * s) / 2) === (gy < (gs.h * s) / 2);
+        if (r === 'accent3') return q ? 'accent3' : 'accent2';
+        if (r === 'accent2') return q ? 'accent2' : 'accent3';
+        return r;
+      }
+      const m = motifAt(mg, mgs, lx - (cw - ms.w * mgs) / 2 + (lx < cw / 2 ? cw / 2 : -cw / 2), ly - (rh - ms.h * mgs) / 2 + (ly < rh / 2 ? rh / 2 : -rh / 2));
+      return m ? (m === 'accent2' ? 'accent4' : m) : null;
+    });
+  } else if (field === 'stacked') {
+    const k = fh > fw * 1.3 ? 3 : 2;
+    const segH = fh / k, cx = (fw - 1) / 2;
+    const a = fw * 0.36, b = segH * 0.42;
+    const star = MOTIFS.star8, ss = motifSize(star), sts = Math.max(1, Math.floor((a * 0.5) / ss.w));
+    const lh = motif(fieldMotif), ls = motifSize(lh), lsc = Math.max(1, Math.floor((minSide * 0.05) / ls.w));
+    const spots = [];
+    for (let i = 0; i < 14; i++) spots.push([rng.int(Math.max(1, Math.floor(fw / 2))), rng.int(Math.max(1, Math.floor(fh / 2)))]);
+    draw((x, y) => {
+      const j = Math.min(k - 1, Math.floor(y / segH));
+      const cy = segH * (j + 0.5);
+      const dx = Math.abs(x - cx), dy = Math.abs(y - cy);
+      const t = dx / a + dy / b;
+      const fill = j % 2 ? 'accent2' : 'ground';
+      if (t <= 1) {
+        if (t > 0.92) return 'outline';
+        const r = motifAt(star, sts, x - cx + (ss.w * sts) / 2, y - cy + (ss.h * sts) / 2);
+        if (r) return r;
+        const ring = Math.floor(t * 6);
+        return ring % 2 ? 'accent1' : fill;
+      }
+      // Hooks along the edges.
+      if (t <= 1 + 3 / Math.min(a, b) && Math.floor((dx + dy) / 3) % 2 === 0 && dx > 1 && dy > 1) return 'outline';
+      for (const [sx, sy] of spots) { const r = motifAt(lh, lsc, x - sx, y - sy); if (r) return r === 'accent1' ? 'accent3' : r; }
+      return null;
+    });
+  } else if (field === 'kilim') {
+    const bands = [];
+    let y = 0;
+    while (y < fh / 2) { const hh = 4 + rng.int(Math.max(4, Math.round(minSide * 0.08))); bands.push({ y0: y, h: hh, kind: rng.pick(['solid', 'diamonds', 'zig', 'diamonds']), roles: rng.sample(['accent1', 'accent2', 'accent3', 'accent4', 'ground'], 2) }); y += hh + 2; }
+    draw((x, yy) => {
+      const B = bands.find((b) => yy >= b.y0 && yy < b.y0 + b.h + 2);
+      if (!B) return null;
+      const ly = yy - B.y0;
+      if (ly >= B.h) return ly === B.h ? 'outline' : 'light';
+      if (B.kind === 'solid') return B.roles[0];
+      if (B.kind === 'zig') return Math.abs((x % (B.h * 2)) - B.h) === ly ? B.roles[1] : B.roles[0];
+      const p = B.h + 1, d = Math.abs((x % p) - p / 2) + Math.abs(ly - (B.h - 1) / 2);
+      return d <= B.h / 2 - 0.5 ? ((Math.round(d) % 2) ? B.roles[1] : 'accent1') : B.roles[0];
+    }, 'mirrorXY');
+  } else if (field === 'prayer') {
+    const cx = (fw - 1) / 2;
+    const archTop = Math.round(fh * 0.12), shoulder = Math.round(fh * 0.3);
+    const tm = MOTIFS.tree, ts = motifSize(tm), tsc = Math.max(1, Math.floor((fw * 0.18) / ts.w));
+    draw((x, y) => {
+      const dx = Math.abs(x - cx);
+      // Stepped gable of the niche.
+      const edge = archTop + Math.floor((dx / (fw / 2)) * (shoulder - archTop) / 2) * 2;
+      const colX = fw * 0.12;
+      if (y < edge) return y === edge - 1 ? 'outline' : 'accent2';
+      if (dx > fw / 2 - colX) return (dx > fw / 2 - colX + 1 && (y % 6 < 3)) ? 'accent1' : 'outline';
+      const r = motifAt(tm, tsc, x - cx + (ts.w * tsc) / 2, y - (edge + 2));
+      if (r && y < fh * 0.7) return r;
+      if (y > fh * 0.82) return (x + y) % 4 === 0 ? 'accent3' : 'light';
+      return null;
+    }, 'mirrorX');
+  } else if (field === 'rya') {
+    // KNOWN DEFECT: the shag jitter samples n2 at (x * 3.1, y * 2.7), outside the lattice built for (fw, fh). Reads
+    // past the array return undefined, the jitter becomes NaN and the boundary mixing silently does nothing for
+    // about 63% of knots (measured on a 200 x 300 field). Fix: build n2 for (fw * 3.1, fh * 2.7) or sample a
+    // separate noise at (x, y) with a finer cell.
+    const n1 = valueNoise(rng.fork('n1'), fw, fh, Math.max(8, minSide / 4)), n2 = valueNoise(rng.fork('n2'), fw, fh, Math.max(3, minSide / 14));
+    const order = ['ground', 'field', 'accent2', 'accent3', 'accent1', 'accent4'];
+    draw((x, y) => {
+      const v = n1(x, y) * 0.8 + n2(x, y) * 0.2 + (y / fh) * 0.25;
+      const i = Math.max(0, Math.min(order.length - 1, Math.floor(v * order.length * 0.95)));
+      // Shag: neighbouring colours mix in a few knots at the boundaries.
+      const jitter = (n2(x * 3.1, y * 2.7) - 0.5) * 0.12;
+      const j = Math.max(0, Math.min(order.length - 1, Math.floor((v + jitter) * order.length * 0.95)));
+      return order[(i + j) % 2 ? j : i];
+    }, 'none');
+  } else {
+    // Modern abstract: a recursive split into blocks, a circle and a few lines.
+    const rects = [];
+    const split = (x0, y0, x1, y1, depth) => {
+      if (depth > 3 || (x1 - x0) * (y1 - y0) < minSide * minSide * 0.04 || rng.chance(0.15 * depth)) { rects.push({ x0, y0, x1, y1, role: rng.pick(['ground', 'field', 'accent1', 'accent2', 'accent3', 'accent4', 'light']) }); return; }
+      if ((x1 - x0) > (y1 - y0)) { const m = Math.round(x0 + (x1 - x0) * (0.382 + rng.next() * 0.236)); split(x0, y0, m, y1, depth + 1); split(m, y0, x1, y1, depth + 1); }
+      else { const m = Math.round(y0 + (y1 - y0) * (0.382 + rng.next() * 0.236)); split(x0, y0, x1, m, depth + 1); split(x0, m, x1, y1, depth + 1); }
+    };
+    split(0, 0, fw, fh, 0);
+    const c = { x: fw * (0.25 + rng.next() * 0.5), y: fh * (0.25 + rng.next() * 0.5), r: minSide * (0.12 + rng.next() * 0.12) };
+    const lineY = Math.round(fh * (0.2 + rng.next() * 0.6));
+    draw((x, y) => {
+      const d = Math.hypot(x - c.x, y - c.y);
+      if (d <= c.r) return d > c.r - 1.5 ? 'outline' : 'accent4';
+      if (Math.abs(y - lineY) < 1 || Math.abs(x - y * (fw / fh) * 0.6 - fw * 0.1) < 0.8) return 'outline';
+      const R = rects.find((q) => x >= q.x0 && x < q.x1 && y >= q.y0 && y < q.y1);
+      if (R && (x === R.x0 || y === R.y0)) return 'outline';
+      return R ? R.role : null;
+    }, 'none');
+  }
+  };
+
+  // Regional recipes and the mash-up are layer stacks; classic fields are painted directly. User layers come last.
+  // Field strategies: classic fields paint directly; regional fields are recipes of composition layers (optionally on
+  // top of a classic base); 'composition' is a seeded mash-up. User layers (max 24) always come last.
+  const motifIds = [...Object.values(MOTIFS).filter((m) => m.kind === 'field').map((m) => m.id), ...Object.keys(userMotifs)];
+  let fieldLayers = [];
+  if (REGIONAL[field]) {
+    const R = REGIONAL[field](rng.fork('field'), { aspect: fw / Math.max(1, fh), motifIds });
+    if (R.base) classic(R.base);
+    fieldLayers = R.layers.map(normLayer);
+  } else if (field === 'composition') fieldLayers = randomComposition(rng.fork('composition'), { motifIds });
+  else classic(field);
+  const layers = [...fieldLayers, ...(Array.isArray(o.layers) ? o.layers.slice(0, 24) : [])];
+  const rect = { x: fx0, y: fy0, w: fw, h: fh };
+  if (layers.length) paintLayers(cells, W, H, rect, layers, { RI, motif, motifIds, seed: tradition + '/' + seed });
+
+  // A rug where a role is unused keeps that colour in the palette anyway (the knotting chart lists used ones).
+  return {
+    format: 'in-html-rug', version: 1, width: W, height: H, kpiH, kpiV,
+    pileMm: Math.max(2, Math.min(80, +o.pileMm || (tradition === 'rya' ? 40 : 10))), fringeCm: Math.max(0, Math.min(30, o.fringeCm != null ? +o.fringeCm : 8)),
+    palette, cells,
+    meta: { tradition, seed, field, symmetry, wallpaper, corners, borderMotif, fieldMotif, guards: guardType, borders: guardPairs, palette: paletteId, widthCm, lengthCm, kpsi, fieldLayers, rect },
+  };
+}
+
+export const rugRoleAt = (rug, x, y) => rug.palette[rug.cells[y * rug.width + x]].role;

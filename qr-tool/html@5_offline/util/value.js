@@ -1,0 +1,1 @@
+const own=(o,k)=>(o!=null&&typeof k==='string'&&Object.prototype.hasOwnProperty.call(o,k)?o[k]:undefined);const str=(v,def='')=>(typeof v==='string'?v:v==null||typeof v==='object'||typeof v==='function'?def:String(v));export{own,str};

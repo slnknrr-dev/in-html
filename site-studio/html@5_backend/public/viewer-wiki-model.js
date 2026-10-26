@@ -1,0 +1,4 @@
+const LAYER_RE=/^[a-z][a-z0-9-]{0,31}$/;const isObj=(v)=>v!==null&&typeof v==='object'&&!Array.isArray(v);function normWiki(v){const w=isObj(v)?v:{};const layers=[];const seen=new Set();for(const l of Array.isArray(w.layers)?w.layers:[]){if(!isObj(l)||!LAYER_RE.test(String(l.id))||seen.has(l.id)||layers.length>=40)continue;seen.add(l.id);layers.push({id:l.id,label:String(l.label==null?'':l.label).slice(0,80),on:l.on!==false});}
+const alias={};let n=0;if(isObj(w.alias)){for(const[k,id]of Object.entries(w.alias)){if(n>=5000||typeof id!=='string'||!/^[A-Za-z0-9_-]{1,40}$/.test(id)||!k||k.length>200)continue;alias[k.toLowerCase()]=id;n++;}}
+return{layers,ruby:LAYER_RE.test(String(w.ruby))&&seen.has(w.ruby)?w.ruby:'',alias};}
+export{normWiki};

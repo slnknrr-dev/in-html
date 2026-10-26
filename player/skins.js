@@ -1,0 +1,188 @@
+// player/skins.js - the skin model of the player: design tokens (colours, type, radii, density, shadows, glass blur,
+// cover and seek-bar shapes), built-in skins, Material-You-like dynamic colour from the cover art (a seed colour
+// picked from the picture's k-means palette, tonal roles derived in OKLCH), CSS custom properties, contrast checks.
+// Skins are plain JSON: saved in the catalogue, shared as files.
+//
+//   TOKENS { name: { kind: 'color' | 'px' | 'enum' | 'number' | 'font', … } }
+//   BUILTIN_SKINS [skin] ; skinById(id, custom = []) -> skin
+//   normSkin(raw) -> skin   { id, name, scheme: 'auto' | 'dark' | 'light', dynamic, background: 'solid' | 'art' |
+//                             'gradient', light: { tokens }, dark: { tokens }, builtin? }
+//   tonalScheme(seedHex, dark, { chroma, vibrant }) -> colour tokens
+//   seedFromPixels(rgba, { width }) -> hex | null      the cover's most characteristic colour (population × chroma)
+//   resolveSkin(skin, { dark, seed }) -> tokens       the effective tokens (dynamic colours applied when on)
+//   skinVars(tokens) -> { '--mp-bg': … }              CSS custom properties for the player root
+//   contrastReport(tokens) -> [{ pair, ratio, ok }]   WCAG 2 ratios of text / surfaces / accent pairs
+
+import { parseCSS, toHex } from '../color/css.js';
+import { oklchToSrgbMapped, srgbToOklch, gamutMapCoords } from '../color/space.js';
+import { contrastRatio } from '../color/metrics.js';
+import { extractPalette } from '../color/palette.js';
+
+export const TOKENS = {
+  bg: { kind: 'color' }, surface: { kind: 'color' }, surface2: { kind: 'color' }, text: { kind: 'color' }, muted: { kind: 'color' },
+  accent: { kind: 'color' }, onAccent: { kind: 'color' }, accent2: { kind: 'color' }, border: { kind: 'color' }, danger: { kind: 'color' }, ok: { kind: 'color' },
+  radius: { kind: 'px', min: 0, max: 32 }, radiusLarge: { kind: 'px', min: 0, max: 48 }, coverRadius: { kind: 'px', min: 0, max: 400 },
+  font: { kind: 'font' }, fontSize: { kind: 'px', min: 12, max: 28 }, titleSize: { kind: 'px', min: 14, max: 64 }, titleWeight: { kind: 'number', min: 300, max: 900 },
+  density: { kind: 'enum', values: ['compact', 'normal', 'comfortable'] }, shadow: { kind: 'enum', values: ['none', 'soft', 'strong'] },
+  blur: { kind: 'px', min: 0, max: 40 }, seekHeight: { kind: 'px', min: 2, max: 24 }, buttonShape: { kind: 'enum', values: ['round', 'rounded', 'square', 'pill'] },
+  playSize: { kind: 'px', min: 40, max: 140 }, artGlow: { kind: 'number', min: 0, max: 1 },
+};
+
+const FONTS = {
+  system: 'system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Georgian", Sylfaen, sans-serif',
+  rounded: 'ui-rounded, "SF Pro Rounded", "Nunito", "Varela Round", system-ui, sans-serif',
+  serif: 'ui-serif, Georgia, "Iowan Old Style", "Noto Serif", serif',
+  mono: 'ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace',
+  condensed: '"Roboto Condensed", "Arial Narrow", system-ui, sans-serif',
+};
+export const FONT_NAMES = Object.keys(FONTS);
+
+const BASE = { radius: 12, radiusLarge: 24, coverRadius: 20, font: 'system', fontSize: 15, titleSize: 24, titleWeight: 700, density: 'normal', shadow: 'soft', blur: 0, seekHeight: 6, buttonShape: 'round', playSize: 72, artGlow: 0.4 };
+
+export const BUILTIN_SKINS = [
+  { id: 'symphony', name: 'Symphony', builtin: true, scheme: 'auto', dynamic: true, background: 'gradient',
+    light: { ...BASE, bg: '#fbf8ff', surface: '#f1ecf6', surface2: '#e6e0ec', text: '#1c1b20', muted: '#5f5b66', accent: '#6750a4', onAccent: '#ffffff', accent2: '#7d5260', border: '#d6d0dc', danger: '#b3261e', ok: '#2e7d32' },
+    dark: { ...BASE, bg: '#141218', surface: '#1d1b20', surface2: '#2b2930', text: '#e6e0e9', muted: '#cac4d0', accent: '#d0bcff', onAccent: '#381e72', accent2: '#efb8c8', border: '#49454f', danger: '#f2b8b5', ok: '#81c784' } },
+  { id: 'classic', name: 'Classic', builtin: true, scheme: 'dark', dynamic: false, background: 'solid',
+    light: { ...BASE, radius: 2, radiusLarge: 4, coverRadius: 0, font: 'condensed', fontSize: 13, titleSize: 18, density: 'compact', shadow: 'none', seekHeight: 8, buttonShape: 'square', playSize: 48, artGlow: 0,
+      bg: '#d4d0c8', surface: '#e6e3dc', surface2: '#c2beb5', text: '#101010', muted: '#404040', accent: '#0a246a', onAccent: '#ffffff', accent2: '#3a6ea5', border: '#808080', danger: '#a00000', ok: '#006000' },
+    dark: { ...BASE, radius: 2, radiusLarge: 4, coverRadius: 0, font: 'mono', fontSize: 13, titleSize: 18, density: 'compact', shadow: 'none', seekHeight: 8, buttonShape: 'square', playSize: 48, artGlow: 0,
+      bg: '#16171d', surface: '#22232b', surface2: '#2d2f39', text: '#00e676', muted: '#7bd88f', accent: '#00e676', onAccent: '#08130b', accent2: '#ffd54f', border: '#3c3f4b', danger: '#ff5252', ok: '#00e676' } },
+  { id: 'minimal', name: 'Minimal', builtin: true, scheme: 'auto', dynamic: false, background: 'solid',
+    light: { ...BASE, radius: 6, radiusLarge: 10, coverRadius: 4, shadow: 'none', titleWeight: 600, buttonShape: 'rounded', artGlow: 0,
+      bg: '#ffffff', surface: '#f6f6f6', surface2: '#ececec', text: '#111111', muted: '#6b6b6b', accent: '#111111', onAccent: '#ffffff', accent2: '#555555', border: '#e2e2e2', danger: '#c62828', ok: '#2e7d32' },
+    dark: { ...BASE, radius: 6, radiusLarge: 10, coverRadius: 4, shadow: 'none', titleWeight: 600, buttonShape: 'rounded', artGlow: 0,
+      bg: '#0f0f0f', surface: '#181818', surface2: '#232323', text: '#f2f2f2', muted: '#9e9e9e', accent: '#f2f2f2', onAccent: '#0f0f0f', accent2: '#bdbdbd', border: '#2a2a2a', danger: '#ef9a9a', ok: '#a5d6a7' } },
+  { id: 'oled', name: 'OLED black', builtin: true, scheme: 'dark', dynamic: true, background: 'solid',
+    light: { ...BASE, bg: '#000000', surface: '#0a0a0a', surface2: '#141414', text: '#ffffff', muted: '#a0a0a0', accent: '#82b1ff', onAccent: '#000000', accent2: '#ff80ab', border: '#1f1f1f', danger: '#ff8a80', ok: '#b9f6ca', shadow: 'none', artGlow: 0.6 },
+    dark: { ...BASE, bg: '#000000', surface: '#0a0a0a', surface2: '#141414', text: '#ffffff', muted: '#a0a0a0', accent: '#82b1ff', onAccent: '#000000', accent2: '#ff80ab', border: '#1f1f1f', danger: '#ff8a80', ok: '#b9f6ca', shadow: 'none', artGlow: 0.6 } },
+  { id: 'theatre', name: 'Home theatre', builtin: true, scheme: 'dark', dynamic: true, background: 'art',
+    light: { ...BASE, fontSize: 20, titleSize: 44, titleWeight: 800, radius: 16, radiusLarge: 28, coverRadius: 16, density: 'comfortable', shadow: 'strong', blur: 24, seekHeight: 10, playSize: 110, artGlow: 0.8,
+      bg: '#0b0d12', surface: '#151922', surface2: '#202634', text: '#f5f7fb', muted: '#b3bccc', accent: '#ffcc66', onAccent: '#1d1400', accent2: '#66d9ff', border: '#2b3243', danger: '#ff8a80', ok: '#9ccc65' },
+    dark: { ...BASE, fontSize: 20, titleSize: 44, titleWeight: 800, radius: 16, radiusLarge: 28, coverRadius: 16, density: 'comfortable', shadow: 'strong', blur: 24, seekHeight: 10, playSize: 110, artGlow: 0.8,
+      bg: '#0b0d12', surface: '#151922', surface2: '#202634', text: '#f5f7fb', muted: '#b3bccc', accent: '#ffcc66', onAccent: '#1d1400', accent2: '#66d9ff', border: '#2b3243', danger: '#ff8a80', ok: '#9ccc65' } },
+  { id: 'paper', name: 'Paper', builtin: true, scheme: 'light', dynamic: false, background: 'solid',
+    light: { ...BASE, font: 'serif', titleWeight: 600, radius: 4, radiusLarge: 8, coverRadius: 2, shadow: 'soft', buttonShape: 'rounded',
+      bg: '#f7f1e3', surface: '#efe6d2', surface2: '#e5d9bf', text: '#2b2118', muted: '#6d5d4b', accent: '#8b3a2b', onAccent: '#fff8ee', accent2: '#2f5d50', border: '#d6c7a8', danger: '#9b2226', ok: '#386641' },
+    dark: { ...BASE, font: 'serif', titleWeight: 600, radius: 4, radiusLarge: 8, coverRadius: 2, buttonShape: 'rounded',
+      bg: '#211c16', surface: '#2b251d', surface2: '#363026', text: '#efe6d2', muted: '#bfae90', accent: '#e59a7d', onAccent: '#2b1209', accent2: '#8fc1b2', border: '#4a4033', danger: '#f28482', ok: '#a7c957' } },
+  { id: 'neon', name: 'Neon', builtin: true, scheme: 'dark', dynamic: false, background: 'gradient',
+    light: { ...BASE, radius: 18, radiusLarge: 30, coverRadius: 30, font: 'rounded', titleWeight: 800, shadow: 'strong', blur: 16, buttonShape: 'pill', artGlow: 1,
+      bg: '#0d0221', surface: '#190535', surface2: '#26084d', text: '#f8f0ff', muted: '#c9b6e4', accent: '#ff2a6d', onAccent: '#1a0010', accent2: '#05d9e8', border: '#3b1a6b', danger: '#ff6e6e', ok: '#39ff14' },
+    dark: { ...BASE, radius: 18, radiusLarge: 30, coverRadius: 30, font: 'rounded', titleWeight: 800, shadow: 'strong', blur: 16, buttonShape: 'pill', artGlow: 1,
+      bg: '#0d0221', surface: '#190535', surface2: '#26084d', text: '#f8f0ff', muted: '#c9b6e4', accent: '#ff2a6d', onAccent: '#1a0010', accent2: '#05d9e8', border: '#3b1a6b', danger: '#ff6e6e', ok: '#39ff14' } },
+];
+
+export const skinById = (id, custom = []) => custom.find((s) => s.id === id) || BUILTIN_SKINS.find((s) => s.id === id) || BUILTIN_SKINS[0];
+
+// sRGB coordinates (0..1) of a parsed CSS colour of any space, gamut-mapped.
+const srgbOf = (c) => (c.space === 'srgb' ? c.coords.map((v) => Math.min(1, Math.max(0, v))) : gamutMapCoords(c, 'srgb'));
+
+function normTokens(raw, fallback) {
+  const out = { ...fallback };
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [k, spec] of Object.entries(TOKENS)) {
+    const v = raw[k];
+    if (v === undefined) continue;
+    if (spec.kind === 'color') { const c = typeof v === 'string' ? parseCSS(v) : null; if (c) out[k] = toHex(srgbOf(c)); }
+    else if (spec.kind === 'px' || spec.kind === 'number') { const n = Number(v); if (Number.isFinite(n)) out[k] = Math.min(spec.max, Math.max(spec.min, Math.round(n * 100) / 100)); }
+    else if (spec.kind === 'enum') { if (spec.values.includes(v)) out[k] = v; }
+    else if (spec.kind === 'font') { if (FONTS[v]) out[k] = v; }
+  }
+  return out;
+}
+
+export function normSkin(raw) {
+  const r = raw && typeof raw === 'object' ? raw : {};
+  const base = BUILTIN_SKINS.find((s) => s.id === r.base) || BUILTIN_SKINS[0];
+  const id = typeof r.id === 'string' && /^[A-Za-z0-9_-]{1,40}$/.test(r.id) ? r.id : 'skin-' + Math.random().toString(36).slice(2, 8);
+  return {
+    id, name: typeof r.name === 'string' && r.name.trim() ? r.name.trim().slice(0, 80) : 'Skin',
+    scheme: ['auto', 'dark', 'light'].includes(r.scheme) ? r.scheme : base.scheme,
+    dynamic: typeof r.dynamic === 'boolean' ? r.dynamic : base.dynamic,
+    background: ['solid', 'art', 'gradient'].includes(r.background) ? r.background : base.background,
+    light: normTokens(r.light, base.light), dark: normTokens(r.dark, base.dark),
+    ...(r.builtin && BUILTIN_SKINS.some((s) => s.id === id) ? { builtin: true } : {}),
+  };
+}
+
+const hexOf = (L, C, H) => toHex(oklchToSrgbMapped([L, C, ((H % 360) + 360) % 360]));
+
+// Tonal roles from a seed colour (OKLCH lightness steps stand in for Material's HCT tones).
+// OKLCH is perceptually uniform: equal lightness steps look equally spaced for every hue, which is what makes a
+// palette derived from any cover colour keep readable text / surface contrast. Out-of-gamut results are mapped back.
+export function tonalScheme(seedHex, dark, { chroma = null, vibrant = false } = {}) {
+  const c = parseCSS(seedHex);
+  if (!c) return null;
+  const [, C0, H0] = srgbToOklch(srgbOf(c));
+  const H = Number.isFinite(H0) ? H0 : 280;
+  const C = chroma ?? Math.max(0.06, Math.min(vibrant ? 0.2 : 0.14, C0 || 0.08));
+  const tint = Math.min(0.03, C * 0.25);
+  const H2 = H + 60;
+  return dark ? {
+    bg: hexOf(0.17, tint, H), surface: hexOf(0.21, tint, H), surface2: hexOf(0.27, tint * 1.2, H), text: hexOf(0.94, 0.012, H), muted: hexOf(0.8, 0.03, H),
+    accent: hexOf(0.82, C, H), onAccent: hexOf(0.26, C * 0.7, H), accent2: hexOf(0.82, C * 0.8, H2), border: hexOf(0.35, tint * 1.5, H),
+  } : {
+    bg: hexOf(0.985, tint * 0.5, H), surface: hexOf(0.95, tint, H), surface2: hexOf(0.91, tint * 1.2, H), text: hexOf(0.22, 0.015, H), muted: hexOf(0.45, 0.03, H),
+    accent: hexOf(0.5, C, H), onAccent: hexOf(0.99, 0.01, H), accent2: hexOf(0.5, C * 0.8, H2), border: hexOf(0.86, tint * 1.5, H),
+  };
+}
+
+// Scoring population x chroma: the most frequent colour of a cover is often a dull background; weighting by chroma
+// picks the colour people perceive as "the" colour of the art.
+export function seedFromPixels(rgba, { width = 0 } = {}) {
+  const pal = extractPalette(rgba, { k: 6, width, seed: 7 });
+  if (!pal.length) return null;
+  let best = null, score = -1;
+  for (const p of pal) {
+    const [L, C] = p.oklch;
+    if (L < 0.18 || L > 0.96) continue;
+    // Population matters, chroma matters more: a small vivid area beats a large grey one (as Material's scoring).
+    const s = Math.sqrt(p.pct || 0) * (0.15 + Math.min(C, 0.25) * 4);
+    if (s > score) { score = s; best = p; }
+  }
+  return (best || pal[0]).hex;
+}
+
+export function resolveSkin(skin, { dark = true, seed = null } = {}) {
+  const s = skin && skin.light ? skin : normSkin(skin);
+  const mode = s.scheme === 'auto' ? (dark ? 'dark' : 'light') : s.scheme;
+  const tokens = { ...(mode === 'dark' ? s.dark : s.light), scheme: mode };
+  if (s.dynamic && seed) {
+    const t = tonalScheme(seed, mode === 'dark', { vibrant: s.id === 'neon' });
+    if (t) {
+      if (s.id === 'oled') { tokens.accent = t.accent; tokens.onAccent = t.onAccent; tokens.accent2 = t.accent2; }
+      else Object.assign(tokens, t);
+    }
+  }
+  return tokens;
+}
+
+const SHADOWS = { none: 'none', soft: '0 8px 24px rgba(0,0,0,.18)', strong: '0 18px 48px rgba(0,0,0,.45)' };
+const DENSITY = { compact: 0.78, normal: 1, comfortable: 1.25 };
+const SHAPE = { round: '999px', pill: '999px', rounded: '14px', square: '3px' };
+
+export function skinVars(t) {
+  return {
+    '--mp-bg': t.bg, '--mp-surface': t.surface, '--mp-surface-2': t.surface2, '--mp-text': t.text, '--mp-muted': t.muted, '--mp-accent': t.accent,
+    '--mp-on-accent': t.onAccent, '--mp-accent-2': t.accent2, '--mp-border': t.border, '--mp-danger': t.danger, '--mp-ok': t.ok,
+    '--mp-radius': t.radius + 'px', '--mp-radius-l': t.radiusLarge + 'px', '--mp-cover-radius': t.coverRadius + 'px', '--mp-font': FONTS[t.font] || FONTS.system,
+    '--mp-font-size': t.fontSize + 'px', '--mp-title-size': t.titleSize + 'px', '--mp-title-weight': String(t.titleWeight), '--mp-density': String(DENSITY[t.density] || 1),
+    '--mp-shadow': SHADOWS[t.shadow] || SHADOWS.soft, '--mp-blur': t.blur + 'px', '--mp-seek-h': t.seekHeight + 'px', '--mp-btn-radius': SHAPE[t.buttonShape] || '999px',
+    '--mp-play-size': t.playSize + 'px', '--mp-art-glow': String(t.artGlow),
+    // ui/base.css tokens follow the skin so dialogs and controls of the shared UI kit match.
+    '--ed-bg': t.bg, '--ed-panel': t.surface, '--ed-panel-2': t.surface2, '--ed-hover': t.surface2, '--ed-border': t.border, '--ed-border-strong': t.border,
+    '--ed-text': t.text, '--ed-muted': t.muted, '--ed-faint': t.muted, '--ed-accent': t.accent, '--ed-accent-hover': t.accent, '--ed-accent-text': t.onAccent,
+    '--ed-accent-weak': t.surface2, '--ed-danger': t.danger, '--ed-ok': t.ok, '--ed-radius': Math.min(14, t.radius) + 'px', '--ed-font': FONTS[t.font] || FONTS.system,
+  };
+}
+
+// WCAG 2 contrast (relative luminance ratio); 4.5:1 is the threshold for normal text.
+export function contrastReport(t) {
+  const rgb = (h) => { const c = parseCSS(h); return c ? srgbOf(c) : [0, 0, 0]; };
+  const pairs = [['text', 'bg', 4.5], ['text', 'surface', 4.5], ['muted', 'bg', 3], ['onAccent', 'accent', 4.5], ['accent', 'bg', 3]];
+  return pairs.map(([a, b, min]) => {
+    const ratio = Math.round(contrastRatio(rgb(t[a]), rgb(t[b])) * 100) / 100;
+    return { pair: `${a}/${b}`, ratio, ok: ratio >= min, min };
+  });
+}

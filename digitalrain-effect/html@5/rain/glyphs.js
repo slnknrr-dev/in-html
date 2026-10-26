@@ -1,0 +1,6 @@
+const KATA=Array.from({length:0xff9d-0xff66+1},(_,i)=>String.fromCharCode(0xff66+i)).join('');const GLYPH_SETS={kata:KATA,latin:'ABCDEFGHIJKLMNOPQRSTUVWXYZ',digits:'0123456789',binary:'01',hex:'0123456789ABCDEF',symbols:':."=*+-<>¦|_╌※∴',cyrillic:'АБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЭЮЯ',emoji:'💚🟩⚡🔋💾🧬👾🛸🌌🌀',custom:'',};const SET_KEYS=Object.keys(GLYPH_SETS);const EMOJI_RE=/\p{Extended_Pictographic}|\u200d|\ufe0f|[\u{1f1e6}-\u{1f1ff}]|[\u{1f3fb}-\u{1f3ff}]/gu;const stripEmoji=(s)=>String(s||'').replace(EMOJI_RE,'');function graphemes(s){s=String(s||'');try{if(typeof Intl!=='undefined'&&Intl.Segmenter)return Array.from(new Intl.Segmenter('en',{granularity:'grapheme'}).segment(s),(x)=>x.segment);}catch{}
+return Array.from(s);}
+function glyphChars(p={}){const sets=Array.isArray(p.sets)?p.sets:String(p.sets||'').split(',');const emoji=sets.includes('emoji');let s='';for(const k of sets){if(k==='custom')s+=emoji?String(p.custom||''):stripEmoji(p.custom);else if(GLYPH_SETS[k]!=null)s+=GLYPH_SETS[k];}
+const out=[],seen=new Set();for(const g of graphemes(s)){if(!g.trim()||seen.has(g))continue;seen.add(g);out.push(g);if(out.length>=160)break;}
+return out.length?out.join(''):GLYPH_SETS.binary;}
+export{SET_KEYS,glyphChars,graphemes};

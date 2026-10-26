@@ -1,0 +1,97 @@
+# GitHub counterpart of .forgejo/workflows/html5.yml.
+#
+# GitHub is a mirror: the origin is Codeberg, where the bot commits rebuilt artifacts. Pushing them from here would
+# make the mirror diverge, so this workflow never writes to the repository:
+# 1. build: builds both targets, verifies that a second build changes nothing (reproducible output), runs the
+#    repository checks (module links, unit tests of the libraries, network policy of the artifacts) and the course
+#    sources. Pull requests also report artifacts that are out of date.
+# 2. pages: on the default branch, builds the published single-file pages (LANDING.html, RESUME.html, …), the offline
+#    demos (demo/<slug>.html) and the courses (course/in-html/<slug>.html) — the same tree Codeberg Pages receives —
+#    and deploys it to GitHub Pages.
+#
+# GitHub setup: Settings → Pages → Source: GitHub Actions. No secrets are needed.
+
+name: html@5
+
+on:
+  push:
+    paths-ignore:
+      - '*/*@*/**'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: node:24-bookworm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Artifacts out of date (pull requests)
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: node singlefile.js --check || echo '::warning::Artifacts are out of date; they are rebuilt on Codeberg after merging.'
+
+      # A failing page does not stop the others; the job fails at the end.
+      - name: Build artifacts
+        id: build
+        shell: bash
+        run: node singlefile.js || echo 'failed=true' >> "$GITHUB_OUTPUT"
+
+      - name: Verify reproducible output
+        if: steps.build.outputs.failed != 'true'
+        shell: bash
+        run: node singlefile.js --check --quiet
+
+      - name: Repository checks
+        shell: bash
+        run: node check.js
+
+      - name: Course sources
+        shell: bash
+        run: node course.js --check || echo '::warning::Course preview links are stale (run node course.js --fix) or link to unwritten courses.'
+
+      - name: Fail on build errors
+        if: steps.build.outputs.failed == 'true'
+        run: exit 1
+
+  pages:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    container:
+      image: node:24-bookworm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the published pages
+        shell: bash
+        run: |
+          mkdir -p pages-out
+          node singlefile.js --target singlefile --publish pages-out --quiet
+          node singlefile.js --target demo --demo pages-out/demo --quiet
+          node course.js --out pages-out
+          touch pages-out/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: pages-out
+
+  deploy:
+    needs: pages
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- agreement-constructor/index.html — Agreement Constructor, a single-page app. A shell, not a document: main.js
+     builds the bar, the three panes and the dialogs into <main>; one render path for content, i18n and state.
+     The build (singlefile.js) strips every comment of this file from the artifacts. -->
+<html lang="en">
+<!-- lang="en" is the static default; ui/i18n.js rewrites it on language switch (screen readers, hyphenation).
+     The contract language is separate (chosen per document) and set on the paper element, not here. -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: it must be inside the first 1024 bytes, before any non-ASCII text, or the parser re-decodes. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<!-- viewport-fit=cover lets the page extend under notches. KNOWN DEFECT: no stylesheet (ui/*.css, ./app.css) pads
+     with env(safe-area-inset-*), so in landscape the bar can sit under the notch. Fix: drop viewport-fit=cover or
+     pad the bar and footer with env(safe-area-inset-left/right). -->
+<meta name="theme-color" content="#1e3a8a">
+<!-- color-scheme: native controls and the pre-CSS canvas follow the OS theme (no white flash in dark mode).
+     theme-color tints the mobile browser chrome with the app's navy. -->
+<title>Agreement Constructor</title>
+<meta name="description" content="Contract templates and documents: a residential lease and other agreements with modifiers (power of attorney, additional services, special terms), strictness levels, billing periods and payment schedules, amounts in words, typed fields extracted from the text, built-in and JavaScript validators, languages with a main one, printing on A4 and templates compiled into one offline HTML file.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M8 3h11l6 6v20H8z' fill='%23fff' stroke='%231e3a8a' stroke-width='2' stroke-linejoin='round'/%3E%3Cpath d='M19 3v6h6' fill='none' stroke='%231e3a8a' stroke-width='2' stroke-linejoin='round'/%3E%3Cpath d='M12 14h9M12 18h9M12 22h5' stroke='%232563eb' stroke-width='2' stroke-linecap='round'/%3E%3Cpath d='M19 25l2 2 4-5' fill='none' stroke='%2316a34a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<!-- Icon as a data: URI: zero requests, works from file:// and offline builds; '#' is written %23.
+     Cascade order (equal specificity: later wins): ui/base.css tokens and primitives (.ed-*), ui/app.css shell
+     (.ap-*), then ./app.css (.ac-*). contract/css.js is injected later at runtime, after these links. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- Mount point. ap-wide lifts the shell max-width (three panes need the full window); .ac carries the token bridge
+     to contract/css.js (app.css). -->
+<main class="ap-main ap-wide ac" id="main"></main>
+<noscript><div class="ed-noscript">Agreement Constructor needs JavaScript. It runs in your browser; nothing is sent anywhere.</div></noscript>
+<!-- noscript states the dependency and the privacy model instead of leaving a blank page. -->
+<script type="module" src="./main.js"></script>
+<!-- type=module: deferred by default (runs after parsing, so #main exists), strict mode, ES imports of ../ libraries. -->
+</body>
+</html>

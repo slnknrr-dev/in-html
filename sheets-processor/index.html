@@ -1,0 +1,34 @@
+<!doctype html>
+<!-- sheets-processor/index.html — sheets processor (CSV/XLSX/ODS/JSON grid editor). A shell: main.js renders into <main>.
+     Why an empty shell: one render path (JS) for content, i18n and state; static markup would duplicate it and
+     drift. Cost accepted: nothing without JS (hence <noscript>, where present). The build (singlefile.js) strips these
+     comments and inlines CSS/JS into the html@5* artifacts. -->
+<html lang="en">
+<!-- lang="en" is only the static default; ui/app.js rewrites documentElement.lang on language switch. -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: must sit in the first 1024 bytes, before any non-ASCII byte, or the parser re-decodes. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Without it mobile browsers lay out at ~980px and zoom out: every @media (max-width) in the CSS would never fire. -->
+<title>Sheets processor</title>
+<meta name="description" content="Open, edit, clean, analyse and convert CSV, Excel, ODS and JSON spreadsheets in the browser, offline.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2316a34a'/%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.2' d='M7 8h18v16H7zM7 13.5h18M7 19h18M13 8v16M19 8v16'/%3E%3C/svg%3E">
+<!-- Icon as URL-encoded SVG data: URI: zero requests, works from file:// and offline. "#" must be %23 or it starts a fragment. -->
+<!-- Cascade order is a contract: base.css (tokens, ed-* primitives) then app.css (ap-* shell) then this app. Equal
+     specificity: the later file wins, so app rules override shared ones without !important. Reordering breaks silently. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- .ap: root hook of the ui/app.css shell; a class rather than bare `body` keeps the shared sheet opt-in. -->
+<!-- <main> landmark = mount point. ap-main: shell width/padding (ui/app.css); ap-wide lifts its max-width for
+     wide tools where present; the app class scopes this app's own layout. id: stable hook for the entry script. -->
+<main class="ap-main ap-wide sp-main" id="sp-main"></main>
+<!-- .ed-noscript (ui/base.css) is a fixed full-screen overlay at z-index 600: covers the empty shell instead of a blank page. -->
+<noscript><div class="ed-noscript">This application needs JavaScript.</div></noscript>
+<!-- type="module" is deferred by spec: it runs after parsing even from <head>, so the mount point already exists.
+     Also strict mode and ES imports. The build bundles the module graph into one inline script. -->
+<script type="module" src="./main.js"></script>
+</body>
+</html>

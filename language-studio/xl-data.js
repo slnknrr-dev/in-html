@@ -1,0 +1,54 @@
+// language-studio/xl-data.js - the data the cross-language tools share: every word of every course (lesson words
+// and the course dictionaries, the full Georgian, Mingrelian and Korean lexicons) as entries of one dictionary
+// across languages (lingua/bilex.js) and of the decks between any two languages (lingua/decks.js); the script of
+// each course for the sound games; the parallel texts.
+//
+//   allEntries() -> [{ lang, w, tr, m: { lang: gloss }, gloss, course, lex?, ka? }]      (cached)
+//   index() -> the bilex index over allEntries()
+//   COURSE_SCRIPT: { courseId: 'Geor' | 'Cyrl' | 'Kore' | 'Deva' | 'Ipa' }
+//   PARALLEL: [{ id, title: { ru, en }, texts: { ka, ru, en } }]   texts written for the studio
+import { COURSES, dictionary } from './courses/index.js';
+import { LEXICON as XMF } from '../lingua/megruli.js';
+import { KO_LEXICON } from '../lingua/korean-lexicon.js';
+import { createIndex } from '../lingua/bilex.js';
+
+let ENTRIES = null, INDEX = null;
+export function allEntries() {
+  if (ENTRIES) return ENTRIES;
+  const out = [];
+  const seen = new Set();
+  const add = (e) => { const k = e.lang + '\u0001' + e.w; if (!e.w || seen.has(k) || !Object.keys(e.m || {}).length) return; seen.add(k); out.push({ ...e, gloss: e.m }); };
+  for (const c of COURSES) {
+    for (const w of dictionary(c)) {
+      // phrases with a slash or very long lines are not dictionary words
+      if (w.w.length > 40) continue;
+      add({ lang: c.id, w: w.w, tr: w.tr || '', m: { ...w.m }, course: c.id, lex: w.lex || null });
+    }
+  }
+  for (const e of XMF) add({ lang: 'xmf', w: e.w, tr: '', m: { ru: e.ru, en: e.en }, course: 'xmf', ka: e.ka || null, unverified: e.unverified });
+  for (const e of KO_LEXICON()) add({ lang: 'ko', w: e.w, tr: '', m: { ru: e.ru, en: e.en }, course: 'ko' });
+  ENTRIES = out;
+  return out;
+}
+export const index = () => INDEX || (INDEX = createIndex(allEntries()));
+
+export const COURSE_SCRIPT = { ka: 'Geor', xmf: 'Geor', ru: 'Cyrl', ko: 'Kore', sa: 'Deva', en: 'Ipa' };
+
+export const PARALLEL = [
+  {
+    id: 'legend', title: { ru: 'Легенда об основании Тбилиси', en: 'The legend of the founding of Tbilisi' },
+    texts: {
+      ka: 'ლეგენდა გვიამბობს, რომ მეფე ვახტანგ გორგასალი ერთხელ ამ ადგილას ნადირობდა. მის შევარდენს ხოხობი დაუჭერია, და ორივენი ცხელ წყაროში ჩავარდნილან. ხოხობი თურმე იქვე მოხარშულა.\nმეფეს ეს ადგილი ძალიან მოსწონებია და აქ ქალაქის აშენება უბრძანებია. ქალაქს თბილისი ეწოდა, რადგან „ტფილი“ ძველ ქართულში თბილს ნიშნავს. ასე ამბობენ ძველი მატიანეები, თუმცა ისტორიკოსები ამ ამბავს ლეგენდად მიიჩნევენ.',
+      ru: 'Легенда рассказывает, что царь Вахтанг Горгасали однажды охотился в этих местах. Его сокол, говорят, поймал фазана, и оба упали в горячий источник. Фазан, оказывается, тут же сварился.\nЦарю это место очень понравилось, и он велел построить здесь город. Город назвали Тбилиси, потому что «тпили» на древнегрузинском значит «тёплый». Так говорят старые летописи, хотя историки считают эту историю легендой.',
+      en: 'Legend has it that King Vakhtang Gorgasali was once hunting in these parts. His falcon, the story goes, caught a pheasant, and both fell into a hot spring. The pheasant was apparently boiled on the spot.\nThe king liked the place so much that he ordered a city to be built here. The city was named Tbilisi, because "tpili" means "warm" in Old Georgian. So say the old chronicles, although historians regard the story as a legend.',
+    },
+  },
+  {
+    id: 'japanese', title: { ru: 'Нино учит японский', en: 'Nino learns Japanese' },
+    texts: {
+      ka: 'ნინო იაპონურს უკვე მესამე წელია სწავლობს.\n— რად გინდა იაპონური? — ჰკითხა მას ძმამ, გიორგიმ.\n— მინდა, ბაშო დედანში წავიკითხო, — უპასუხა ნინომ.\nგიორგის გაეცინა, მაგრამ საღამოს თვითონ გადაშალა სახელმძღვანელო.',
+      ru: 'Нино учит японский уже третий год.\n— Зачем тебе японский? — спросил её брат Гиорги.\n— Я хочу читать Басё в оригинале, — ответила Нино.\nГиорги засмеялся, но вечером сам открыл учебник.',
+      en: 'Nino has been learning Japanese for three years now.\n"Why do you need Japanese?" her brother Giorgi asked.\n"I want to read Bashō in the original," Nino answered.\nGiorgi laughed, but in the evening he opened the textbook himself.',
+    },
+  },
+];

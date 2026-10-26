@@ -1,0 +1,619 @@
+/* durak-game/app.css - Durak: the table (cloth, seats, bout, hand, actions, animations), the home screen, new game,
+   bot picker, replays, profile, online rooms and the constructor. Table themes set --dk-* variables (skins.js). */
+
+/* CONTRACT
+   - Namespace `dk-`. Shared primitives `ed-` (ui/base.css), shell `ap-` (ui/app.css). Loaded after both.
+   - Two colour systems, on purpose:
+     1. Menus, dialogs, profile, constructor live on the themed app panel: colours via --ed-* tokens (light/dark).
+     2. The game table is a physical object (felt, wood, paper) that does not follow the UI theme: colours via --dk-*
+        variables, defaults on :root, overridden per table skin by skins.js with element.style.setProperty on the
+        table element (inline custom properties beat :root by specificity of inline style, and cascade to children).
+     Raw rgba black/white overlays on the table are deliberate: they darken/lighten whatever felt colour is active.
+   - Specificity: one class, two for state (.dk-hand .dk-card.dk-sel); attribute selectors [data-table="..."] add
+     (0,1,0) and are used for per-skin overrides, so `.dk-table[data-table="paper"] .dk-ibtn` (0,3,0) beats `.dk-ibtn`.
+   - Card geometry is driven by two custom properties on .dk-table: --cw (cards on the cloth) and --hw (cards in the
+     hand), both clamp(min, min(vw, vh), max) so cards scale with whichever viewport axis is tighter. Every offset of
+     the stock, discard pile, pairs and hand is a multiple of these, so one media query re-sizes the whole table.
+   - Per-element indices (--k, --i, --step, --timer) are set inline by JS (table.js) and consumed by calc() here:
+     JS decides counts, CSS decides geometry.
+   - !important: only .dk-dragging (beat state shadows while a card is dragged) and reduced-motion overrides. */
+
+/* Defaults = the green felt skin. --dk-att / --dk-def colour the attacker / defender rings; --dk-image is 'none' or a
+   url() set by skins.js for the photo table. */
+:root {
+  --dk-felt: #1e6b46; --dk-felt2: #0e4029; --dk-rim: #5b3a1e; --dk-ink: #f2f7f1; --dk-muted: #b9d6c3;
+  --dk-accent: #ffd166; --dk-back: #9b2335; --dk-glow: #ffe28a; --dk-image: none;
+  --dk-att: #ff8a5b; --dk-def: #5bc0ff;
+  --dk-serif: Georgia, "Times New Roman", "Noto Serif", serif;
+}
+
+/* ===== screens ============================================================================================ */
+.dk-screen { display: flex; flex-direction: column; gap: 14px; }
+.dk-screen-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dk-screen-h h2 { font-size: 22px; font-weight: 700; letter-spacing: -.01em; margin: 0; }
+/* Primary call-to-action ("Play"): gold pill with a raised look. Raw colours: identical in both themes, dark text
+   (#1b1300) on gold has strong contrast. inset bottom shadow fakes a pressed edge; hover lifts 1px, active sinks. */
+.dk-bigbtn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 52px; padding: 0 26px;
+  border: 0; border-radius: 999px; font-size: 18px; font-weight: 700; color: #1b1300;
+  background: linear-gradient(180deg, #ffe08a, #f7b733); box-shadow: 0 6px 18px rgba(247, 183, 51, .35), inset 0 -2px 0 rgba(0, 0, 0, .15);
+  transition: transform .12s, box-shadow .12s;
+}
+.dk-bigbtn:hover { transform: translateY(-1px); box-shadow: 0 10px 24px rgba(247, 183, 51, .45), inset 0 -2px 0 rgba(0, 0, 0, .15); }
+.dk-bigbtn:active { transform: translateY(1px); }
+.dk-bigbtn svg { width: 20px; height: 20px; }
+.dk-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.dk-chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px; font-size: 12.5px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); color: var(--ed-text); }
+button.dk-chip { cursor: pointer; }
+.dk-chip.dk-on { background: var(--ed-accent); border-color: var(--ed-accent); color: var(--ed-accent-text); }
+.dk-chip.dk-badge { background: var(--ed-accent-weak); border-color: transparent; font-weight: 600; }
+.dk-tagp { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; background: var(--ed-panel-2); border: 1px solid var(--ed-border); color: var(--ed-muted); }
+.dk-tagp.dk-own { color: var(--ed-accent); border-color: var(--ed-accent); }
+.dk-bot-i { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; font-size: 22px; line-height: 1; border-radius: 10px; background: var(--ed-panel-2); flex: none; }
+.dk-me-ava { display: inline-flex; align-items: center; justify-content: center; width: 52px; height: 52px; font-size: 32px; border-radius: 50%; background: var(--ed-panel-2); border: 1px solid var(--ed-border); flex: none; }
+
+/* ===== cards ================================================================================================ */
+/* A card is a box with a fixed 5:7 aspect (poker 63 x 88 mm is ~5:7) whose SVG face fills it. Width from --cw, so
+   the context decides size. border-radius 7.5% / 5.4%: elliptical percentages give equal visual corner radii on a
+   non-square box (horizontal % of width, vertical % of height). The SVG has pointer-events:none so hit-testing and
+   drag always land on the .dk-card element, not on inner paths. user-select:none: long-press on touch would
+   otherwise start text selection instead of a drag. */
+.dk-card {
+  position: relative; display: block; flex: none; width: var(--cw, 64px); aspect-ratio: 5 / 7; border-radius: 7.5% / 5.4%;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .28), 0 3px 8px rgba(0, 0, 0, .18); background: transparent; user-select: none; -webkit-user-select: none;
+}
+.dk-card > svg, .dk-card .dk-svg { display: block; width: 100%; height: 100%; pointer-events: none; }
+.dk-card.dk-small { width: calc(var(--cw, 64px) * .62); }
+.dk-card.dk-tiny { width: 34px; display: inline-block; box-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
+.dk-card.dk-big { width: 150px; }
+/* Inline card glyphs in text (logs, rules) are <i> elements; cancel the UA italic. */
+i.dk-card { font-style: normal; }
+
+/* ===== the table ============================================================================================ */
+/* While a game runs (play.js adds body.dk-playing), the table takes the whole viewport: page scroll off (a swipe on
+   the hand must not scroll the page), shell header/footer hidden. Done with a body class rather than a separate page
+   so menus and the game share one document and state. */
+body.dk-playing { overflow: hidden; }
+body.dk-playing .ap-top, body.dk-playing .ap-foot { display: none; }
+body.dk-playing .ap-main { padding: 0; max-width: none; }
+.dk-session { position: fixed; inset: 0; z-index: 20; display: flex; }
+/* The table: a 5-row grid - bar, opponents, cloth (the only flexible row: minmax(0,1fr) lets it shrink below its
+   content instead of pushing the hand off screen), own bar, hand. Background layers: optional photo over a radial
+   felt gradient (lighter centre = lamp over the table). touch-action:manipulation removes double-tap zoom delay;
+   tap-highlight off because cards show their own selection state. */
+.dk-table {
+  --cw: clamp(44px, min(12.5vw, 9.6vh), 96px);
+  --hw: clamp(54px, min(16.5vw, 12.2vh), 116px);
+  position: relative; flex: 1 1 auto; min-width: 0; height: 100%; display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto; grid-template-columns: minmax(0, 1fr); color: var(--dk-ink);
+  background: var(--dk-image) center / cover no-repeat, radial-gradient(ellipse 85% 70% at 50% 42%, var(--dk-felt), var(--dk-felt2));
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: manipulation; overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Felt texture from two repeating gradients (fine speckle + diagonal weave) instead of an image: no request, scales
+   with any size, tinted by whatever felt colour is underneath. */
+.dk-table::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .5;
+  background: repeating-radial-gradient(circle at 30% 20%, rgba(255, 255, 255, .025) 0 1px, transparent 1px 3px), repeating-linear-gradient(115deg, rgba(0, 0, 0, .03) 0 2px, transparent 2px 5px);
+}
+/* Photo tables get a 28 % black scrim so light text and cards stay readable on any user image. */
+.dk-table[data-table="image"]::after { content: ''; position: absolute; inset: 0; background: rgba(0, 0, 0, .28); pointer-events: none; }
+.dk-table[data-table="wood"] { background: repeating-linear-gradient(92deg, rgba(0, 0, 0, .06) 0 3px, transparent 3px 11px), repeating-linear-gradient(88deg, rgba(255, 255, 255, .05) 0 1px, transparent 1px 23px), radial-gradient(ellipse 85% 70% at 50% 42%, var(--dk-felt), var(--dk-felt2)); }
+.dk-table[data-table="contrast"] .dk-card { box-shadow: 0 0 0 2px #fff; }
+/* Lift every grid row above the ::before/::after overlays (which are absolutely positioned and would cover them). */
+.dk-table > * { position: relative; z-index: 1; }
+/* Re-enable selection in text fields (chat): inherited user-select:none would make them uneditable on iOS. */
+.dk-table input, .dk-table textarea { user-select: text; -webkit-user-select: text; }
+
+/* Top bar. max(6px, env(safe-area-inset-top)) keeps buttons below a notch in fullscreen/standalone mode. */
+.dk-bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px; padding-top: max(6px, env(safe-area-inset-top)); }
+.dk-title { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 14px; }
+.dk-title .dk-rs { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--dk-serif); font-size: 16px; letter-spacing: .01em; }
+.dk-trumpbadge { display: inline-flex; gap: 4px; }
+/* Trump suit symbol on a card-white chip (raw colours: a card is white on every skin; red suits get .dk-red).
+   .dk-eternal marks a fixed trump variant with an accent outline. */
+.dk-tsym { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 28px; padding: 0 6px; border-radius: 8px; background: #fffdf8; color: #17171a; font-size: 18px; font-weight: 700; box-shadow: 0 1px 3px rgba(0, 0, 0, .35); }
+.dk-tsym.dk-red { color: #cc2229; }
+.dk-tsym.dk-eternal { outline: 2px solid var(--dk-accent); }
+.dk-ibtn {
+  display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 50%; flex: none;
+  border: 1px solid rgba(255, 255, 255, .22); background: rgba(0, 0, 0, .18); color: var(--dk-ink);
+}
+.dk-ibtn:hover { background: rgba(255, 255, 255, .14); }
+.dk-ibtn svg { width: 20px; height: 20px; }
+.dk-table[data-table="paper"] .dk-ibtn, .dk-table[data-table="wood"] .dk-ibtn { border-color: rgba(0, 0, 0, .2); background: rgba(255, 255, 255, .35); }
+
+/* opponents */
+/* Row of seats; scrolls horizontally with a hidden scrollbar when 5 opponents do not fit a phone (a visible bar would
+   eat vertical space). min-height reserves the row so the cloth does not jump when seats re-render. */
+.dk-opps { display: flex; justify-content: center; align-items: flex-start; gap: 4px; padding: 2px 8px 4px; overflow-x: auto; scrollbar-width: none; min-height: 86px; }
+.dk-opps::-webkit-scrollbar { display: none; }
+.dk-seat { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; width: 78px; flex: none; padding: 2px; border-radius: 12px; }
+.dk-ava { position: relative; width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .25); border: 2px solid rgba(255, 255, 255, .35); transition: border-color .2s, box-shadow .2s; }
+.dk-avai { font-size: 26px; line-height: 1; }
+/* Turn timer ring around the avatar. SVG circle r=16.5 in a 36 viewBox (table.js): circumference 2 x pi x 16.5 =
+   103.7, so dasharray = one full dash and dashoffset = circumference x (1 - --timer) leaves the remaining fraction
+   drawn. rotate(-90deg) starts the arc at 12 o'clock. --timer (0..1) is set inline by JS; the transition smooths
+   between JS ticks. Hidden (opacity 0) unless the seat is .dk-timed. */
+.dk-ringbox { position: absolute; inset: -5px; pointer-events: none; }
+.dk-ring { display: block; width: 100%; height: 100%; transform: rotate(-90deg); }
+.dk-ring circle { fill: none; stroke: var(--dk-accent); stroke-width: 2.5; stroke-dasharray: 103.7; stroke-dashoffset: calc(103.7 * (1 - var(--timer, 0))); opacity: 0; transition: stroke-dashoffset .25s linear; }
+.dk-timed .dk-ring circle { opacity: 1; }
+/* Role is shown by ring colour (attacker warm, defender cool) and the active player pulses; colour is never the only
+   cue - the seat also gets a text tag (.dk-tag) for the same role. */
+.dk-attacker .dk-ava { border-color: var(--dk-att); }
+.dk-defender .dk-ava, .dk-taking .dk-ava { border-color: var(--dk-def); }
+.dk-turn .dk-ava { box-shadow: 0 0 0 3px rgba(255, 255, 255, .15), 0 0 16px 2px var(--dk-glow); animation: dk-pulse 1.4s ease-in-out infinite; }
+.dk-out { opacity: .55; }
+.dk-away .dk-ava { filter: grayscale(1); opacity: .6; }
+.dk-sinfo { display: flex; align-items: center; gap: 4px; max-width: 100%; font-size: 12px; }
+.dk-nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 56px; font-weight: 600; }
+.dk-cnt { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 18px; padding: 0 5px; border-radius: 9px; background: rgba(0, 0, 0, .35); font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.dk-tag { font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 8px; background: rgba(0, 0, 0, .3); line-height: 17px; white-space: nowrap; }
+.dk-taking .dk-tag { background: var(--dk-def); color: #04263a; }
+/* Opponent's hand as a mini fan of card backs. Each .dk-mini gets --k = index - count/2 (table.js, max 7 drawn), so
+   the fan is centred: translate and rotate both scale with --k around a pivot below the cards (origin 50% 120%). */
+.dk-fan { position: relative; height: 18px; width: 56px; margin-top: 1px; }
+.dk-mini { position: absolute; left: 50%; top: 2px; width: 11px; height: 15px; margin-left: -5.5px; border-radius: 2px; background: var(--dk-back); border: 1px solid rgba(255, 255, 255, .7); transform: translateX(calc(var(--k) * 5px)) rotate(calc(var(--k) * 7deg)); transform-origin: 50% 120%; box-shadow: 0 1px 1px rgba(0, 0, 0, .3); }
+.dk-openhand { display: flex; flex-wrap: wrap; justify-content: center; max-width: 110px; }
+.dk-openhand .dk-card { width: 26px; margin: 0 -6px 2px 0; }
+.dk-team { position: absolute; right: -3px; bottom: -3px; width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(0, 0, 0, .35); }
+/* Team dots: fixed palette so team colours stay identical across skins and in replays. */
+.dk-team0 { background: #ffd166; } .dk-team1 { background: #5bc0ff; } .dk-team2 { background: #ff7aa2; }
+.dk-seatrow .dk-team, .dk-you .dk-team { position: static; }
+/* Speech bubble under a seat (chat line or emote). Always in the DOM, toggled by .dk-show: opacity/transform
+   transitions need a start state, and display toggling cannot animate. overflow-wrap:anywhere stops a long word
+   from widening the bubble past max-width. pointer-events:none: never blocks clicks on the table. */
+.dk-bubble {
+  position: absolute; top: 46px; left: 50%; z-index: 5; transform: translate(-50%, 4px) scale(.9); max-width: 150px; padding: 5px 9px;
+  border-radius: 12px; background: #fff; color: #111; font-size: 12.5px; line-height: 1.3; opacity: 0; pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .3); transition: opacity .18s, transform .18s; overflow-wrap: anywhere;
+}
+.dk-bubble.dk-show { opacity: 1; transform: translate(-50%, 0) scale(1); }
+.dk-bubble.dk-emote { font-size: 28px; padding: 2px 8px; background: transparent; box-shadow: none; }
+
+/* the cloth */
+/* Stock (left) and discard (right) are absolutely positioned; the side paddings reserve exactly their footprint
+   (1.8 / 1.4 x --cw + gap) so the bout area in the middle never slides under them. */
+.dk-felt { position: relative; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 8px calc(var(--cw) * 1.4 + 12px) 8px calc(var(--cw) * 1.8 + 12px); }
+.dk-deck { position: absolute; left: 10px; top: 50%; transform: translateY(-58%); width: calc(var(--cw) * 1.75); height: calc(var(--cw) * 1.4); }
+/* The face-up trump lies crosswise under the stock, as dealt in real play. Individual `rotate` property (not
+   transform) so it composes with any transform JS animations apply. */
+.dk-trumpcard { position: absolute; left: calc(var(--cw) * .55); top: 0; rotate: 90deg; }
+.dk-trumpghost { display: flex; align-items: center; justify-content: center; width: var(--cw); aspect-ratio: 5/7; font-size: calc(var(--cw) * .6); opacity: .35; color: #fff; transform: rotate(-90deg); }
+.dk-trumpghost.dk-red { color: #ff8a8a; }
+.dk-stock { position: absolute; left: 0; top: 0; }
+/* Stack depth illusion: up to 4 backs (1 per 6 cards left, table.js) offset diagonally by --k x 1.5px. */
+.dk-stock .dk-card { position: absolute; left: calc(var(--k) * 1.5px); top: calc(var(--k) * -1.5px); }
+.dk-stockn, .dk-dn {
+  position: absolute; z-index: 3; min-width: 26px; height: 22px; padding: 0 6px; border-radius: 11px; display: inline-flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .55); color: #fff; font-weight: 700; font-size: 12.5px; font-variant-numeric: tabular-nums;
+}
+.dk-stockn { left: calc(var(--cw) * .5 - 13px); top: calc(var(--cw) * 1.4 + 4px); }
+/* Count badges vanish when JS leaves them empty: no extra class toggling for "no stock". */
+.dk-stockn:empty, .dk-dn:empty { display: none; }
+.dk-discard { position: absolute; right: 10px; top: 50%; transform: translateY(-58%); width: calc(var(--cw) * 1.2); height: calc(var(--cw) * 1.5); }
+/* Discard: up to 5 backs fanned at 23deg steps starting from -30deg - a messy pile, as beaten cards are swept aside. */
+.dk-dpile .dk-card { position: absolute; left: 0; top: 0; transform: rotate(calc(var(--k) * 23deg - 30deg)); }
+.dk-dn { left: calc(var(--cw) * .5 - 13px); top: calc(var(--cw) * 1.4 + 4px); }
+
+/* Bout area: attack/defence pairs wrap and centre. min-height = one pair tall, so the drop target exists even when
+   empty. .dk-drop (JS: a card is selected/dragged and may be played here) shows a glow and a hint from data-hint via
+   attr() - the text comes from i18n in JS, CSS only displays it. */
+.dk-play {
+  position: relative; flex: 1 1 auto; align-self: stretch; display: flex; flex-wrap: wrap; align-content: center; justify-content: center;
+  gap: 6px 4px; padding: 10px 4px; border-radius: 18px; min-height: calc(var(--cw) * 1.9); transition: background .2s, box-shadow .2s;
+}
+.dk-play.dk-drop { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--dk-glow) 70%, transparent); background: color-mix(in srgb, var(--dk-glow) 10%, transparent); cursor: pointer; }
+.dk-play.dk-drop.dk-emptyplay::after, .dk-play.dk-drop::after {
+  content: attr(data-hint); position: absolute; left: 50%; bottom: 6px; transform: translateX(-50%); padding: 2px 10px; border-radius: 999px;
+  background: rgba(0, 0, 0, .45); color: var(--dk-glow); font-size: 12px; font-weight: 700; white-space: nowrap; pointer-events: none;
+}
+.dk-play.dk-hover { background: color-mix(in srgb, var(--dk-glow) 22%, transparent); }
+/* A pair: attack card with the defending card laid over it, shifted 26 % / 20 % and tilted, so both ranks stay
+   visible (indices are in the top-left corner). Box sized to contain the offset card (1.28 x width, 1.24 x height). */
+.dk-pair { position: relative; width: calc(var(--cw) * 1.28); height: calc(var(--cw) * 1.4 * 1.24); flex: none; }
+.dk-pair .dk-card { position: absolute; left: 0; top: 0; }
+.dk-pair .dk-def { left: 26%; top: 20%; rotate: 8deg; z-index: 2; }
+.dk-att.dk-target { cursor: pointer; box-shadow: 0 0 0 3px var(--dk-glow), 0 0 18px 4px color-mix(in srgb, var(--dk-glow) 60%, transparent); animation: dk-glow 1.2s ease-in-out infinite; }
+.dk-att.dk-hover { transform: scale(1.08); }
+.dk-shown { flex: 1 0 100%; display: flex; gap: 4px; align-items: center; justify-content: center; font-size: 12px; color: var(--dk-muted); }
+.dk-status {
+  position: absolute; left: 50%; bottom: 4px; transform: translateX(-50%); max-width: calc(100% - 20px); z-index: 4; pointer-events: none;
+  padding: 4px 14px; border-radius: 999px; background: rgba(0, 0, 0, .38); font-size: 13px; font-weight: 600; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* The drop hint and the status line occupy the same bottom spot; while dropping, the status yields (general sibling
+   combinator: status follows the play area in the DOM). */
+.dk-play.dk-drop ~ .dk-status { display: none; }
+
+/* own seat, actions, hand */
+.dk-mebar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; min-height: 52px; flex-wrap: wrap; }
+.dk-self { display: flex; align-items: center; min-width: 0; }
+.dk-self .dk-seat { flex-direction: row; width: auto; gap: 6px; }
+.dk-self .dk-ava { width: 38px; height: 38px; }
+.dk-self .dk-avai { font-size: 22px; }
+.dk-self .dk-nm { max-width: 120px; font-size: 13px; }
+.dk-self .dk-bubble { top: auto; bottom: 44px; }
+.dk-spectlabel { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--dk-muted); }
+.dk-actions { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+/* Action buttons (Take, Done, Pass). 44px min height = touch target guideline. Semantic variants: primary (main
+   action now), warn (take cards - a loss), go (beat/done). Translucent default reads on any felt. */
+.dk-abtn {
+  min-height: 44px; padding: 0 18px; border-radius: 999px; font-weight: 700; font-size: 15px; letter-spacing: .01em;
+  border: 1px solid rgba(255, 255, 255, .35); background: rgba(0, 0, 0, .25); color: var(--dk-ink); transition: transform .1s, background .15s;
+}
+.dk-abtn:hover { background: rgba(255, 255, 255, .14); }
+.dk-abtn:active { transform: scale(.97); }
+.dk-abtn.dk-primary { background: var(--dk-accent); color: #1d1600; border-color: transparent; box-shadow: 0 4px 14px color-mix(in srgb, var(--dk-accent) 45%, transparent); }
+.dk-abtn.dk-warn { background: #ff9f43; color: #2a1300; border-color: transparent; }
+.dk-abtn.dk-go { background: #4cd38a; color: #04220f; border-color: transparent; }
+.dk-abtn.dk-subtle { min-height: 36px; padding: 0 12px; font-size: 13px; opacity: .85; }
+/* Light paper skin: dark-on-light variant for neutral buttons only. Chained :not() (each adds its argument's
+   specificity) keeps coloured variants untouched; total (0,5,0) beats every .dk-abtn rule above. */
+.dk-table[data-table="paper"] .dk-abtn:not(.dk-primary):not(.dk-warn):not(.dk-go) { border-color: rgba(0, 0, 0, .25); background: rgba(255, 255, 255, .5); }
+
+/* Own hand: overlapping cards. --step (set by table.js from available width / card count, min 12px) is the visible
+   slice of each card; negative margin = step - card width produces the overlap. Below 12px the hand switches to
+   .dk-scroll (horizontal scrolling) instead of overlapping into unreadable slivers. Top padding leaves room for
+   selected cards that rise by 22px; bottom padding respects the home indicator (safe-area-inset-bottom).
+   Cards rise by `top` (they are position:relative via .dk-card) rather than transform: table.js animates deals and
+   plays with Element.animate on transform (FLIP), and a CSS transform here would be overridden mid-animation. */
+.dk-hand {
+  --step: 40px; display: flex; justify-content: center; align-items: flex-end; padding: 22px 10px calc(10px + env(safe-area-inset-bottom));
+  min-height: calc(var(--hw) * 1.4 + 34px); outline: none; overflow: visible;
+}
+.dk-hand.dk-scroll { justify-content: flex-start; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+.dk-hand:focus-visible { box-shadow: inset 0 0 0 2px var(--dk-glow); }
+.dk-hand .dk-card { width: var(--hw); top: 0; transition: top .15s ease, filter .15s; cursor: pointer; touch-action: none; }
+.dk-hand .dk-card + .dk-card { margin-left: calc(var(--step) - var(--hw)); }
+/* Hover lift only on devices that really hover: on touch, :hover sticks after a tap and a card would stay raised. */
+@media (hover: hover) { .dk-hand .dk-card.dk-ok:hover { top: -10px; } }
+.dk-hand .dk-card.dk-sel { top: -22px; box-shadow: 0 0 0 3px var(--dk-glow), 0 10px 22px rgba(0, 0, 0, .4); }
+.dk-hand .dk-card.dk-dim { filter: brightness(.7) saturate(.65); }
+.dk-hand .dk-card.dk-focus { outline: 3px solid var(--dk-glow); outline-offset: 2px; }
+.dk-hand .dk-card.dk-lifted { opacity: .35; }
+/* Drag ghost: table.js clones the card, appends the clone to <body> (position:fixed, left/top inline, following the
+   pointer) and dims the original with .dk-lifted. Outside .dk-hand no hand rule matches the clone; !important is
+   insurance against any other card shadow rule winning by order or specificity. Individual rotate/scale properties
+   tilt it without touching transform. transition:none - the ghost must track the pointer without lag. */
+.dk-dragging { box-shadow: 0 18px 40px rgba(0, 0, 0, .5) !important; rotate: 5deg; scale: 1.06; transition: none; }
+.dk-ghost { pointer-events: none; }
+.dk-flyer { width: var(--cw, 56px); }
+
+.dk-flash {
+  position: absolute; left: 50%; top: 42%; z-index: 30; transform: translate(-50%, -50%); padding: 10px 18px; border-radius: 14px; max-width: 80%;
+  background: rgba(0, 0, 0, .78); color: #fff; font-weight: 600; text-align: center; opacity: 0; pointer-events: none;
+}
+.dk-flash.dk-show { animation: dk-flash 1.8s ease forwards; }
+
+/* drawer: moves and chat */
+/* Off-canvas panel: always rendered, slid out with translateX(105%) (5 % extra hides its shadow). transform, not
+   right/width: animates on the compositor without relayout of the table. Uses --ed-* tokens: it is UI, not table. */
+.dk-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 40; width: min(360px, 92vw); display: flex; flex-direction: column;
+  background: var(--ed-panel); color: var(--ed-text); border-left: 1px solid var(--ed-border); box-shadow: var(--ed-shadow-lg);
+  transform: translateX(105%); transition: transform .25s ease; padding-top: env(safe-area-inset-top);
+}
+.dk-drawer.dk-open { transform: none; }
+.dk-drawer-h { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid var(--ed-border); }
+.dk-loglist { flex: 1 1 auto; overflow: auto; margin: 0; padding: 8px 12px 8px 34px; font-size: 13px; line-height: 1.55; }
+.dk-loglist .dk-lg-sep { list-style: none; margin: 6px 0 2px -22px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-muted); }
+.dk-loglist .dk-lg-end { color: var(--ed-accent); font-weight: 600; }
+.dk-loglist .dk-lg-draw { color: var(--ed-muted); }
+.dk-chatlist { flex: 1 1 auto; overflow: auto; padding: 8px 12px; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; min-height: 80px; max-height: 50vh; }
+.dk-drawer .dk-chatlist { max-height: none; }
+.dk-chatline { overflow-wrap: anywhere; }
+.dk-emotes { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 12px; border-top: 1px solid var(--ed-border); }
+.dk-emote { width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--ed-border); background: var(--ed-panel-2); font-size: 20px; }
+.dk-chatin { display: flex; gap: 6px; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); }
+.dk-chatin .ed-input { flex: 1 1 auto; }
+
+/* end of game, card info */
+.dk-enddlg .ed-dlg-body { text-align: center; }
+.dk-endicon { font-size: 56px; line-height: 1; margin: 4px 0 10px; animation: dk-pop .5s ease; }
+.dk-places { text-align: left; display: inline-block; margin: 0 auto 10px; padding-left: 22px; font-size: 15px; }
+.dk-places .dk-lost { color: var(--ed-danger); }
+.dk-ach-new { text-align: left; margin-top: 10px; }
+.dk-ach-new h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-muted); margin: 0 0 6px; }
+.dk-cardinfo { display: flex; flex-direction: column; gap: 4px; }
+.dk-cardinfo p { margin: 0; }
+.dk-cardinfo-card { width: 110px; margin: 0 auto 8px; }
+.dk-cardinfo-card svg { width: 100%; height: auto; display: block; }
+
+/* ===== home ============================================================================================== */
+.dk-hero {
+  position: relative; overflow: hidden; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px;
+  padding: 28px 18px 26px; border-radius: 22px; color: var(--dk-ink);
+  background: var(--dk-image) center / cover, radial-gradient(ellipse 90% 80% at 50% 30%, var(--dk-felt), var(--dk-felt2));
+  box-shadow: inset 0 0 0 6px color-mix(in srgb, var(--dk-rim) 70%, transparent), var(--ed-shadow);
+}
+.dk-herofan { position: relative; height: 150px; width: 260px; margin-bottom: 4px; }
+/* Home fan: --i = index - 2 (main.js), so cards rotate -26..26deg around a pivot below them; each is dealt in with a
+   staggered animation-delay. fill-mode `both` holds the from-state during the delay (no flash of final position). */
+.dk-herofan .dk-card { --cw: 86px; position: absolute; left: calc(50% - 43px); top: 18px; transform-origin: 50% 130%; transform: rotate(calc(var(--i) * 13deg)); animation: dk-deal .7s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc((var(--i) + 2) * 70ms); }
+.dk-herofan .dk-heroback { --i: 0; transform: rotate(-24deg) translate(-70px, 34px); z-index: -1; opacity: .9; animation: none; }
+.dk-hero-t { font-family: var(--dk-serif); font-size: clamp(38px, 9vw, 64px); font-weight: 700; letter-spacing: .02em; margin: 0; text-shadow: 0 3px 12px rgba(0, 0, 0, .35); }
+.dk-hero-s { margin: 0; max-width: 46ch; color: var(--dk-muted); font-size: 15px; }
+.dk-hero-m { margin: 2px 0 0; color: var(--dk-muted); font-size: 13px; }
+.dk-playbtn { margin-top: 8px; min-width: 200px; }
+.dk-tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 640px) { .dk-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.dk-tile {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 14px; text-align: left; border-radius: 16px;
+  border: 1px solid var(--ed-border); background: var(--ed-panel); box-shadow: var(--ed-shadow-sm); transition: transform .12s, box-shadow .12s, border-color .12s;
+}
+.dk-tile:hover { transform: translateY(-2px); box-shadow: var(--ed-shadow); border-color: var(--ed-accent); }
+.dk-tile b { font-size: 15.5px; }
+.dk-tile > span:last-child { color: var(--ed-muted); font-size: 12.5px; line-height: 1.35; }
+.dk-tile-i { display: inline-flex; width: 36px; height: 36px; border-radius: 10px; align-items: center; justify-content: center; margin-bottom: 4px; color: #fff; background: linear-gradient(135deg, #1e6b46, #0e4029); }
+.dk-tile-studio .dk-tile-i { background: linear-gradient(135deg, #7c3aed, #4c1d95); }
+.dk-tile-i svg { width: 20px; height: 20px; }
+.dk-howto p { margin: 0 0 8px; color: var(--ed-muted); }
+.dk-rules ul { margin: 6px 0; padding-left: 20px; }
+.dk-rules li { margin: 2px 0; }
+.dk-rules-desc { margin: 4px 0 8px; }
+.dk-hash { font-family: var(--ed-mono); font-size: 11.5px; }
+.dk-modehint { text-align: center; }
+
+/* ===== setup, bots ========================================================================================= */
+.dk-setup-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(280px, 1fr); gap: 14px; align-items: start; }
+.dk-setup-side { display: flex; flex-direction: column; gap: 14px; }
+.dk-setup-side .dk-bigbtn { width: 100%; }
+@media (max-width: 860px) { .dk-setup-grid { grid-template-columns: minmax(0, 1fr); } }
+.dk-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; margin-top: 10px; }
+.dk-rscard { display: flex; flex-direction: column; gap: 4px; text-align: left; padding: 10px 12px; border-radius: 12px; border: 1.5px solid var(--ed-border); background: var(--ed-panel-2); min-height: 92px; }
+.dk-rscard:hover { border-color: var(--ed-border-strong); }
+.dk-rscard.dk-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ed-accent) 20%, transparent); }
+.dk-rscard-h { display: flex; justify-content: space-between; gap: 6px; font-size: 14.5px; }
+.dk-rscard-m { color: var(--ed-muted); font-size: 12px; }
+.dk-rscard-t { display: flex; flex-wrap: wrap; gap: 4px; margin-top: auto; }
+.dk-excl-b { color: #b8860b; }
+.dk-rscard.dk-excl { background: linear-gradient(160deg, color-mix(in srgb, #ffd166 14%, var(--ed-panel-2)), var(--ed-panel-2)); }
+.dk-rulesdetails { margin-top: 10px; }
+.dk-rulesdetails summary { cursor: pointer; font-weight: 600; }
+.dk-stepper { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.dk-stepn { font-size: 26px; min-width: 32px; text-align: center; font-variant-numeric: tabular-nums; }
+.dk-seats { display: flex; flex-direction: column; gap: 6px; }
+.dk-seatrow { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 10px; border-radius: 12px; border: 1px solid var(--ed-border); background: var(--ed-panel-2); text-align: left; }
+button.dk-seatrow:hover { border-color: var(--ed-accent); }
+.dk-seatrow .dk-lvl { margin-left: auto; color: var(--ed-muted); font-size: 12.5px; }
+.dk-seatrow > svg, .dk-seatrow > .ed-ic { color: var(--ed-muted); width: 16px; height: 16px; }
+.dk-seedrow { margin-top: 8px; flex-wrap: nowrap; }
+.dk-seedrow .ed-input { flex: 1 1 auto; font-family: var(--ed-mono); }
+.dk-dice { font-size: 18px; }
+.dk-pickdlg .ed-dialog, .ed-dialog.dk-pickdlg { max-width: 760px; }
+.dk-picker { display: flex; flex-direction: column; gap: 10px; }
+.dk-levelrow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dk-botlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px; }
+.dk-botitem { display: block; text-align: left; padding: 10px; border-radius: 12px; border: 1.5px solid var(--ed-border); background: var(--ed-panel-2); color: inherit; }
+.dk-botitem:hover { border-color: var(--ed-accent); }
+.dk-botitem.dk-on { border-color: var(--ed-accent); }
+.dk-botitem.dk-own { display: flex; align-items: center; gap: 6px; }
+.dk-own-main { flex: 1 1 auto; text-align: left; border: 0; background: none; padding: 0; color: inherit; }
+.dk-botcard { display: flex; flex-direction: column; gap: 6px; }
+.dk-bot-h { display: flex; align-items: center; gap: 10px; }
+.dk-bot-h b { font-size: 15px; }
+.dk-ratings { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.dk-rating { font-size: 11px; padding: 0 6px; border-radius: 6px; background: var(--ed-panel); border: 1px solid var(--ed-border); color: var(--ed-muted); }
+.dk-rating.dk-on { border-color: var(--ed-accent); color: var(--ed-text); }
+.dk-bot-sum { margin: 0; font-size: 13px; line-height: 1.4; }
+.dk-chip.dk-pr { font-size: 11.5px; padding: 1px 8px; }
+.dk-inter { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 12px; }
+.dk-inter > span:first-child { color: var(--ed-muted); margin-right: 2px; }
+.dk-foes .dk-chip { border-color: color-mix(in srgb, var(--ed-danger) 50%, var(--ed-border)); }
+.dk-friends .dk-chip { border-color: color-mix(in srgb, var(--ed-ok) 50%, var(--ed-border)); }
+.dk-builder { display: flex; flex-direction: column; gap: 10px; }
+.dk-builder h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-muted); margin: 6px 0 0; }
+.dk-brow { display: flex; flex-direction: column; gap: 4px; }
+.dk-emoji-in { width: 56px; text-align: center; font-size: 18px; flex: none; }
+.dk-traits, .dk-skills { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.dk-trait { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border-radius: 10px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.dk-trait-h { display: flex; justify-content: space-between; }
+.dk-trait .ed-hint { margin: 0; font-size: 11.5px; }
+.dk-near { font-weight: 600; margin: 0; }
+
+/* ===== replays ================================================================================================ */
+.dk-dgnin { min-height: 64px; }
+.dk-rp-main { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr); gap: 14px; align-items: start; }
+@media (max-width: 900px) { .dk-rp-main { grid-template-columns: minmax(0, 1fr); } }
+.dk-rp-left { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.dk-rp-stage { position: relative; height: min(72vh, 640px); min-height: 420px; border-radius: 16px; overflow: hidden; display: flex; box-shadow: var(--ed-shadow); }
+.dk-rp-stage:empty { display: none; }
+.dk-replaytable { --hw: clamp(40px, 9vw, 70px); }
+/* The replay reuses the live table renderer; controls that make no sense in a replay are hidden with
+   visibility (keeps their space, so the title stays centred) and the hand row is dropped. */
+.dk-replaytable .dk-bar .dk-ibtn[data-b="menu"], .dk-replaytable .dk-bar .dk-ibtn[data-b="settings"], .dk-replaytable .dk-bar .dk-chatbtn { visibility: hidden; }
+.dk-replaytable .dk-hand { display: none; }
+.dk-rp-controls { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.dk-rp-controls:empty { display: none; }
+.dk-ctl { font-size: 15px; font-weight: 700; }
+.dk-rp-slider { flex: 1 1 160px; min-width: 120px; }
+.dk-rp-pos { font-variant-numeric: tabular-nums; color: var(--ed-muted); font-size: 12.5px; min-width: 64px; }
+.dk-rp-open-l { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+.dk-rp-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.dk-rp-players { margin: 0 0 6px; padding-left: 18px; }
+.dk-rp-bits { float: right; color: var(--ed-muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+.dk-chartbox { margin-bottom: 8px; }
+.dk-chart { width: 100%; height: auto; display: block; cursor: crosshair; background: var(--ed-panel-2); border-radius: 10px; border: 1px solid var(--ed-border); }
+.dk-ch-line { fill: none; stroke: var(--ed-accent); stroke-width: 2; }
+.dk-ch-bar { fill: #f59e0b; opacity: .75; }
+.dk-ch-at { stroke: var(--ed-danger); stroke-width: 1.4; stroke-dasharray: 3 3; }
+.dk-ch-legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--ed-muted); margin-top: 4px; }
+.dk-lg-line::before, .dk-lg-bar::before { content: ''; display: inline-block; width: 14px; height: 3px; margin-right: 5px; vertical-align: middle; background: var(--ed-accent); }
+.dk-lg-bar::before { width: 4px; height: 10px; background: #f59e0b; }
+.dk-rp-moves { max-height: 340px; overflow: auto; margin: 0; padding-left: 34px; font-size: 12.5px; }
+.dk-rp-moves li { cursor: pointer; padding: 1px 4px; border-radius: 6px; }
+.dk-rp-moves li:hover { background: var(--ed-hover); }
+.dk-rp-moves li.dk-on { background: var(--ed-accent-weak); font-weight: 600; }
+.dk-rp-moves code { font-size: 11.5px; color: var(--ed-muted); }
+.dk-rp-list { display: flex; flex-direction: column; gap: 4px; }
+.dk-rp-item { display: flex; align-items: center; gap: 4px; }
+.dk-rp-open { flex: 1 1 auto; display: flex; align-items: center; gap: 8px; text-align: left; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--ed-border); background: var(--ed-panel-2); color: inherit; min-width: 0; }
+.dk-rp-open:hover { border-color: var(--ed-accent); }
+.dk-rp-open .ed-muted { margin-left: auto; font-size: 12px; white-space: nowrap; }
+.dk-rp-res { font-size: 18px; }
+
+/* ===== profile ================================================================================================ */
+.dk-profile-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; align-items: start; }
+.dk-achcard { grid-column: 1 / -1; }
+.dk-me-big { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.dk-me-big .ed-input { font-size: 17px; font-weight: 600; }
+.dk-avatars { display: flex; flex-wrap: wrap; gap: 4px; }
+.dk-avatar { width: 40px; height: 40px; border-radius: 10px; border: 1.5px solid var(--ed-border); background: var(--ed-panel-2); font-size: 22px; }
+.dk-avatar.dk-on { border-color: var(--ed-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ed-accent) 25%, transparent); }
+.dk-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 12px; text-align: center; }
+.dk-stats b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+.dk-stats span { color: var(--ed-muted); font-size: 12px; }
+.dk-closest p { margin: 0 0 6px; }
+.dk-close { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 10px; }
+.dk-close.dk-first { background: var(--ed-accent-weak); }
+.dk-sim { margin-left: auto; font-weight: 700; font-variant-numeric: tabular-nums; }
+.dk-style { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.dk-sbar-h { display: flex; justify-content: space-between; font-size: 13px; }
+.dk-sbar-t { position: relative; height: 8px; border-radius: 4px; background: var(--ed-border); margin: 3px 0; }
+.dk-sbar-you { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--ed-accent); }
+.dk-sbar-bot { position: absolute; top: -3px; width: 3px; height: 14px; margin-left: -1.5px; border-radius: 2px; background: #f59e0b; }
+.dk-sbar .ed-hint { margin: 0; font-size: 11.5px; }
+.dk-achs { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+.dk-ach { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 12px; border: 1px solid var(--ed-border); background: var(--ed-panel-2); opacity: .55; filter: grayscale(.8); }
+.dk-ach.dk-got, .dk-ach-new .dk-ach { opacity: 1; filter: none; border-color: color-mix(in srgb, #f59e0b 55%, var(--ed-border)); }
+.dk-ach-i { font-size: 26px; line-height: 1; }
+.dk-ach .ed-muted { font-size: 12px; }
+
+/* ===== online ================================================================================================ */
+.dk-roomlist { display: flex; flex-direction: column; gap: 6px; }
+.dk-roomrow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 12px; border: 1px solid var(--ed-border); background: var(--ed-panel-2); }
+.dk-room-i { font-size: 20px; }
+.dk-room-m { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
+.dk-room-m .ed-muted { font-size: 12px; }
+.dk-createroom { display: flex; flex-direction: column; gap: 10px; }
+.dk-lobby-players { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.dk-lobby-players li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 10px; background: var(--ed-panel-2); }
+.dk-lobby-players li .ed-btn { margin-left: auto; }
+.dk-invite { flex-wrap: nowrap; }
+.dk-invite .ed-input { flex: 1 1 auto; font-family: var(--ed-mono); font-size: 12px; }
+
+/* ===== settings ============================================================================================== */
+.dk-settings { display: flex; flex-direction: column; gap: 8px; }
+.dk-settings h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-muted); margin: 10px 0 0; }
+.dk-setrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.dk-setrow > span { font-weight: 550; }
+.dk-setrow .ed-select, .dk-setrow .ed-range { max-width: 240px; }
+.dk-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+.dk-swatch { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px; border-radius: 12px; border: 1.5px solid var(--ed-border); background: var(--ed-panel-2); color: inherit; font-size: 11.5px; }
+.dk-swatch.dk-on { border-color: var(--ed-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ed-accent) 25%, transparent); }
+.dk-swatches-s .dk-swatch { padding: 4px; }
+.dk-tablesw { display: block; width: 64px; height: 40px; border-radius: 10px; border: 3px solid; }
+.dk-facesw { display: flex; }
+.dk-facesw .dk-card { margin-right: -10px; }
+.dk-avatars-s .dk-avatar { width: 34px; height: 34px; font-size: 18px; }
+
+/* ===== constructor ========================================================================================== */
+.dk-st-summary { display: flex; flex-wrap: wrap; gap: 6px; }
+.dk-st-pill { padding: 2px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; background: var(--ed-panel); border: 1px solid var(--ed-border); }
+.dk-okp { color: var(--ed-ok); border-color: currentColor; }
+.dk-errp { color: var(--ed-danger); border-color: currentColor; }
+.dk-warnp { color: var(--ed-warn); border-color: currentColor; }
+.dk-hashp { font-family: var(--ed-mono); font-weight: 400; color: var(--ed-muted); }
+.dk-st-tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--ed-border); }
+.dk-st-tabs::-webkit-scrollbar { display: none; }
+.dk-st-tab { padding: 8px 14px; border: 0; border-bottom: 2.5px solid transparent; background: none; color: var(--ed-muted); font-weight: 600; white-space: nowrap; }
+.dk-st-tab.dk-on { color: var(--ed-text); border-bottom-color: var(--ed-accent); }
+.dk-st-body { display: flex; flex-direction: column; gap: 14px; }
+.dk-st-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+.dk-st-f, .ap-card .dk-st-grid > .ed-field { margin: 0; }
+.dk-num { max-width: 110px; }
+.dk-code { font-family: var(--ed-mono); max-width: 110px; }
+.dk-tablelike { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+/* Table-like editor rows built from grids (not <table>): rows contain inputs and must reflow to 2 columns on phones,
+   which a real table cannot do. Header and rows share one column template so they align. */
+.dk-thead, .dk-trow { display: grid; grid-template-columns: 90px minmax(100px, 1fr) 90px minmax(90px, 140px) 40px; gap: 6px; align-items: center; }
+.dk-thead { font-size: 11.5px; color: var(--ed-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.dk-trow .dk-code, .dk-trow .dk-num { max-width: none; }
+@media (max-width: 560px) { .dk-thead { display: none; } .dk-trow { grid-template-columns: 1fr 1fr; } }
+.dk-sets { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+.dk-set { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 12px; border: 1px solid var(--ed-border); background: var(--ed-panel-2); }
+.dk-pick .dk-chip { min-width: 32px; justify-content: center; }
+.dk-cardlist { display: flex; flex-wrap: wrap; gap: 8px; }
+.dk-cardthumb { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 6px; width: 92px; border-radius: 12px; border: 1.5px solid var(--ed-border); background: var(--ed-panel-2); font-size: 11.5px; color: inherit; }
+.dk-cardthumb .dk-card { --cw: 64px; }
+.dk-cardthumb.dk-on { border-color: var(--ed-accent); }
+.dk-cardthumb.dk-add { justify-content: center; min-height: 120px; color: var(--ed-accent); }
+.dk-cardthumb > span { text-align: center; overflow-wrap: anywhere; }
+.dk-cardedit { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 640px) { .dk-cardedit { grid-template-columns: minmax(0, 1fr); } .dk-cardedit .dk-big { margin: 0 auto; } }
+.dk-rulesed { display: flex; flex-direction: column; gap: 10px; }
+.dk-mlist { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.dk-matcher { display: inline-flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.dk-matcher .ed-select { width: auto; }
+.dk-matcher .dk-bad { border-color: var(--ed-danger); }
+.dk-flags { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.dk-beatrules, .dk-cardrules, .dk-groups { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.dk-beatrule { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px; border-radius: 10px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.dk-arrow { font-weight: 700; color: var(--ed-accent); }
+.dk-cr { padding: 8px 10px; border-radius: 10px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.dk-cr summary { cursor: pointer; font-weight: 600; }
+.dk-cr code { font-size: 11.5px; color: var(--ed-muted); }
+.dk-issues { margin: 0; padding-left: 20px; }
+.dk-issues .dk-err { color: var(--ed-danger); }
+.dk-issues .dk-warn { color: var(--ed-warn); }
+.dk-issues .dk-okl { color: var(--ed-ok); list-style: '✓ '; }
+.dk-rel h3 { font-size: 12.5px; margin: 10px 0 4px; color: var(--ed-muted); }
+.dk-relcard { margin-top: 8px; }
+.dk-strip { display: flex; flex-wrap: wrap; gap: 3px; }
+.dk-strip .dk-tiny { width: 30px; }
+.dk-simout { margin-top: 10px; }
+.dk-ownlist { display: flex; flex-direction: column; gap: 6px; }
+.dk-ownrow { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 10px; background: var(--ed-panel-2); }
+
+/* ===== layouts ============================================================================================== */
+/* Layout variants only re-tune --cw / --hw and a few seat sizes: every card position above is expressed in those
+   variables, so no positional rule needs duplicating. Desktop: larger seats, cards bounded by height (11vh) because
+   wide screens are short relative to width. */
+@media (min-width: 900px) {
+  .dk-table { --cw: clamp(56px, min(7vw, 11vh), 104px); --hw: clamp(70px, min(8.4vw, 14vh), 124px); }
+  .dk-opps { gap: 18px; min-height: 104px; }
+  .dk-seat { width: 96px; }
+  .dk-ava { width: 52px; height: 52px; }
+  .dk-avai { font-size: 30px; }
+  .dk-nm { max-width: 76px; font-size: 13px; }
+  .dk-bubble { top: 56px; }
+}
+/* Phones held upright: the stock and the discard pile sit small in the top corners of the cloth, the bout gets the
+   whole width and bigger cards. */
+@media (max-width: 640px) and (orientation: portrait) {
+  .dk-table { --cw: clamp(44px, min(15.5vw, 8.6vh), 84px); --hw: clamp(54px, min(17.5vw, 11vh), 92px); }
+  .dk-felt { padding: calc(min(11vw, 44px) * 1.4 + 18px) 6px 34px; }
+  .dk-deck, .dk-discard { --cw: min(11vw, 44px); top: 6px; transform: none; }
+  .dk-deck { left: 8px; }
+  .dk-discard { right: 14px; }
+  .dk-stockn { left: calc(var(--cw) * 1.75 + 4px); top: calc(var(--cw) * .45); }
+  .dk-dn { left: auto; right: calc(var(--cw) * 1.35 + 2px); top: calc(var(--cw) * .45); }
+  .dk-play { gap: 4px 2px; padding: 6px 2px 22px; }
+  .dk-seat { width: 70px; }
+}
+/* Phones held sideways: height is scarce, so cards size from vh only and decorative rows (opponent fans) go. */
+@media (max-height: 560px) and (orientation: landscape) {
+  .dk-table { --cw: clamp(38px, 10vh, 70px); --hw: clamp(44px, 13vh, 84px); }
+  .dk-opps { min-height: 0; }
+  .dk-fan { display: none; }
+  .dk-mebar { min-height: 40px; padding: 0 10px; }
+  .dk-abtn { min-height: 36px; }
+  .dk-hand { padding-top: 14px; min-height: calc(var(--hw) * 1.4 + 20px); }
+}
+
+/* ===== motion =============================================================================================== */
+@keyframes dk-pulse { 0%, 100% { box-shadow: 0 0 0 3px rgba(255, 255, 255, .12), 0 0 10px 1px var(--dk-glow); } 50% { box-shadow: 0 0 0 3px rgba(255, 255, 255, .2), 0 0 20px 5px var(--dk-glow); } }
+@keyframes dk-glow { 0%, 100% { box-shadow: 0 0 0 3px var(--dk-glow), 0 0 10px 2px color-mix(in srgb, var(--dk-glow) 40%, transparent); } 50% { box-shadow: 0 0 0 3px var(--dk-glow), 0 0 22px 6px color-mix(in srgb, var(--dk-glow) 70%, transparent); } }
+@keyframes dk-flash { 0% { opacity: 0; transform: translate(-50%, -40%); } 12% { opacity: 1; transform: translate(-50%, -50%); } 80% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes dk-pop { 0% { transform: scale(.3); opacity: 0; } 70% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); } }
+/* Only a `from` frame: the end state is the element's own transform (its --i rotation), so one keyframe set serves
+   every card of the fan. */
+@keyframes dk-deal { from { opacity: 0; transform: translateY(60px) rotate(0deg) scale(.7); } }
+/* Reduced motion: loops and the deal animation stop; state is still conveyed by static glow/colour. The selectors
+   tie or lose on specificity with the rules that set the animations (.dk-att.dk-target (0,2,0) etc.) and win only
+   by order; !important makes the override independent of where future rules are added. */
+@media (prefers-reduced-motion: reduce) {
+  .dk-turn .dk-ava, .dk-att.dk-target, .dk-herofan .dk-card, .dk-endicon { animation: none !important; }
+  .dk-drawer, .dk-hand .dk-card { transition: none; }
+}

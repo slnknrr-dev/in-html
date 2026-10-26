@@ -1,0 +1,82 @@
+// site-studio/editor-sitemap.js - Site → Map and Site → SEO.
+//   Map: the site as a diagram (site-map.js: pages and sections, navigation, who sees what, where data goes in each
+//   package, content collections), drawn by diagram/; copy the Mermaid source, download .mmd / .svg, or insert it as a
+//   diagram block on the page being edited.
+//   SEO: the site's address and the AI-crawler switch, the files a serverless or backend package will carry (sitemap,
+//   robots, llms.txt — seo-site.js on seo/site.js, the model SEO Kit edits) and the problems of the pages' titles and
+//   descriptions.
+import { h } from '../ui/dom.js';
+import { iconEl } from '../ui/icons.js';
+import { t } from '../ui/i18n.js';
+import { toast } from '../ui/overlays.js';
+import { S } from '../studio/state.js';
+import { section } from '../studio/fields.js';
+import { fieldsBox } from '../studio/right.js';
+import { insertBlock } from '../studio/ops.js';
+import { renderDiagram } from '../diagram/all.js';
+import { MAP_VIEWS, siteMapSource } from './site-map.js';
+import { seoFiles, seoIssues } from './seo-site.js';
+
+// View state at module level: survives tab re-renders, never saved in the document.
+let view = 'pages';
+let target = 'static';
+
+// Download via a temporary <a download>; the object URL is revoked after a delay because revoking right after click()
+// can abort the download in some browsers.
+const save = (name, text, type) => {
+  const a = h('a', { href: URL.createObjectURL(new Blob([text], { type })), download: name });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+};
+
+// The diagram theme follows the editor's dark class at draw time (no live switch: the tab redraws on reopen). The
+// insert button prefers a live 'sitemap' diagram for the site-structure views (it stays current as pages change) and
+// falls back to frozen Mermaid text for views that depend on the export target.
+export function dsMap(body) {
+  const pic = h('div', { class: 'ss-map-pic' });
+  const src = h('textarea', { class: 'ed-input ed-textarea ed-mono ss-map-src', rows: 8, readonly: true, 'aria-label': 'Mermaid' });
+  const draw = () => {
+    const text = siteMapSource(S.doc, view, { lang: S.doc.defaultLang, target });
+    const r = renderDiagram(text, { theme: document.documentElement.classList.contains('ed-dark') ? 'dark' : 'neutral', idPrefix: 'smap-' });
+    pic.innerHTML = r.svg;
+    src.value = text;
+  };
+  const views = h('div', { class: 'ed-seg', role: 'group', 'aria-label': t('sm.view') }, MAP_VIEWS.map((v) => h('button', { type: 'button', class: 'ed-seg-btn' + (v === view ? ' ed-on' : ''), 'aria-pressed': String(v === view),
+    onclick: (e) => { view = v; for (const b of e.currentTarget.parentNode.children) { b.setAttribute('aria-pressed', String(b === e.currentTarget)); b.classList.toggle('ed-on', b === e.currentTarget); } tg.hidden = v !== 'data'; draw(); } }, t('sm.' + v))));
+  const tg = h('select', { class: 'ed-input', hidden: view !== 'data', 'aria-label': t('ds.export'), onchange: (e) => { target = e.target.value; draw(); } },
+    [['static', 'bx.m.static'], ['backend', 'bx.m.backend'], ['hybrid', 'bx.fallback']].map(([v, k]) => h('option', { value: v, selected: v === target }, t(k))));
+  const tools = h('div', { class: 'ss-map-tools' },
+    h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => { navigator.clipboard?.writeText(src.value).then(() => toast(t('sm.copied'), 'ok'), () => {}); } }, iconEl('copy'), t('sm.copy')),
+    h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => save('site-' + view + '.mmd', src.value, 'text/plain') }, iconEl('download'), t('sm.mmd')),
+    h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => save('site-' + view + '.svg', pic.innerHTML, 'image/svg+xml') }, iconEl('download'), t('sm.svg')),
+    h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => {
+      const site = ['pages', 'nav', 'access', 'types'].includes(view);
+      insertBlock('diagram', undefined, site ? { mode: 'sitemap', view } : { mode: 'text', src: src.value });
+    } }, iconEl('plus'), t('sm.insert')));
+  body.append(section('ds-map', t('sm.title'), h('div', {}, views, tg, pic, tools, src)));
+  draw();
+}
+
+// The file list is a preview of what the export will write (same seoFiles call); without a site URL there are no
+// absolute links for a sitemap, so nothing is generated. Previews are capped at 6000 chars to keep the panel light.
+export function dsSeo(body) {
+  body.append(section('ds-seo', t('seo.title'), fieldsBox([
+    { key: 'siteUrl', type: 'text', inputType: 'url', label: 'seo.url', hint: 'seo.urlHint', placeholderText: 'https://example.org' },
+    { key: 'seoNoAI', type: 'checkbox', label: 'seo.noAI', hint: 'seo.noAIHint' },
+  ], 'meta', 'none')));
+  const files = seoFiles(S.doc, { noAI: !!S.doc.meta.seoNoAI });
+  const box = h('div', { class: 'ss-seo-files' });
+  if (!files.length) box.append(h('p', { class: 'ed-hint' }, t('seo.needUrl')));
+  for (const f of files) {
+    box.append(h('details', { class: 'ss-seo-f' }, h('summary', {}, h('span', { class: 'ed-mono' }, f.path), ' ', h('small', { class: 'ed-muted' }, (f.data.length / 1024).toFixed(1) + ' KB')),
+      h('pre', { class: 'ss-seo-pre' }, f.data.slice(0, 6000)),
+      h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => save(f.path, f.data, 'text/plain') }, iconEl('download'), f.path)));
+  }
+  body.append(section('ds-seo-files', t('seo.files'), box));
+  const issues = seoIssues(S.doc).filter((p) => p.issues.some((x) => x.field === 'title' || x.field === 'description'));
+  const list = h('ul', { class: 'ss-seo-issues' }, issues.map((p) => h('li', {}, h('span', { class: 'ed-mono' }, p.path), ' — ',
+    p.issues.filter((x) => x.field === 'title' || x.field === 'description').map((x) => t('seo.i.' + x.field + '.' + x.issue)).join('; '))));
+  body.append(section('ds-seo-issues', t('seo.issues'), issues.length ? list : h('p', { class: 'ed-hint' }, t('seo.ok'))));
+}

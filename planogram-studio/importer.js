@@ -1,0 +1,125 @@
+// planogram-studio/importer.js - the product library from a file: CSV / TSV (encoding detected, delimiter sniffed)
+// or XLSX / ODS (first sheet), a column mapping dialog with suggestions from csv/mapping.js (Russian, English,
+// Georgian headers plus the planogram fields: EAN, brand, width / height / depth, squeeze, daily sales, stock),
+// loose number parsing, and the choice to merge with the library (matched by EAN, then by name) or to replace it.
+import { t } from '../ui/app.js';
+import { h } from '../ui/dom.js';
+import { openDialog } from '../ui/overlays.js';
+import { decodeBytes } from '../csv/encoding.js';
+import { parseCSV, sniffCSV } from '../csv/csv.js';
+import { HEADER_SYNONYMS, parseLooseNumber, suggestMapping } from '../csv/mapping.js';
+import { readXLSX } from '../xlsx/read.js';
+import { readODS } from '../xlsx/ods.js';
+import { cellValue } from '../xlsx/cells.js';
+import { normProduct, uid } from './common.js';
+
+// Target fields with header synonyms in the UI languages; num marks numeric fields parsed with parseLooseNumber
+// (accepts "1 234,5", "1,234.5", "12 cm").
+export const FIELDS = [
+  { key: 'name', syn: HEADER_SYNONYMS.name },
+  { key: 'ean', syn: HEADER_SYNONYMS.barcode },
+  { key: 'category', syn: HEADER_SYNONYMS.category },
+  { key: 'brand', syn: ['бренд', 'марка', 'торговая марка', 'производитель', 'brand', 'manufacturer', 'make', 'marke', 'marque', 'marca', 'ბრენდი', 'მწარმოებელი'] },
+  { key: 'width', num: true, syn: ['ширина', 'ширина см', 'width', 'width cm', 'w', 'breite', 'largeur', 'ancho', 'სიგანე'] },
+  { key: 'height', num: true, syn: ['высота', 'высота см', 'height', 'height cm', 'h', 'höhe', 'hauteur', 'alto', 'altura', 'სიმაღლე'] },
+  { key: 'depth', num: true, syn: ['глубина', 'глубина см', 'depth', 'depth cm', 'd', 'tiefe', 'profondeur', 'fondo', 'profundidad', 'სიღრმე'] },
+  { key: 'squeeze', num: true, syn: ['сжатие', 'сжатие %', 'squeeze', 'squeeze %', 'compression', 'стиснення', 'stauchung', 'compresión', 'შეკუმშვა'] },
+  { key: 'price', num: true, syn: ['цена', 'цена продажи', 'розничная цена', 'price', 'retail price', 'unit price', 'preis', 'prix', 'precio', 'ціна', 'ფასი'] },
+  { key: 'cost', num: true, syn: ['себестоимость', 'закупочная цена', 'закупка', 'cost', 'purchase price', 'einkaufspreis', 'coût', 'coste', 'собівартість', 'თვითღირებულება'] },
+  { key: 'dailySales', num: true, syn: ['продажи в день', 'продаж в день', 'среднедневные продажи', 'daily sales', 'sales per day', 'sales day', 'avg daily sales', 'продажі на день', 'tagesabsatz', 'ventes par jour', 'ventas diarias', 'დღიური გაყიდვები', 'გაყიდვები დღეში'] },
+  { key: 'stock', num: true, syn: ['остаток', 'остатки', 'запас', 'на складе', 'stock', 'on hand', 'inventory', 'qty', 'quantity', 'залишок', 'bestand', 'existencias', 'ნაშთი', 'მარაგი'] },
+  { key: 'caseUnits', num: true, syn: ['в коробке', 'кратность', 'упаковка шт', 'case units', 'case', 'pack size', 'units per case', 'у коробці', 'karton', 'colis', 'caja', 'ყუთში'] },
+];
+
+// Rows of strings from a file: { headers, rows }.
+// Format detection: extension first, then the ZIP magic number "PK" (0x50 0x4B) for spreadsheets saved without an
+// extension. Text files: encoding detected (UTF-8/BOM/Windows-1251...) and delimiter sniffed, because Excel exports
+// semicolon CSV in many locales. Empty rows are dropped; at most 5000 data rows.
+export async function readTable(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const name = file.name.toLowerCase();
+  let grid;
+  if (/\.(xlsx|xlsm|ods)$/.test(name) || (bytes[0] === 0x50 && bytes[1] === 0x4b)) {
+    const book = /\.ods$/.test(name) ? await readODS(bytes) : await readXLSX(bytes);
+    const sheet = book.sheets.find((s) => !s.hidden && s.rows.some((r) => r && r.length)) || book.sheets[0];
+    grid = (sheet?.rows || []).map((r) => (r || []).map((c) => { const v = cellValue(c); return v == null ? '' : typeof v === 'object' ? String(v.code ?? '') : String(v); }));
+  } else {
+    const { text } = decodeBytes(bytes);
+    const sn = sniffCSV(text);
+    grid = parseCSV(text, { delimiter: sn.delimiter, quote: sn.quote ?? '"' });
+  }
+  grid = grid.filter((r) => r.some((c) => String(c).trim() !== ''));
+  if (!grid.length) return { headers: [], rows: [] };
+  const width = Math.max(...grid.map((r) => r.length));
+  const headers = Array.from({ length: width }, (_, i) => String(grid[0][i] ?? '').trim() || `#${i + 1}`);
+  return { headers, rows: grid.slice(1, 5001) };
+}
+
+// The mapping dialog -> { products, mode: 'merge' | 'replace' } or null.
+// Suggested mapping (similarity >= 0.55) prefilled; the user confirms or corrects each column. Without a name column
+// nothing can be imported. One squeeze value is applied to all three axes.
+export async function mappingDialog({ headers, rows }) {
+  const sug = suggestMapping(headers, FIELDS.map((f) => ({ key: f.key, synonyms: f.syn, label: t('pgs.f.' + f.key) })), {}, { min: 0.55 });
+  const map = {};
+  for (const [hd, f] of Object.entries(sug.columns)) if (f) map[f] = headers.indexOf(hd);
+  const selects = {};
+  const grid = h('div', { class: 'pgs-map' });
+  for (const f of FIELDS) {
+    const s = h('select', { class: 'ed-input ed-select', id: 'pgs-map-' + f.key },
+      h('option', { value: '-1' }, t('pgs.imp.skip')),
+      headers.map((hd, i) => h('option', { value: String(i), selected: map[f.key] === i }, hd)));
+    selects[f.key] = s;
+    grid.append(h('label', { class: 'ed-label', for: s.id }, t('pgs.f.' + f.key)), s);
+  }
+  let mode = 'merge';
+  const modeBox = h('div', { class: 'ed-seg', role: 'radiogroup', 'aria-label': t('pgs.imp.mode') }, ['merge', 'replace'].map((m) => {
+    const b = h('button', { type: 'button', role: 'radio', class: 'ed-seg-btn' + (m === mode ? ' ed-on' : ''), 'aria-checked': String(m === mode), dataset: { v: m }, onclick: () => {
+      mode = m;
+      for (const x of modeBox.children) { const on = x.dataset.v === m; x.classList.toggle('ed-on', on); x.setAttribute('aria-checked', String(on)); }
+    } }, t('pgs.imp.' + m));
+    return b;
+  }));
+  const body = h('div', { class: 'ed-fields' },
+    h('p', { class: 'ed-hint' }, t('pgs.imp.found', { n: rows.length })),
+    grid,
+    h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('pgs.imp.mode')), modeBox),
+    h('p', { class: 'ed-hint' }, t('pgs.imp.hint')));
+  const v = await openDialog({ title: t('pgs.imp.title'), body, wide: true, buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('pgs.imp.go'), value: 'go', primary: true }] });
+  if (v !== 'go') return null;
+  const col = Object.fromEntries(FIELDS.map((f) => [f.key, Number(selects[f.key].value)]));
+  if (col.name < 0) return null;
+  const products = [];
+  for (const r of rows) {
+    const get = (k) => (col[k] >= 0 ? String(r[col[k]] ?? '').trim() : '');
+    const name = get('name');
+    if (!name) continue;
+    const n = (k) => { const s = get(k); return s ? parseLooseNumber(s) : null; };
+    const sq = n('squeeze');
+    products.push(normProduct({
+      id: uid('p'), name, code: get('ean').replace(/\s+/g, '') || null, category: get('category') || null, brand: get('brand') || null,
+      width: n('width'), height: n('height'), depth: n('depth'), squeeze: sq != null ? { x: sq, y: sq, z: sq } : undefined,
+      price: n('price'), cost: n('cost'), dailySales: n('dailySales'), stock: n('stock'), caseUnits: n('caseUnits') ?? undefined,
+    }));
+  }
+  return { products, mode };
+}
+
+// Merge imported products into a library: the same EAN (or the same name without EAN) updates the product in place
+// and keeps its id, so positions stay; the rest are appended.
+// Merge keeps the existing id on a match so positions on fixtures keep pointing at the product; empty incoming values
+// (null, zero squeeze) never overwrite existing data. New products are not indexed during the loop, so two
+// identical new rows in one file are both appended.
+export function mergeProducts(library, incoming) {
+  const out = library.map((p) => ({ ...p }));
+  const byCode = new Map(out.filter((p) => p.code).map((p) => [p.code, p]));
+  const byName = new Map(out.map((p) => [p.name.toLowerCase(), p]));
+  let updated = 0, added = 0;
+  for (const p of incoming) {
+    const hit = (p.code && byCode.get(p.code)) || (!p.code && byName.get(p.name.toLowerCase()));
+    if (hit) {
+      for (const [k, v] of Object.entries(p)) if (k !== 'id' && v != null && !(k === 'squeeze' && !v.x && !v.y && !v.z)) hit[k] = v;
+      updated++;
+    } else { out.push(p); added++; }
+  }
+  return { products: out, updated, added };
+}

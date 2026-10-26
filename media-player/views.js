@@ -1,0 +1,344 @@
+// media-player/views.js - the library: home (continue, recently added, the mood mix of the hour, smart shelves,
+// playlists, quick actions), the sections (music: albums / artists / tracks / genres / years / compilations;
+// audiobooks: books / authors / series; anime and series: shows with progress, films; movies; music videos;
+// podcasts), detail pages (album with discs and editions, show with seasons and episodes, book with chapters and
+// bookmarks, movie, artist, author, genre / tag), search with the query language, and the mobile hubs.
+
+import { h } from '../ui/dom.js';
+import { t } from '../ui/i18n.js';
+import { facts } from '../catalog/facts.js';
+import { parseQuery, explain, FIELDS, sortWorks } from '../catalog/query.js';
+import { continueList, nextEpisode, setStatus, setScore } from '../catalog/tracking.js';
+import { resolveSmart, SMART_PRESETS, timeOfDay } from '../catalog/smart.js';
+import { itemsOf } from '../catalog/collections.js';
+import { sectionItems, artists, artistWorks, albums, discs, editions, genres, years, shows, seasons, authors, bookSeries, recent, searchAll, worksOf } from '../catalog/browse.js';
+import { tagIndex } from '../catalog/tags.js';
+import { STATUSES, displayTitle, matchKey } from '../catalog/model.js';
+import { workRow, workCard, coverEl, presenceBadge, tagChip, section, grid, shelf, empty, btn, iconBtn, tabs, fmtTime, fmtDuration, fmtDate, subtitleOf, iconEl } from './ui.js';
+
+const header = (title, sub, ...actions) => h('div', { class: 'mp-head' }, h('div', {}, h('h1', { class: 'mp-h1' }, title), sub ? h('p', { class: 'mp-sub' }, sub) : null), actions.length ? h('div', { class: 'mp-actions' }, actions) : null);
+
+// Home is assembled from independent shelves, each shown only when non-empty, so a fresh library shows a clean page
+// instead of a wall of empty sections. The mood mix uses a user mood playlist if one exists, else an ad-hoc smart
+// query for the time of day.
+function home(app, main) {
+  const { db } = app;
+  const tod = timeOfDay();
+  main.append(header(t('mp.home.' + tod), t('mp.home.sub', { n: db.count('work') }), btn(t('mp.add'), 'plus', () => app.addMedia(), 'primary')));
+  const cont = continueList(db, { limit: 16 });
+  if (cont.length) {
+    main.append(section(t('mp.home.continue'), shelf(cont.map((c) => {
+      const d = c.media && c.media.duration;
+      return workCard(app, c.work, { subtitle: c.reason === 'resume' ? t('mp.resumeAt', { t: fmtTime(c.position) }) : c.reason === 'next' ? t('mp.nextUp', { s: subtitleOf(db, c.work) }) : subtitleOf(db, c.work), progress: c.reason === 'resume' && d ? c.position / d : undefined, onOpen: (w) => app.playWork(w) });
+    }))));
+  }
+  const mood = db.all('collection').find((c) => c.kind === 'mood');
+  const mix = mood ? itemsOf(db, mood).slice(0, 12) : resolveSmart(db, { query: `tod:${tod} OR mood:calm`, kinds: ['track'], pick: 'random', limit: { count: 12 } });
+  if (mix.length) main.append(section(t('mp.home.mix.' + tod), h('div', { class: 'mp-actions' }, btn(t('mp.playAll'), 'play', () => app.playList(mix), 'primary'), mood ? btn(t('mp.open'), 'list', () => app.nav('playlist/' + mood.id)) : null), shelf(mix.map((w) => workCard(app, w, { onOpen: (x) => app.playWork(x, { list: mix }) })))));
+  const rec = recent(db, { limit: 18 });
+  if (rec.length) main.append(section(t('mp.home.recent'), shelf(rec.map((w) => workCard(app, w)))));
+  const colls = db.all('collection');
+  if (colls.length) main.append(section(t('mp.nav.playlists'), shelf(colls.slice(0, 18).map((c) => collCard(app, c)))));
+  const shelvesOf = SMART_PRESETS.filter((p) => ['topRated', 'neverPlayed', 'wishlist', 'downloadable'].includes(p.id));
+  for (const p of shelvesOf) {
+    const list = resolveSmart(db, p).slice(0, 14);
+    if (list.length) main.append(section(t('mp.smart.' + p.id), shelf(list.map((w) => workCard(app, w)))));
+  }
+  const counts = ['music', 'audiobook', 'anime', 'series', 'movie', 'musicvideo', 'podcast'].map((d) => [d, sectionItems(db, d).length]).filter(([, n]) => n);
+  main.append(section(t('mp.home.library'), h('div', { class: 'mp-tiles' }, counts.map(([d, n]) => h('a', { class: 'mp-tile', href: '#/' + SECTION_ROUTE[d], dataset: { focus: '1' } }, iconEl(SECTION_ICON[d]), h('b', {}, t('mp.domain.' + d)), h('span', {}, String(n)))))));
+  if (!db.count('work')) main.append(empty(t('mp.home.empty'), btn(t('mp.add'), 'plus', () => app.addMedia(), 'primary'), btn(t('mp.demo.load'), 'wand', () => app.seedDemo(true))));
+}
+
+const SECTION_ROUTE = { music: 'music', audiobook: 'audiobooks', anime: 'anime', series: 'series', movie: 'movies', musicvideo: 'videos', podcast: 'podcasts' };
+const SECTION_ICON = { music: 'music', audiobook: 'book', anime: 'anime', series: 'tv', movie: 'film', musicvideo: 'video', podcast: 'mic' };
+
+export function collCard(app, c) {
+  const items = itemsOf(app.db, c, { expand: false });
+  const art = h('div', { class: 'mp-card-art mp-collage' });
+  const firsts = items.slice(0, 4);
+  if (c.cover) art.append(coverEl(app.db, c, { size: 320 }));
+  else if (firsts.length >= 4) for (const w of firsts) art.append(coverEl(app.db, w, { size: 160 }));
+  else art.append(coverEl(app.db, firsts[0] || c, { size: 320 }));
+  const card = h('div', { class: 'mp-card', tabindex: '0', role: 'button', dataset: { focus: '1' } }, art, h('div', { class: 'mp-card-t' }, c.name || t('mp.untitled')), h('div', { class: 'mp-card-s' }, t('mp.coll.' + c.kind) + ' · ' + t('mp.nItems', { n: items.length })));
+  card.addEventListener('click', () => app.nav('playlist/' + c.id));
+  card.addEventListener('keydown', (e) => { if (e.key === 'Enter') card.click(); });
+  return card;
+}
+
+// A grid or list of works with a sort selector and a grid / list toggle.
+// View preferences (sort, grid / list) live in app.ui, per panel key: kept across re-renders and navigation within
+// the session, not persisted. Rendering is capped (600 cards / 2000 rows) to keep a giant library responsive;
+// "play all" still uses the full list.
+function worksPanel(app, list, { sorts = [['title', 'mp.sort.title'], ['-added', 'mp.sort.added'], ['-year', 'mp.sort.year'], ['-plays', 'mp.sort.plays']], key = 'default', card = true } = {}) {
+  const st = app.ui = app.ui || {};
+  const mode = st['mode:' + key] || (card ? 'grid' : 'list');
+  const sort = st['sort:' + key] || sorts[0][0];
+  const box = h('div', { class: 'mp-panel' });
+  const bar = h('div', { class: 'mp-toolbar' },
+    h('select', { class: 'ed-input ed-select', 'aria-label': t('mp.sort'), onchange: (e) => { st['sort:' + key] = e.target.value; app.refresh(); } }, sorts.map(([v, l]) => h('option', { value: v, selected: v === sort }, t(l)))),
+    h('span', { class: 'mp-count' }, t('mp.nItems', { n: list.length })), h('span', { class: 'ed-spacer' }),
+    btn(t('mp.playAll'), 'play', () => app.playList(list)), btn(t('mp.shuffle'), 'shuffle', () => app.playList(list, { shuffle: 'artist' })),
+    iconBtn(mode === 'grid' ? 'rows' : 'grid', t('mp.toggleView'), () => { st['mode:' + key] = mode === 'grid' ? 'list' : 'grid'; app.refresh(); }));
+  const sorted = sortWorks(app.db, list, sort);
+  box.append(bar, mode === 'grid' ? grid(sorted.slice(0, 600).map((w) => workCard(app, w))) : h('div', { class: 'mp-list', role: 'grid' }, sorted.slice(0, 2000).map((w) => workRow(app, w))));
+  return box;
+}
+
+// Note: unused placeholder.
+const sortHook = () => {};
+
+function music(app, main, [tab = 'albums']) {
+  sortHook(app);
+  const { db } = app;
+  main.append(header(t('mp.nav.music'), null, btn(t('mp.add'), 'plus', () => app.addMedia({ domain: 'music' }))));
+  main.append(tabs([['albums', t('mp.music.albums')], ['artists', t('mp.music.artists')], ['tracks', t('mp.music.tracks')], ['genres', t('mp.music.genres')], ['years', t('mp.music.years')], ['compilations', t('mp.music.compilations')]], tab, (k) => app.nav('music/' + k)));
+  if (tab === 'artists') {
+    const list = artists(db);
+    main.append(list.length ? grid(list.map((a) => {
+      const c = h('div', { class: 'mp-card mp-artist', tabindex: '0', role: 'button', dataset: { focus: '1' } }, h('div', { class: 'mp-card-art' }, coverEl(db, db.get(a.cover) || { type: 'work', kind: 'album', title: a.name }, { size: 256, round: true })), h('div', { class: 'mp-card-t' }, a.name), h('div', { class: 'mp-card-s' }, t('mp.nAlbums', { n: a.albums.length }) + ' · ' + t('mp.nTracks', { n: a.tracks })));
+      c.addEventListener('click', () => app.nav('artist/' + encodeURIComponent(a.key)));
+      c.addEventListener('keydown', (e) => { if (e.key === 'Enter') c.click(); });
+      return c;
+    })) : empty(t('mp.empty.music')));
+  } else if (tab === 'tracks') {
+    main.append(worksPanel(app, worksOf(db, 'music', ['track']), { key: 'tracks', card: false, sorts: [['artist album track', 'mp.sort.artist'], ['title', 'mp.sort.title'], ['-added', 'mp.sort.added'], ['-plays', 'mp.sort.plays'], ['-energy', 'mp.sort.energy'], ['bpm', 'mp.sort.bpm']] }));
+  } else if (tab === 'genres') {
+    const g = genres(db);
+    main.append(g.length ? h('div', { class: 'mp-chips mp-chips-big' }, g.map((x) => h('a', { class: 'mp-chip mp-chip-big', href: '#/tag/' + encodeURIComponent(x.key), dataset: { focus: '1' } }, h('span', {}, x.name), h('small', {}, String(x.count))))) : empty(t('mp.empty.genres')));
+  } else if (tab === 'years') {
+    const y = years(db, 'music');
+    const dec = new Map();
+    for (const { year, count } of y) { const d = Math.floor(year / 10) * 10; if (!dec.has(d)) dec.set(d, []); dec.get(d).push([year, count]); }
+    main.append(y.length ? h('div', { class: 'mp-years' }, [...dec].map(([d, ys]) => h('div', { class: 'mp-decade' }, h('h3', {}, t('mp.decade', { d })), h('div', { class: 'mp-chips' }, ys.map(([yr, n]) => h('a', { class: 'mp-chip', href: '#/search?q=' + encodeURIComponent('year:' + yr + ' kind:album'), dataset: { focus: '1' } }, `${yr} · ${n}`)))))) : empty(t('mp.empty.music')));
+  } else if (tab === 'compilations') {
+    main.append(worksPanel(app, worksOf(db, 'music', ['album']).filter((w) => w.compilation), { key: 'comp' }));
+  } else {
+    main.append(worksPanel(app, albums(db), { key: 'albums', sorts: [['artist year title', 'mp.sort.artist'], ['title', 'mp.sort.title'], ['-year', 'mp.sort.year'], ['-added', 'mp.sort.added'], ['-plays', 'mp.sort.plays']] }));
+    const loose = sectionItems(db, 'music').filter((w) => w.kind === 'track');
+    if (loose.length) main.append(section(t('mp.music.singles'), h('div', { class: 'mp-list' }, loose.map((w) => workRow(app, w)))));
+  }
+}
+
+function audiobooks(app, main, [tab = 'books']) {
+  sortHook(app);
+  const { db } = app;
+  main.append(header(t('mp.nav.audiobooks'), null, btn(t('mp.add'), 'plus', () => app.addMedia({ domain: 'audiobook' }))));
+  main.append(tabs([['books', t('mp.books.books')], ['authors', t('mp.books.authors')], ['series', t('mp.books.series')]], tab, (k) => app.nav('audiobooks/' + k)));
+  if (tab === 'authors') main.append(h('div', { class: 'mp-list' }, authors(db).map((a) => h('a', { class: 'mp-row', href: '#/author/' + encodeURIComponent(a.key), dataset: { focus: '1' } }, h('div', { class: 'mp-row-main' }, h('div', { class: 'mp-row-t' }, a.name), h('div', { class: 'mp-row-s' }, t('mp.nBooks', { n: a.books.length })))))));
+  else if (tab === 'series') main.append(...bookSeries(db).map((s) => section(s.title, shelf(s.books.map((b) => workCard(app, b, { subtitle: b.order ? t('mp.bookN', { n: b.order }) : subtitleOf(db, b) }))))));
+  else main.append(worksPanel(app, worksOf(db, 'audiobook', ['book']), { key: 'books' }));
+}
+
+function showsView(domain, titleKey) {
+  return (app, main, [tab = 'shows']) => {
+    sortHook(app);
+    const { db } = app;
+    main.append(header(t(titleKey), null, btn(t('mp.add'), 'plus', () => app.addMedia({ domain })), btn(t('mp.nav.tracking'), 'chart', () => app.nav('tracking/' + domain))));
+    const list = shows(db, domain);
+    const films = sectionItems(db, domain).filter((w) => w.kind === 'movie');
+    if (films.length) main.append(tabs([['shows', t('mp.shows')], ['movies', t('mp.films')]], tab, (k) => app.nav(SECTION_ROUTE[domain] + '/' + k)));
+    const items = tab === 'movies' ? films : list;
+    main.append(items.length ? grid(items.map((w) => {
+      const f = facts(db, w);
+      const tr = trackOfShow(db, w);
+      return workCard(app, w, { progress: tr && f.total ? Math.min(1, (tr.progress || 0) / f.total) : undefined, subtitle: tr ? t('mp.status.' + tr.status) + (tr.progress ? ` · ${tr.progress}${f.total ? '/' + f.total : ''}` : '') : subtitleOf(db, w) });
+    })) : empty(t('mp.empty.' + domain), btn(t('mp.add'), 'plus', () => app.addMedia({ domain }))));
+  };
+}
+
+const trackOfShow = (db, w) => w.track || db.children(w.id).map((c) => c.track).find(Boolean) || null;
+
+function simpleSection(domain, titleKey, kinds) {
+  return (app, main) => {
+    sortHook(app);
+    main.append(header(t(titleKey), null, btn(t('mp.add'), 'plus', () => app.addMedia({ domain }))));
+    const list = worksOf(app.db, domain, kinds);
+    main.append(list.length ? worksPanel(app, list, { key: domain }) : empty(t('mp.empty.' + domain), btn(t('mp.add'), 'plus', () => app.addMedia({ domain }))));
+  };
+}
+
+// --- detail pages ---------------------------------------------------------------------------------------------------
+
+function trackingBox(app, w) {
+  const { db } = app;
+  const tr = w.track || {};
+  const f = facts(db, w);
+  const statusSel = h('select', { class: 'ed-input ed-select', 'aria-label': t('mp.track.status') }, [h('option', { value: '' }, t('mp.track.none')), ...STATUSES.map((s) => h('option', { value: s, selected: tr.status === s }, t('mp.status.' + s + '.' + (f.domain === 'audiobook' ? 'book' : f.domain === 'music' ? 'music' : 'video'))))]);
+  statusSel.addEventListener('change', () => { if (statusSel.value) setStatus(db, w.id, statusSel.value); else db.patch(w.id, { track: undefined }); });
+  const score = h('select', { class: 'ed-input ed-select', 'aria-label': t('mp.track.score') }, [h('option', { value: '' }, '—'), ...Array.from({ length: 10 }, (_, i) => h('option', { value: String(10 - i), selected: Math.round(tr.score || 0) === 10 - i }, `${10 - i} · ${t('mp.score.' + (10 - i))}`))]);
+  score.addEventListener('change', () => setScore(db, w.id, score.value ? Number(score.value) : null));
+  const total = f.total || db.children(w.id).filter((c) => !c.special).length;
+  const prog = h('input', { type: 'number', class: 'ed-input mp-num', min: 0, max: total || 9999, value: tr.progress || 0, 'aria-label': t('mp.track.progress') });
+  prog.addEventListener('change', () => import('../catalog/tracking.js').then((m) => m.setProgress(db, w.id, Number(prog.value) || 0)));
+  return h('div', { class: 'mp-trackbox' }, h('label', {}, h('span', {}, t('mp.track.status')), statusSel), h('label', {}, h('span', {}, t('mp.track.score')), score),
+    h('label', {}, h('span', {}, t('mp.track.progress')), h('span', { class: 'mp-inline' }, prog, total ? h('span', {}, '/ ' + total) : null)),
+    tr.repeats ? h('span', { class: 'mp-muted' }, t('mp.track.repeats', { n: tr.repeats })) : null,
+    tr.started ? h('span', { class: 'mp-muted' }, t('mp.track.started', { d: fmtDate(tr.started) })) : null,
+    tr.finished ? h('span', { class: 'mp-muted' }, t('mp.track.finished', { d: fmtDate(tr.finished) })) : null);
+}
+
+function heroOf(app, w, { subtitle, actions = [], extra = [] } = {}) {
+  const { db } = app;
+  const f = facts(db, w);
+  const tags = [...(w.tags || [])].slice(0, 16);
+  const alt = Object.entries(w.titles || {}).filter(([, v]) => v && v !== f.title);
+  return h('div', { class: 'mp-hero' },
+    h('div', { class: 'mp-hero-art' }, coverEl(db, w, { size: 512, eager: true })),
+    h('div', { class: 'mp-hero-info' },
+      h('div', { class: 'mp-kicker' }, t('mp.kind.' + w.kind), ' ', presenceBadge(f.presence)),
+      h('h1', { class: 'mp-h1' }, f.title || t('mp.untitled')),
+      alt.length ? h('p', { class: 'mp-alt' }, alt.map(([k, v]) => h('span', { title: t('mp.title.' + k) }, v))) : null,
+      h('p', { class: 'mp-sub' }, subtitle ?? subtitleOf(db, w)),
+      w.description ? h('p', { class: 'mp-desc' }, String(w.description).slice(0, 1200)) : null,
+      tags.length ? h('div', { class: 'mp-chips' }, tags.map((x) => tagChip(db, tagIndex(db).canon(x), { onClick: (k) => app.nav('tag/' + encodeURIComponent(k)) }))) : null,
+      h('div', { class: 'mp-actions' }, btn(t('mp.play'), 'play', () => app.playWork(w), 'primary'), btn(t('mp.shuffle'), 'shuffle', () => app.playWork(w, { shuffle: 'random' })), ...actions,
+        btn(t('mp.edit'), 'edit', () => app.edit(w)), iconBtn(w.favorite ? 'heart' : 'heart', w.favorite ? t('mp.unlike') : t('mp.like'), () => db.patch(w.id, { favorite: !w.favorite }), w.favorite ? 'mp-liked' : ''), iconBtn('more', t('mp.more'), (e) => app.workMenu(w, e.currentTarget))),
+      ...extra));
+}
+
+function workPage(app, main, [id], query) {
+  const { db } = app;
+  const w = db.get(id);
+  if (!w) { main.append(empty(t('mp.notFound'))); return; }
+  const f = facts(db, w);
+  const focus = query.focus;
+  const listOf = (items, opts = {}) => h('div', { class: 'mp-list', role: 'grid' }, items.map((x, i) => { const r = workRow(app, x, { onPlay: (y) => app.playWork(y, { list: items }), onOpen: (y) => (opts.open ? opts.open(y) : app.playWork(y, { list: items })), number: opts.numbers ? (x.order ?? x.episode ?? i + 1) : undefined }); if (x.id === focus) { r.classList.add('mp-focus'); setTimeout(() => r.scrollIntoView({ block: 'center' }), 60); } return r; }));
+  if (w.kind === 'album') {
+    main.append(heroOf(app, w, { subtitle: [f.albumartist.join(', ') || f.artist.join(', '), f.year, t('mp.nTracks', { n: db.children(w.id).length }), fmtDuration(f.duration)].filter(Boolean).join(' · ') }));
+    const ds = discs(db, w.id);
+    for (const d of ds) main.append(section(ds.length > 1 ? t('mp.disc', { n: d.disc }) : null, listOf(d.tracks, { numbers: true })));
+    const ed = editions(db, w.id);
+    if (ed.length) main.append(section(t('mp.editions'), shelf(ed.map((x) => workCard(app, x)))));
+    const own = db.mediaOf(w.id);
+    if (own.length) main.append(mediaSection(app, w, own));
+  } else if (w.kind === 'show' || w.kind === 'season' || w.kind === 'podcast') {
+    const tracked = w.kind === 'season' ? w : (db.children(w.id).find((c) => c.track) && w.kind === 'show' ? null : w);
+    main.append(heroOf(app, w, { extra: [w.kind !== 'podcast' ? trackingBox(app, tracked || w) : null] }));
+    const ss = w.kind === 'season' ? [{ season: w.season, work: w, episodes: db.children(w.id) }] : seasons(db, w.id);
+    const st = app.ui = app.ui || {};
+    let cur = st['season:' + w.id] ?? (ss[0] ? ss[0].season : 1);
+    if (!ss.some((s) => s.season === cur) && ss[0]) cur = ss[0].season;
+    if (ss.length > 1) main.append(tabs(ss.map((s) => [s.season, s.season === 0 ? t('mp.specials') : s.work ? s.work.title : t('mp.season', { n: s.season })]), cur, (k) => { st['season:' + w.id] = k; app.refresh(); }));
+    const s = ss.find((x) => x.season === cur);
+    if (s) {
+      if (s.work && s.work !== w && w.kind === 'show') main.append(h('div', { class: 'mp-seasonbar' }, h('b', {}, s.work.title), s.work.track || w.kind === 'show' ? trackingBox(app, s.work) : null));
+      const next = nextEpisode(db, s.work ? s.work.id : w.id);
+      if (next) main.append(h('div', { class: 'mp-actions' }, btn(t('mp.playNext', { s: subtitleOf(db, next) }), 'play', () => app.playWork(next, { list: s.episodes }), 'primary')));
+      main.append(listOf(s.episodes, { numbers: true }));
+    }
+    const films = db.all('work').filter((x) => x.kind === 'movie' && x.parent === w.id);
+    if (films.length) main.append(section(t('mp.films'), shelf(films.map((x) => workCard(app, x)))));
+  } else if (w.kind === 'book' || w.kind === 'bookseries') {
+    main.append(heroOf(app, w, { extra: [w.kind === 'book' ? trackingBox(app, w) : null] }));
+    const kids = db.children(w.id);
+    if (w.kind === 'bookseries') main.append(shelf(kids.map((b) => workCard(app, b, { subtitle: b.order ? t('mp.bookN', { n: b.order }) : '' }))));
+    else {
+      if (kids.length) main.append(section(t('mp.chapters'), listOf(kids, { numbers: true })));
+      const own = db.mediaOf(w.id);
+      const ch = own.find((m) => (m.chapters || []).length);
+      if (ch) main.append(section(t('mp.chapters'), h('div', { class: 'mp-list' }, ch.chapters.map((c, i) => h('div', { class: 'mp-row', tabindex: '0', onclick: () => app.engine.playWorks([w.id]).then(() => app.engine.seek(c.start)) }, h('span', { class: 'mp-row-n' }, String(i + 1)), h('div', { class: 'mp-row-main' }, h('div', { class: 'mp-row-t' }, c.title || t('mp.chapterN', { n: i + 1 }))), h('span', { class: 'mp-row-d' }, fmtTime(c.start)))))));
+      const marks = [...own, ...kids.flatMap((k) => db.mediaOf(k.id))].flatMap((m) => (m.bookmarks || []).map((b) => ({ ...b, media: m })));
+      if (marks.length) main.append(section(t('mp.bookmarks'), h('div', { class: 'mp-list' }, marks.map((b) => h('div', { class: 'mp-row', tabindex: '0', onclick: () => app.engine.playWorks([b.media.work]).then(() => app.engine.seek(b.at)) }, iconEl('bookmark'), h('div', { class: 'mp-row-main' }, h('div', { class: 'mp-row-t' }, b.title || fmtTime(b.at)), h('div', { class: 'mp-row-s' }, displayTitle(db.get(b.media.work)) + ' · ' + fmtTime(b.at))))))));
+      if (own.length) main.append(mediaSection(app, w, own));
+    }
+  } else {
+    main.append(heroOf(app, w, { extra: [['movie', 'musicvideo'].includes(w.kind) ? trackingBox(app, w) : null] }));
+    if (w.lyrics && (w.lyrics.text || w.lyrics.lrc)) main.append(section(t('mp.lyrics'), h('pre', { class: 'mp-lyrics-static' }, w.lyrics.text || (w.lyrics.lrc || '').replace(/\[[^\]]*\]|<[^>]*>/g, ''))));
+    main.append(mediaSection(app, w, db.mediaOf(w.id)));
+    if (w.parent && db.get(w.parent)) main.append(section(t('mp.partOf'), shelf([workCard(app, db.get(w.parent))])));
+  }
+}
+
+function mediaSection(app, w, list) {
+  const { db } = app;
+  const rows = list.map((m) => h('div', { class: 'mp-media-row' },
+    presenceBadge(m.presence),
+    h('div', { class: 'mp-row-main' }, h('div', { class: 'mp-row-t' }, m.name || (m.source && (m.source.title || m.source.ref)) || (m.nominal ? t('mp.nominalInfo') : t('mp.media'))),
+      h('div', { class: 'mp-row-s' }, [m.version, m.quality, m.container, m.audio && m.audio.codec, m.video && m.video.height ? m.video.height + 'p' : '', m.lang, m.duration ? fmtTime(m.duration) : '', m.missing ? t('mp.missing') : '', (m.subs || []).length ? t('mp.nSubs', { n: m.subs.length }) : ''].filter(Boolean).join(' · '))),
+    m.presence !== 'nominal' ? iconBtn('play', t('mp.play'), () => app.engine.playWorks([w.id])) : null,
+    iconBtn('more', t('mp.more'), (e) => app.workMenu(w, e.currentTarget, { media: m }))));
+  return section(t('mp.mediaOf'), h('div', { class: 'mp-list' }, rows.length ? rows : h('p', { class: 'mp-muted' }, t('mp.noMedia'))), h('div', { class: 'mp-actions' }, btn(t('mp.makePlayable'), 'link', () => import('./edit.js').then((m) => m.attachDialog(app, w, {})))));
+}
+
+function artistPage(app, main, [key]) {
+  const { db } = app;
+  const a = artists(db, { role: 'artist' }).find((x) => x.key === key) || artists(db).find((x) => x.key === key);
+  const name = a ? a.name : key;
+  const res = artistWorks(db, key);
+  main.append(header(name, [t('mp.nAlbums', { n: res.albums.length }), t('mp.nTracks', { n: res.tracks.length })].join(' · '), btn(t('mp.playAll'), 'play', () => app.playList(res.tracks), 'primary'), btn(t('mp.shuffle'), 'shuffle', () => app.playList(res.tracks, { shuffle: 'album' }))));
+  if (res.albums.length) main.append(section(t('mp.music.albums'), grid(res.albums.map((w) => workCard(app, w)))));
+  if (res.tracks.length) main.append(section(t('mp.topTracks'), h('div', { class: 'mp-list' }, res.tracks.slice(0, 10).map((w) => workRow(app, w, { onPlay: (x) => app.playWork(x, { list: res.tracks }) })))));
+  if (res.appearsOn.length) main.append(section(t('mp.appearsOn'), shelf(res.appearsOn.map((w) => workCard(app, w)))));
+  if (res.videos.length) main.append(section(t('mp.nav.videos'), shelf(res.videos.map((w) => workCard(app, w)))));
+}
+
+function authorPage(app, main, [key]) {
+  const { db } = app;
+  const a = authors(db).find((x) => x.key === key);
+  main.append(header(a ? a.name : key, null));
+  main.append(grid((a ? a.books : []).map((id) => workCard(app, db.get(id)))));
+}
+
+function tagPage(app, main, [key]) {
+  sortHook(app);
+  const ix = tagIndex(app.db);
+  // Works with the tag (children of a container that has it are represented by the container).
+  const items = app.db.all('work').filter((w) => facts(app.db, w).tags.has(key) && !(w.parent && app.db.get(w.parent) && facts(app.db, app.db.get(w.parent)).tags.has(key)));
+  main.append(header(ix.label(key), t('mp.nItems', { n: items.length }), btn(t('mp.saveSmart'), 'wand', async () => { const { createCollection } = await import('../catalog/collections.js'); const c = createCollection(app.db, 'smart', { name: ix.label(key), query: 'tag:' + key }); app.nav('playlist/' + c.id); })));
+  const d = ix.def(key);
+  if (d && (d.implies || []).length) main.append(h('p', { class: 'mp-muted' }, t('mp.tag.implies', { list: d.implies.join(', ') })));
+  main.append(worksPanel(app, items, { key: 'tag' }));
+}
+
+// Results live in a data-live container and are rebuilt on input (180 ms debounce) without re-rendering the view,
+// so the input keeps focus and caret; the query is mirrored to the hash with replaceState (shareable, no history spam).
+function search(app, main, params, query) {
+  const q = query.q || '';
+  const { db } = app;
+  main.append(header(t('mp.nav.search'), null));
+  const input = h('input', { type: 'search', class: 'ed-input mp-bigsearch', value: q, placeholder: t('mp.search.ph'), 'aria-label': t('mp.nav.search') });
+  const results = h('div', { class: 'mp-results', 'data-live': '1' });
+  const help = h('details', { class: 'mp-help' }, h('summary', {}, t('mp.search.syntax')), h('div', { class: 'mp-help-body' },
+    h('p', {}, t('mp.search.help1')),
+    h('div', { class: 'mp-chips' }, ['genre:jazz', 'mood:calm -kind:show', 'year:1990..1999 kind:album', 'duration:<5m is:unplayed', 'presence:nominal', 'domain:anime status:watching', 'added:<30d', 'score:>=8', 'has:lyrics', 'artist:"daft punk" OR artist:justice', 'energy:>=7 bpm:>=120'].map((ex) => h('button', { type: 'button', class: 'mp-chip', onclick: () => { input.value = ex; run(); } }, ex))),
+    h('p', { class: 'mp-muted' }, t('mp.search.fields') + ' ' + Object.keys(FIELDS).join(', '))));
+  const run = () => {
+    const text = input.value;
+    history.replaceState(null, '', '#/search?q=' + encodeURIComponent(text));
+    results.textContent = '';
+    if (!text.trim()) { results.append(empty(t('mp.search.hint'))); return; }
+    const p = parseQuery(text);
+    results.append(h('p', { class: 'mp-muted mp-explain' }, explain(p.ast), p.warnings.length ? ' · ' + p.warnings.join(', ') : ''));
+    const r = searchAll(db, text, { limit: 40 });
+    const domains = Object.keys(r.works);
+    if (!domains.length && !r.people.length && !r.tags.length) results.append(empty(t('mp.search.none')));
+    results.append(h('div', { class: 'mp-actions' }, btn(t('mp.saveSmart'), 'wand', async () => { const { createCollection } = await import('../catalog/collections.js'); const c = createCollection(db, 'smart', { name: text.slice(0, 60), query: text }); app.nav('playlist/' + c.id); }), btn(t('mp.playAll'), 'play', () => app.playList(Object.values(r.works).flat()))));
+    for (const d of domains) results.append(section(t('mp.domain.' + d), h('div', { class: 'mp-list' }, r.works[d].map((w) => workRow(app, w)))));
+    if (r.people.length) results.append(section(t('mp.people'), h('div', { class: 'mp-chips' }, r.people.map((p) => h('a', { class: 'mp-chip', href: '#/artist/' + encodeURIComponent(p.key) }, p.name)))));
+    if (r.tags.length) results.append(section(t('mp.nav.tags'), h('div', { class: 'mp-chips' }, r.tags.map((k) => tagChip(db, k, { onClick: (x) => app.nav('tag/' + encodeURIComponent(x)) })))));
+    if (r.collections.length) results.append(section(t('mp.nav.playlists'), shelf(r.collections.map((c) => collCard(app, c)))));
+  };
+  let timer = null;
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 180); });
+  main.append(input, help, results);
+  run();
+  if (!q) setTimeout(() => input.focus(), 30);
+}
+
+function library(app, main) {
+  main.append(header(t('mp.nav.library'), null));
+  main.append(h('div', { class: 'mp-tiles' }, [['music', 'music', 'mp.nav.music'], ['audiobooks', 'book', 'mp.nav.audiobooks'], ['anime', 'anime', 'mp.nav.anime'], ['series', 'tv', 'mp.nav.series'], ['movies', 'film', 'mp.nav.movies'], ['videos', 'video', 'mp.nav.videos'], ['podcasts', 'mic', 'mp.nav.podcasts'], ['tags', 'tag', 'mp.nav.tags'], ['tracking', 'chart', 'mp.nav.tracking'], ['workspaces', 'folderTree', 'mp.nav.workspaces']].map(([r, ic, k]) => h('a', { class: 'mp-tile', href: '#/' + r, dataset: { focus: '1' } }, iconEl(ic), h('b', {}, t(k))))));
+}
+
+function more(app, main) {
+  main.append(header(t('mp.nav.more'), null));
+  main.append(h('div', { class: 'mp-tiles' }, [['sources', 'source', 'mp.nav.sources'], ['convert', 'convert', 'mp.nav.convert'], ['studio', 'palette', 'mp.nav.studio'], ['settings', 'settings', 'mp.nav.settings'], ['settings/exchange', 'export', 'mp.set.exchange'], ['stats', 'chart', 'mp.stats']].map(([r, ic, k]) => h('a', { class: 'mp-tile', href: '#/' + r, dataset: { focus: '1' } }, iconEl(ic), h('b', {}, t(k))))));
+  main.append(h('div', { class: 'mp-actions' }, btn(t('mp.view.theatre'), 'theatre', () => app.setView('theatre')), btn(t('mp.view.desktop'), 'grid', () => app.setView('desktop'))));
+}
+
+export const VIEWS = {
+  home, music, audiobooks, anime: showsView('anime', 'mp.nav.anime'), series: showsView('series', 'mp.nav.series'),
+  movies: simpleSection('movie', 'mp.nav.movies', ['movie']), videos: simpleSection('musicvideo', 'mp.nav.videos', ['musicvideo']),
+  podcasts: showsView('podcast', 'mp.nav.podcasts'), work: workPage, artist: artistPage, author: authorPage, tag: tagPage, search, library, more,
+};
+export { header, worksPanel, trackingBox };

@@ -1,0 +1,14 @@
+let CRC_TABLE=null;function crcTable(){if(CRC_TABLE)return CRC_TABLE;CRC_TABLE=new Uint32Array(256);for(let i=0;i<256;i++){let r=i<<24;for(let k=0;k<8;k++)r=r&0x80000000?(r<<1)^0x04c11db7:r<<1;CRC_TABLE[i]=r>>>0;}
+return CRC_TABLE;}
+function oggCrc(bytes,start=0,end=bytes.length,prev=0){const T=crcTable();let c=prev>>>0;for(let i=start;i<end;i++)c=((c<<8)^T[((c>>>24)^bytes[i])&0xff])>>>0;return c;}
+const asBytes=(b)=>(b instanceof Uint8Array?b:ArrayBuffer.isView(b)?new Uint8Array(b.buffer,b.byteOffset,b.byteLength):new Uint8Array(b));function concat(parts){if(parts.length===1)return parts[0];const n=parts.reduce((a,x)=>a+x.length,0);const out=new Uint8Array(n);let o=0;for(const x of parts){out.set(x,o);o+=x.length;}
+return out;}
+function writePage({data,lacing,serial=0,seq=0,granule=0,bos=false,eos=false,continued=false}){const hdr=27+lacing.length;const out=new Uint8Array(hdr+data.length);const dv=new DataView(out.buffer);out.set([0x4f,0x67,0x67,0x53,0]);out[5]=(continued?1:0)|(bos?2:0)|(eos?4:0);if(granule<0){dv.setUint32(6,0xffffffff,true);dv.setUint32(10,0xffffffff,true);}
+else{dv.setUint32(6,granule%4294967296,true);dv.setUint32(10,Math.floor(granule/4294967296),true);}
+dv.setUint32(14,serial>>>0,true);dv.setUint32(18,seq>>>0,true);out[26]=lacing.length;out.set(lacing,27);out.set(data,hdr);dv.setUint32(22,oggCrc(out),true);return out;}
+class OggWriter{constructor({serial,pageSize=4096}={}){this.serial=serial==null?(Math.random()*0xffffffff)>>>0:serial>>>0;this.pageSize=pageSize;this.seq=0;this.out=[];this.segs=[];this.chunks=[];this.len=0;this.granule=-1;this.lastGranule=0;this.cont=false;this.ended=false;}
+addPacket(packet,granule,{flush=false,eos=false}={}){if(this.ended)throw new Error('OggWriter: stream already ended');const data=asBytes(packet);let off=0;for(;;){const n=Math.min(255,data.length-off);this.segs.push(n);this.chunks.push(data.subarray(off,off+n));this.len+=n;off+=n;const last=n<255;if(last)this.granule=this.lastGranule=granule;if(this.segs.length===255&&!last)this.emit(false,true);else if(this.segs.length===255||(this.len>=this.pageSize&&!last))this.emit(false,!last);if(last)break;}
+if(eos){this.emit(true,false);this.ended=true;}else if(flush||this.len>=this.pageSize)this.emit(false,false);}
+emit(eos,nextCont){if(!this.segs.length&&!eos)return;if(!this.segs.length)this.granule=this.lastGranule;const data=concat(this.chunks.length?this.chunks:[new Uint8Array(0)]);this.out.push(writePage({data,lacing:this.segs,serial:this.serial,seq:this.seq,granule:this.granule,bos:this.seq===0,eos,continued:this.cont,}));this.seq++;this.segs=[];this.chunks=[];this.len=0;this.granule=-1;this.cont=nextCont;}
+bytes(){if(!this.ended&&this.segs.length)this.emit(false,false);return concat(this.out.length?this.out:[new Uint8Array(0)]);}}
+export{OggWriter};

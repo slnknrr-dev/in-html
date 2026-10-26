@@ -1,0 +1,338 @@
+// archive/unpack15.js - RAR 1.5 decompression (unpack version 15; also RAR 1.3 / 1.4 archives).
+//
+//   const u = new Unpack15(windowSize(dict, total))
+//   u.file(reader, size, solid) -> Stream            (see rarbits.js)
+//
+// RAR 1.5 has no transmitted tables: fixed prefix codes (DecodeNum over start / limit / position tables) pick ranks in
+// adaptive move-to-front lists (ChSet* / NToPl*) of literals, distances, lengths and flag bytes. A flag byte announces
+// up to 8 items: literal (HuffDecode), long match (LongLZ) or short match (ShortLZ, with repeats of old distances);
+// running averages switch between code tables. After 16 literals in a row a "literal stream" mode (StMode) starts.
+
+import { Unpacker } from './rarbits.js';
+
+// Code tables: limits of the left-aligned codes per length, first rank of each length.
+const STARTL1 = 2, DEC_L1 = [0x8000, 0xa000, 0xc000, 0xd000, 0xe000, 0xea00, 0xee00, 0xf000, 0xf200, 0xf200, 0xffff],
+  POS_L1 = [0, 0, 0, 2, 3, 5, 7, 11, 16, 20, 24, 32, 32];
+const STARTL2 = 3, DEC_L2 = [0xa000, 0xc000, 0xd000, 0xe000, 0xea00, 0xee00, 0xf000, 0xf200, 0xf240, 0xffff],
+  POS_L2 = [0, 0, 0, 0, 5, 7, 9, 13, 18, 22, 26, 34, 36];
+const STARTHF0 = 4, DEC_HF0 = [0x8000, 0xc000, 0xe000, 0xf200, 0xf200, 0xf200, 0xf200, 0xf200, 0xffff],
+  POS_HF0 = [0, 0, 0, 0, 0, 8, 16, 24, 33, 33, 33, 33, 33];
+const STARTHF1 = 5, DEC_HF1 = [0x2000, 0xc000, 0xe000, 0xf000, 0xf200, 0xf200, 0xf7e0, 0xffff],
+  POS_HF1 = [0, 0, 0, 0, 0, 0, 4, 44, 60, 76, 80, 80, 127];
+const STARTHF2 = 5, DEC_HF2 = [0x1000, 0x2400, 0x8000, 0xc000, 0xfa00, 0xffff, 0xffff, 0xffff],
+  POS_HF2 = [0, 0, 0, 0, 0, 0, 2, 7, 53, 117, 233, 0, 0];
+const STARTHF3 = 6, DEC_HF3 = [0x800, 0x2400, 0xee00, 0xfe80, 0xffff, 0xffff, 0xffff],
+  POS_HF3 = [0, 0, 0, 0, 0, 0, 0, 2, 16, 218, 251, 0, 0];
+const STARTHF4 = 8, DEC_HF4 = [0xff00, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff],
+  POS_HF4 = [0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0];
+
+const SHORT_LEN1 = [1, 3, 4, 4, 5, 6, 7, 8, 8, 4, 4, 5, 6, 6, 4, 0];
+const SHORT_XOR1 = [0, 0xa0, 0xd0, 0xe0, 0xf0, 0xf8, 0xfc, 0xfe, 0xff, 0xc0, 0x80, 0x90, 0x98, 0x9c, 0xb0];
+const SHORT_LEN2 = [2, 3, 3, 3, 4, 4, 5, 6, 6, 4, 4, 5, 6, 6, 4, 0];
+const SHORT_XOR2 = [0, 0x40, 0x60, 0xa0, 0xd0, 0xe0, 0xf0, 0xf8, 0xfc, 0xc0, 0x80, 0x90, 0x98, 0x9c, 0xb0];
+
+/** unrar's DecodeNum: `num` = next 16 input bits; consumes the code and returns the rank. */
+// Fixed prefix codes as range tables: dec[i] is the exclusive upper bound of left-aligned codes of length start + i.
+// Walk the bounds to find the length, then the code's offset within its length band plus pos[length] gives the rank.
+// The low 4 bits are masked because no code is longer than 12 bits.
+export function decodeNum(inp, num, start, dec, pos) {
+  num &= 0xfff0;
+  let i = 0;
+  while (dec[i] <= num) { start++; i++; }
+  inp.addbits(start);
+  return ((num - (i ? dec[i - 1] : 0)) >>> (16 - start)) + pos[start];
+}
+
+export class Unpack15 extends Unpacker {
+  constructor(size) {
+    super(size);
+    this.chSet = new Uint16Array(256);
+    this.chSetA = new Uint16Array(256);
+    this.chSetB = new Uint16Array(256);
+    this.chSetC = new Uint16Array(256);
+    this.nToPl = new Uint8Array(256);
+    this.nToPlB = new Uint8Array(256);
+    this.nToPlC = new Uint8Array(256);
+    this.od = new Int32Array(4);
+    this.odPtr = 0;
+    this.lastDist = 0;
+    this.lastLen = 0;
+    this.avrPlc = 0x3500; this.avrPlcB = 0; this.avrLn1 = 0; this.avrLn2 = 0; this.avrLn3 = 0;
+    this.numHuf = 0; this.buf60 = 0; this.maxDist3 = 0x2001; this.nhfb = 0x80; this.nlzb = 0x80;
+    this.flagsCnt = 0; this.flagBuf = 0; this.stMode = 0; this.lCount = 0;
+    this.started = false;
+  }
+
+  init(solid) {
+    if (!solid) {
+      this.od.fill(0);
+      this.odPtr = 0;
+      this.lastDist = this.lastLen = 0;
+      this.avrPlcB = this.avrLn1 = this.avrLn2 = this.avrLn3 = this.numHuf = this.buf60 = 0;
+      this.avrPlc = 0x3500;
+      this.maxDist3 = 0x2001;
+      this.nhfb = this.nlzb = 0x80;
+      this.initHuff();
+    }
+    this.flagsCnt = 0;
+    this.flagBuf = 0;
+    this.stMode = 0;
+    this.lCount = 0;
+    this.started = false;
+  }
+
+  initHuff() {
+    for (let i = 0; i < 256; i++) {
+      this.chSet[i] = this.chSetB[i] = i << 8;
+      this.chSetA[i] = i;
+      this.chSetC[i] = ((~i + 1) & 0xff) << 8;
+    }
+    this.nToPl.fill(0);
+    this.nToPlB.fill(0);
+    this.nToPlC.fill(0);
+    corrHuff(this.chSetB, this.nToPlB);
+  }
+
+  put(b) {
+    this.win[this.ptr++] = b;
+    this.abs++;
+    if (this.ptr === this.W) this.ptr = 0;
+  }
+
+  copy(dist, len) {
+    const win = this.win, W = this.W;
+    let ptr = this.ptr;
+    // A distance before the stream start, beyond the window or 0 only occurs in damaged data: unrar copies from
+    // whatever the window holds; zeros here are deterministic and never read uninitialised (or previous file) memory.
+    if (dist > this.abs || dist > W || dist === 0) {
+      for (let k = 0; k < len; k++) { win[ptr++] = 0; if (ptr === W) ptr = 0; }
+    } else {
+      let src = ptr - dist;
+      if (src < 0) src += W;
+      for (let k = 0; k < len; k++) {
+        win[ptr++] = win[src++];
+        if (ptr === W) ptr = 0;
+        if (src === W) src = 0;
+      }
+    }
+    this.ptr = ptr;
+    this.abs += len;
+  }
+
+  getFlagsBuf() {
+    const inp = this.inp, set = this.chSetC;
+    const place = decodeNum(inp, inp.getbits(), STARTHF2, DEC_HF2, POS_HF2);
+    if (place >= 256) return; // only in damaged data
+    let flags, np;
+    for (;;) {
+      flags = set[place];
+      this.flagBuf = flags >>> 8;
+      np = this.nToPlC[flags++ & 0xff]++;
+      if ((flags & 0xff) !== 0) break;
+      corrHuff(set, this.nToPlC);
+    }
+    set[place] = set[np];
+    set[np] = flags;
+  }
+
+  huffDecode() {
+    const inp = this.inp;
+    let bf = inp.getbits(), place;
+    const a = this.avrPlc;
+    if (a > 0x75ff) place = decodeNum(inp, bf, STARTHF4, DEC_HF4, POS_HF4);
+    else if (a > 0x5dff) place = decodeNum(inp, bf, STARTHF3, DEC_HF3, POS_HF3);
+    else if (a > 0x35ff) place = decodeNum(inp, bf, STARTHF2, DEC_HF2, POS_HF2);
+    else if (a > 0x0dff) place = decodeNum(inp, bf, STARTHF1, DEC_HF1, POS_HF1);
+    else place = decodeNum(inp, bf, STARTHF0, DEC_HF0, POS_HF0);
+    place &= 0xff;
+    if (this.stMode) {
+      if (place === 0 && bf > 0xfff) place = 0x100;
+      if (--place === -1) {
+        bf = inp.getbits();
+        inp.addbits(1);
+        if (bf & 0x8000) { this.numHuf = this.stMode = 0; return; }
+        const len = bf & 0x4000 ? 4 : 3;
+        inp.addbits(1);
+        let dist = decodeNum(inp, inp.getbits(), STARTHF2, DEC_HF2, POS_HF2);
+        dist = (dist << 5) | (inp.getbits() >>> 11);
+        inp.addbits(5);
+        this.copy(dist, len);
+        return;
+      }
+    } else if (this.numHuf++ >= 16 && this.flagsCnt === 0) this.stMode = 1;
+    this.avrPlc += place;
+    this.avrPlc -= this.avrPlc >> 8;
+    this.nhfb += 16;
+    if (this.nhfb > 0xff) { this.nhfb = 0x90; this.nlzb >>>= 1; }
+    const set = this.chSet;
+    this.put(set[place] >>> 8);
+    let cur, np;
+    for (;;) {
+      cur = set[place];
+      np = this.nToPl[cur++ & 0xff]++;
+      if ((cur & 0xff) > 0xa1) corrHuff(set, this.nToPl);
+      else break;
+    }
+    set[place] = set[np];
+    set[np] = cur;
+  }
+
+  longLZ() {
+    const inp = this.inp;
+    this.numHuf = 0;
+    this.nlzb += 16;
+    if (this.nlzb > 0xff) { this.nlzb = 0x90; this.nhfb >>>= 1; }
+    const oldAvr2 = this.avrLn2;
+    let bf = inp.getbits(), len;
+    if (this.avrLn2 >= 122) len = decodeNum(inp, bf, STARTL2, DEC_L2, POS_L2);
+    else if (this.avrLn2 >= 64) len = decodeNum(inp, bf, STARTL1, DEC_L1, POS_L1);
+    else if (bf < 0x100) { len = bf; inp.addbits(16); }
+    else {
+      for (len = 0; ((bf << len) & 0x8000) === 0; len++);
+      inp.addbits(len + 1);
+    }
+    this.avrLn2 += len;
+    this.avrLn2 -= this.avrLn2 >> 5;
+    bf = inp.getbits();
+    let place;
+    if (this.avrPlcB > 0x28ff) place = decodeNum(inp, bf, STARTHF2, DEC_HF2, POS_HF2);
+    else if (this.avrPlcB > 0x6ff) place = decodeNum(inp, bf, STARTHF1, DEC_HF1, POS_HF1);
+    else place = decodeNum(inp, bf, STARTHF0, DEC_HF0, POS_HF0);
+    this.avrPlcB += place;
+    this.avrPlcB -= this.avrPlcB >> 8;
+    const set = this.chSetB;
+    let dist, np;
+    for (;;) {
+      dist = set[place & 0xff];
+      np = this.nToPlB[dist++ & 0xff]++;
+      if (!(dist & 0xff)) corrHuff(set, this.nToPlB);
+      else break;
+    }
+    set[place & 0xff] = set[np];
+    set[np] = dist;
+    dist = ((dist & 0xff00) | (inp.getbits() >>> 8)) >>> 1;
+    inp.addbits(7);
+    const oldAvr3 = this.avrLn3;
+    if (len !== 1 && len !== 4) {
+      if (len === 0 && dist <= this.maxDist3) { this.avrLn3++; this.avrLn3 -= this.avrLn3 >> 8; }
+      else if (this.avrLn3 > 0) this.avrLn3--;
+    }
+    len += 3;
+    if (dist >= this.maxDist3) len++;
+    if (dist <= 256) len += 8;
+    this.maxDist3 = oldAvr3 > 0xb0 || (this.avrPlc >= 0x2a00 && oldAvr2 < 0x40) ? 0x7f00 : 0x2001;
+    this.od[this.odPtr] = dist;
+    this.odPtr = (this.odPtr + 1) & 3;
+    this.lastLen = len;
+    this.lastDist = dist;
+    this.copy(dist, len);
+  }
+
+  shortLZ() {
+    const inp = this.inp;
+    this.numHuf = 0;
+    let bf = inp.getbits();
+    if (this.lCount === 2) {
+      inp.addbits(1);
+      if (bf >= 0x8000) { this.copy(this.lastDist, this.lastLen); return; }
+      bf <<= 1;
+      this.lCount = 0;
+    }
+    bf >>>= 8;
+    let len;
+    if (this.avrLn1 < 37) {
+      for (len = 0; ; len++) {
+        const n = len === 1 ? this.buf60 + 3 : SHORT_LEN1[len];
+        if (((bf ^ SHORT_XOR1[len]) & ~(0xff >> n)) === 0) { inp.addbits(n); break; }
+      }
+    } else {
+      for (len = 0; ; len++) {
+        const n = len === 3 ? this.buf60 + 3 : SHORT_LEN2[len];
+        if (((bf ^ SHORT_XOR2[len]) & ~(0xff >> n)) === 0) { inp.addbits(n); break; }
+      }
+    }
+    if (len >= 9) {
+      if (len === 9) {
+        this.lCount++;
+        this.copy(this.lastDist, this.lastLen);
+        return;
+      }
+      if (len === 14) {
+        this.lCount = 0;
+        len = decodeNum(inp, inp.getbits(), STARTL2, DEC_L2, POS_L2) + 5;
+        const dist = (inp.getbits() >>> 1) | 0x8000;
+        inp.addbits(15);
+        this.lastLen = len;
+        this.lastDist = dist;
+        this.copy(dist, len);
+        return;
+      }
+      this.lCount = 0;
+      const save = len;
+      const dist = this.od[(this.odPtr - (len - 9)) & 3];
+      len = decodeNum(inp, inp.getbits(), STARTL1, DEC_L1, POS_L1) + 2;
+      if (len === 0x101 && save === 10) { this.buf60 ^= 1; return; }
+      if (dist > 256) len++;
+      if (dist >= this.maxDist3) len++;
+      this.od[this.odPtr] = dist;
+      this.odPtr = (this.odPtr + 1) & 3;
+      this.lastLen = len;
+      this.lastDist = dist;
+      this.copy(dist, len);
+      return;
+    }
+    this.lCount = 0;
+    this.avrLn1 += len;
+    this.avrLn1 -= this.avrLn1 >> 4;
+    let place = decodeNum(inp, inp.getbits(), STARTHF2, DEC_HF2, POS_HF2) & 0xff;
+    const set = this.chSetA;
+    let dist = set[place];
+    if (--place !== -1) {
+      set[place + 1] = set[place];
+      set[place] = dist;
+    }
+    len += 2;
+    this.od[this.odPtr] = ++dist;
+    this.odPtr = (this.odPtr + 1) & 3;
+    this.lastLen = len;
+    this.lastDist = dist;
+    this.copy(dist, len);
+  }
+
+  run(target) {
+    const inp = this.inp, end = this.fileStart + this.size;
+    if (!this.started) {
+      this.started = true;
+      if (this.abs < end) { this.getFlagsBuf(); this.flagsCnt = 8; }
+    }
+    while (this.abs < target) {
+      if (this.abs >= end) { this.done = true; break; }
+      if (inp.pos > inp.border) { inp.refill(); if (inp.over()) { this.done = true; break; } }
+      if (this.stMode) { this.huffDecode(); continue; }
+      if (--this.flagsCnt < 0) { this.getFlagsBuf(); this.flagsCnt = 7; }
+      if (this.flagBuf & 0x80) {
+        this.flagBuf <<= 1;
+        if (this.nlzb > this.nhfb) this.longLZ(); else this.huffDecode();
+      } else {
+        this.flagBuf <<= 1;
+        if (--this.flagsCnt < 0) { this.getFlagsBuf(); this.flagsCnt = 7; }
+        if (this.flagBuf & 0x80) {
+          this.flagBuf <<= 1;
+          if (this.nlzb > this.nhfb) this.huffDecode(); else this.longLZ();
+        } else {
+          this.flagBuf <<= 1;
+          this.shortLZ();
+        }
+      }
+    }
+  }
+}
+
+// Adaptive ranking: each list entry packs (value << 8) | counter. Decoding a rank bumps its counter and swaps the
+// entry toward the front (nToPlace tracks the insertion point per counter value), a frequency-sorted move-to-front.
+// When a counter overflows its byte, corrHuff resets all counters to bands 7..0 of 32 entries, keeping the order.
+function corrHuff(set, nToPlace) {
+  for (let i = 7, k = 0; i >= 0; i--) for (let j = 0; j < 32; j++, k++) set[k] = (set[k] & ~0xff) | i;
+  nToPlace.fill(0);
+  for (let i = 6; i >= 0; i--) nToPlace[i] = (7 - i) * 32;
+}

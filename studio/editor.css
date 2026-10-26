@@ -1,0 +1,504 @@
+/* studio/editor.css - the document editor layout: top bar, side panels and drawers, tabs, stage and canvas chrome, status bar, inspector, palette, outline, files, document settings, languages, projects, templates, export and preview. Needs ui/base.css and richtext/richtext.css. */
+/*
+   CONTRACT
+   - Namespace: everything is ed- (shared with ui/base.css, which defines the primitives: .ed-btn, .ed-input,
+     .ed-seg, .ed-iconbtn, tokens). This file adds only editor-shell components; it is loaded after base.css, so on
+     equal specificity it wins by source order.
+   - Ids are used deliberately for the singleton regions of index.html (#ed-top, #ed-main, #ed-left, #ed-right,
+     #ed-stage, #ed-scroll, #ed-canvas, #ed-chrome, #ed-drop, #ed-status). Each exists exactly once, and an id
+     (1,0,0) also lifts editor chrome above anything a rendered document can carry: the page under #ed-canvas uses
+     product-prefixed classes only, so its rules can never outrank "#ed-canvas [data-bid].ed-sel" (1,2,0).
+   - Canvas chrome selects by data attributes ([data-bid], [data-item], [data-f]): the contract with the viewer's
+     edit-mode markup, independent of any product's class names.
+   - Colours via --ed-* tokens (light/dark in ui/base.css). Exception: the template mode badges (traffic-light
+     colours with their own dark variants at the end of that section).
+   - !important only on the drop indicators (.ed-drop-*): they are transient states that must beat every row style
+     (.ed-out-row.ed-on, .ed-item-row.ed-on at 0,2,0) for the duration of a drag. Commented there.
+   - State classes: .ed-on (selected / active), .ed-hover, .ed-sel, .ed-dragging, .ed-busy, set by JS only.
+   LAYOUT PRIMITIVES
+   - The page body is a grid of rows (top bar, format bar, main, status); #ed-main is a 3-column grid whose side
+     columns come from --ed-left-w / --ed-right-w. minmax(0, 1fr) everywhere a track must be allowed to shrink below
+     its content (1fr = minmax(auto, 1fr) would let one wide canvas or long name blow the layout open).
+   - min-width: 0 / min-height: 0 on grid and flex children that scroll: the default min-*: auto equals the content
+     size and would stop overflow: auto from ever engaging.
+*/
+
+/* Editor shell: the 3-column body grid of index.html. */
+body.ed-shell {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  /* One column no wider than the window: a top bar with more tools than fit scrolls instead of widening the page. */
+  grid-template-columns: minmax(0, 1fr);
+  /* Fallback pair: 100vh first for engines without dvh; 100dvh tracks the mobile browser toolbar so the status bar
+     is not hidden under it. */
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+/* Top bar */
+#ed-top {
+  display: flex; align-items: center; gap: 8px;
+  height: var(--ed-top-h); padding: 0 10px;
+  background: var(--ed-panel); border-bottom: 1px solid var(--ed-border);
+  /* Scrolls horizontally instead of wrapping (a wrapped top bar would change --ed-top-h); scrollbar hidden because
+     a 52px bar with a scrollbar looks broken and trackpads/touch still scroll it. */
+  min-width: 0; overflow-x: auto; scrollbar-width: none;
+}
+.ed-brand { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ed-logo { display: inline-flex; color: var(--ed-accent); }
+.ed-logo svg { width: 22px; height: 22px; }
+.ed-name {
+  width: clamp(120px, 18vw, 260px); border: 1px solid transparent; background: transparent; border-radius: var(--ed-radius-sm);
+  padding: 5px 8px; font-weight: 600; font-size: 14px; text-overflow: ellipsis;
+}
+.ed-name:hover { border-color: var(--ed-border); }
+/* Borderless until hover/focus: reads as a title, behaves as an input (rename in place). */
+.ed-name:focus { border-color: var(--ed-accent); background: var(--ed-panel); outline: none; box-shadow: var(--ed-focus); }
+.ed-tgroup { display: flex; align-items: center; gap: 2px; padding: 0 4px; }
+.ed-tgroup + .ed-tgroup { border-left: 1px solid var(--ed-border); }
+.ed-tbtn {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px;
+  border: 1px solid transparent; border-radius: var(--ed-radius-sm); background: transparent; white-space: nowrap;
+}
+.ed-tbtn:hover:not(:disabled) { background: var(--ed-hover); }
+.ed-tbtn.ed-icon-only { padding: 0 7px; }
+.ed-tbtn.ed-primary { background: var(--ed-accent); color: var(--ed-accent-text); font-weight: 600; }
+.ed-tbtn.ed-primary:hover { background: var(--ed-accent-hover); }
+.ed-ui-lang { width: auto; min-width: 7.5em; max-width: 140px; height: 32px; margin-right: 4px; }
+/* Below 1180px the top bar cannot fit labelled buttons: icons only (title + aria-label keep the name). */
+@media (max-width: 1180px) { .ed-tbtn-l { display: none; } .ed-tbtn { padding: 0 7px; } }
+
+/* Formatting toolbar container (filled by richtext/toolbar.js) */
+#ed-format {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 2px;
+  min-height: 40px; padding: 4px 10px;
+  background: var(--ed-panel-2); border-bottom: 1px solid var(--ed-border);
+}
+/* :empty collapses the bar when richtext/ has not filled it, without JS toggling a class. */
+#ed-format:empty { min-height: 0; padding: 0; border: 0; }
+
+/* Main 3-column area */
+#ed-main {
+  position: relative; z-index: 0; isolation: isolate; /* keep rendered page layers below overlays */
+  display: grid; min-height: 0;
+  grid-template-columns: var(--ed-left-w) minmax(0, 1fr) var(--ed-right-w);
+}
+/* Hiding a panel collapses its track to 0 rather than display:none on the panel: the panel DOM (scroll position,
+   open sections) survives, and visibility:hidden removes it from the tab order and accessibility tree. */
+#ed-main.ed-noleft { grid-template-columns: 0 minmax(0, 1fr) var(--ed-right-w); }
+#ed-main.ed-noright { grid-template-columns: var(--ed-left-w) minmax(0, 1fr) 0; }
+#ed-main.ed-noleft.ed-noright { grid-template-columns: 0 minmax(0, 1fr) 0; }
+#ed-main.ed-noleft #ed-left, #ed-main.ed-noright #ed-right { visibility: hidden; border: 0; }
+#ed-left, #ed-right {
+  display: flex; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden;
+  background: var(--ed-panel);
+}
+#ed-left { border-right: 1px solid var(--ed-border); }
+#ed-right { border-left: 1px solid var(--ed-border); }
+/* Small windows / tablets: the side panels become overlay drawers above the stage (one at a time, toggled
+   from the top bar, closed on Esc / outside click by bindDrawers in studio/shell.js), so the page keeps the full
+   stage width. The breakpoint must match NARROW_MQ in shell.js. transform slides the drawer off-screen (compositor
+   only, no layout); visibility is transitioned too so a closed drawer is not focusable once the slide ends. */
+@media (max-width: 1100px) {
+  #ed-main, #ed-main.ed-noleft, #ed-main.ed-noright, #ed-main.ed-noleft.ed-noright { grid-template-columns: minmax(0, 1fr); }
+  #ed-stage { grid-column: 1; grid-row: 1; }
+  #ed-left, #ed-right {
+    position: absolute; top: 0; bottom: 0; z-index: 30; box-shadow: var(--ed-shadow-lg);
+    transition: transform .18s ease, visibility .18s;
+  }
+  #ed-left { left: 0; width: min(var(--ed-left-w), calc(100% - 40px)); }
+  #ed-right { right: 0; width: min(var(--ed-right-w), calc(100% - 40px)); }
+  #ed-main.ed-noleft #ed-left { transform: translateX(-100%); }
+  #ed-main.ed-noright #ed-right { transform: translateX(100%); }
+}
+/* Narrow panels: tab icons only (the label stays for assistive technology and as the tooltip). */
+/* Container query on the panel width, not a media query: a docked panel's width does not follow the viewport. */
+#ed-left, #ed-right { container-type: inline-size; }
+@container (max-width: 250px) {
+  .ed-tab { gap: 0; }
+  /* Visually hidden, still in the accessibility tree (display:none would remove the tab's accessible name). */
+  .ed-tab > span:not(.ed-ic) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+
+/* Tabs */
+.ed-tabs { display: flex; gap: 2px; padding: 6px 8px 0; border-bottom: 1px solid var(--ed-border); flex: none; }
+.ed-tab {
+  display: inline-flex; align-items: center; gap: 6px; flex: 1 1 0; justify-content: center;
+  padding: 8px 6px; border: 0; background: transparent; color: var(--ed-muted); font-weight: 500;
+  /* margin-bottom -1px overlaps the bar's 1px border, so the active tab's accent underline replaces it. */
+  border-bottom: 2px solid transparent; margin-bottom: -1px; border-radius: var(--ed-radius-sm) var(--ed-radius-sm) 0 0; min-width: 0;
+}
+.ed-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Set by fitTabs() when a label would be cut: inactive tabs collapse to their icon, the active one keeps its label. */
+.ed-tabs-compact .ed-tab:not(.ed-on) { flex: 0 0 auto; padding-inline: 10px; gap: 0; }
+.ed-tabs-compact .ed-tab:not(.ed-on) > span:not(.ed-ic) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.ed-tabs-compact .ed-tab.ed-on { flex: 1 1 auto; }
+.ed-tab:hover { color: var(--ed-text); background: var(--ed-hover); }
+.ed-tab.ed-on { color: var(--ed-accent); border-bottom-color: var(--ed-accent); }
+/* scrollbar-gutter: stable reserves the scrollbar width, so content does not shift sideways when a panel starts
+   or stops overflowing during edits. */
+.ed-panel-body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 12px; scrollbar-gutter: stable; }
+
+/* Stage */
+#ed-stage { display: grid; grid-template-rows: auto auto minmax(0, 1fr); min-width: 0; min-height: 0; background: var(--ed-stage); }
+#ed-stagebar { grid-row: 1; }
+#ed-banner { grid-row: 2; }
+#ed-scroll { grid-row: 3; }
+/* Another tab edits this project / it changed elsewhere: autosave is off (not printed, editor only) */
+#ed-banner {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; padding: 8px 12px;
+  background: var(--ed-panel); border-bottom: 1px solid var(--ed-border); border-left: 3px solid var(--ed-warn); color: var(--ed-text);
+}
+#ed-banner > .ed-ic { color: var(--ed-warn); }
+.ed-banner-msg { flex: 1 1 260px; min-width: 0; line-height: 1.35; }
+#ed-stagebar {
+  display: flex; align-items: center; gap: 8px; padding: 6px 10px; min-height: 44px;
+  background: var(--ed-panel); border-bottom: 1px solid var(--ed-border); overflow-x: auto; scrollbar-width: thin;
+}
+/* The language tab list scrolls on its own; the zoom group never shrinks under it. */
+.ed-langtabs-wrap { display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0; }
+.ed-langtabs { display: flex; gap: 2px; padding: 2px; min-width: 0; overflow-x: auto; scrollbar-width: thin; background: var(--ed-hover); border-radius: var(--ed-radius); }
+.ed-langtab {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; border: 0; border-radius: var(--ed-radius-sm);
+  background: transparent; color: var(--ed-muted); font-weight: 600; font-size: 12px; letter-spacing: .02em;
+}
+.ed-langtab:hover { color: var(--ed-text); }
+.ed-langtab.ed-on { background: var(--ed-panel); color: var(--ed-text); box-shadow: var(--ed-shadow-sm); }
+.ed-langtab .ed-star { width: 12px; height: 12px; color: var(--ed-warn); }
+.ed-langtab .ed-star svg { width: 12px; height: 12px; fill: currentColor; }
+.ed-langtab-pct { font-weight: 500; font-size: 11px; color: var(--ed-warn); }
+.ed-zoom { display: flex; align-items: center; gap: 2px; flex: none; }
+.ed-zoom-val { min-width: 52px; height: 28px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel); font-variant-numeric: tabular-nums; }
+/* Positioned + isolated: the containing block and stacking context of #ed-chrome / #ed-drop (absolute, scroll
+   coordinates, see select.js / dnd.js), and z-indexes inside the rendered page cannot escape above editor UI.
+   Large bottom padding lets the last block scroll up to a comfortable editing height. */
+#ed-scroll { position: relative; isolation: isolate; overflow: auto; min-height: 0; padding: 40px 24px 120px; scroll-padding: 60px; scrollbar-gutter: stable; }
+#ed-canvas {
+  /* Paper stage: page width + gutter; device stage: exactly the device width (--ed-canvas-w, studio/stage.js). */
+  width: var(--ed-canvas-w, calc(var(--ed-page-w, 210mm) + 64px)); max-width: none; margin: 0 auto; min-height: 200px;
+  transform-origin: top center;
+}
+.ed-render-err { padding: 24px; margin: 24px; border-radius: var(--ed-radius); background: var(--ed-danger-weak); color: var(--ed-danger); font-weight: 600; }
+
+/* overflow: clip, not hidden: clips like hidden but creates no scroll container, so position: sticky inside the
+   rendered page keeps working against #ed-scroll. */
+#ed-canvas[data-device] { background: var(--ed-panel); box-shadow: var(--ed-shadow); border-radius: 6px; overflow: clip; margin-top: 8px; margin-bottom: 24px; }
+
+/* Canvas chrome (editor-owned overlays on rendered blocks) */
+/* Outlines, not borders: an outline takes no layout space, so selecting or hovering a block never reflows the page
+   being edited (WYSIWYG must not move). outline-offset keeps the ring off the content edge. */
+#ed-canvas [data-bid] { transition: outline-color .12s; }
+#ed-canvas [data-bid].ed-hover { outline: 1px dashed color-mix(in srgb, var(--ed-accent) 55%, transparent); outline-offset: 2px; }
+#ed-canvas [data-bid].ed-sel { outline: 2px solid var(--ed-accent); outline-offset: 2px; border-radius: 2px; }
+#ed-canvas [data-item].ed-item-sel { outline: 1.5px dashed var(--ed-accent); outline-offset: 2px; border-radius: 3px; }
+#ed-canvas [data-bid].ed-dragging { opacity: .4; }
+#ed-canvas [data-f] { cursor: text; border-radius: 2px; }
+#ed-canvas [data-f]:hover { background: color-mix(in srgb, var(--ed-accent) 6%, transparent); }
+#ed-canvas [data-f]:focus { outline: 1px solid color-mix(in srgb, var(--ed-accent) 45%, transparent); outline-offset: 1px; background: color-mix(in srgb, var(--ed-accent) 4%, transparent); box-shadow: none; }
+/* Embedded frames swallow pointer events (clicks would never reach the canvas delegate). They become interactive
+   only inside the selected block: first click selects, the next one reaches the preview. */
+#ed-canvas object, #ed-canvas iframe { pointer-events: none; }
+#ed-canvas .ed-sel object, #ed-canvas .ed-sel iframe { pointer-events: auto; }
+#ed-chrome {
+  position: absolute; z-index: 20; display: flex; align-items: center; gap: 1px; padding: 2px;
+  background: var(--ed-accent); color: var(--ed-accent-text); border-radius: var(--ed-radius-sm); box-shadow: var(--ed-shadow);
+  font-size: 12px; user-select: none; white-space: nowrap;
+}
+/* While dragging, drops pass through the floating chrome to the page underneath. */
+body.ed-dragging #ed-chrome { pointer-events: none; }
+.ed-chrome-btn, .ed-chrome-grip {
+  display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 24px;
+  border: 0; border-radius: 4px; background: transparent; color: inherit; padding: 0;
+}
+.ed-chrome-btn svg, .ed-chrome-grip svg { width: 16px; height: 16px; }
+/* Translucent white on the accent background works for any accent hue, so no extra token is needed. */
+.ed-chrome-btn:hover, .ed-chrome-grip:hover { background: rgba(255, 255, 255, .2); }
+.ed-chrome-grip { cursor: grab; }
+.ed-chrome-grip:active { cursor: grabbing; }
+.ed-chrome-label { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px 0 2px; font-weight: 600; border-right: 1px solid rgba(255, 255, 255, .3); margin-right: 2px; }
+.ed-chrome-label .ed-ic, .ed-chrome-label svg { width: 14px; height: 14px; }
+.ed-chrome-btn.ed-danger:hover { background: var(--ed-danger-solid); color: var(--ed-on-danger); }
+/* Insertion line: positioned by dnd.js in scroller coordinates; pointer-events none so it never becomes the
+   drag target itself (that would make dragover flicker between the line and the list). */
+#ed-drop {
+  position: absolute; z-index: 21; height: 3px; border-radius: 3px; background: var(--ed-accent); pointer-events: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ed-accent) 25%, transparent);
+}
+#ed-drop::before, #ed-drop::after { content: ""; position: absolute; top: -3px; width: 9px; height: 9px; border-radius: 50%; background: var(--ed-accent); }
+#ed-drop::before { left: -4px; }
+#ed-drop::after { right: -4px; }
+
+/* Status bar */
+#ed-status {
+  display: flex; align-items: center; gap: 14px; height: 28px; padding: 0 12px;
+  background: var(--ed-panel); border-top: 1px solid var(--ed-border); color: var(--ed-muted); font-size: 12px;
+  overflow: hidden; white-space: nowrap;
+}
+.ed-st-item { display: inline-flex; align-items: center; gap: 5px; }
+.ed-st-item .ed-ic, .ed-st-item svg { width: 14px; height: 14px; }
+.ed-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ed-ok); }
+.ed-st-saving .ed-dot, .ed-st-unsaved .ed-dot { background: var(--ed-warn); }
+.ed-st-memory .ed-dot, .ed-st-error .ed-dot { background: var(--ed-danger); }
+.ed-st-readonly .ed-dot { background: var(--ed-warn); box-shadow: inset 0 0 0 2px var(--ed-panel); outline: 1.5px solid var(--ed-warn); }
+/* Small windows keep the first three items (save state, translation, stage) and drop the rest by position. */
+@media (max-width: 900px) { #ed-status .ed-st-item:nth-child(n+4) { display: none; } }
+
+/* Inspector */
+.ed-empty-state { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 40px 16px; text-align: center; color: var(--ed-muted); }
+.ed-empty-ic { width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; background: var(--ed-hover); color: var(--ed-faint); }
+.ed-empty-ic svg { width: 24px; height: 24px; }
+.ed-ins-head { display: flex; align-items: center; gap: 10px; }
+.ed-ins-ic { display: grid; place-items: center; width: 36px; height: 36px; border-radius: var(--ed-radius); background: var(--ed-accent-weak); color: var(--ed-accent); flex: none; }
+.ed-ins-title { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.ed-ins-title strong { font-size: 14px; }
+.ed-ins-title small { color: var(--ed-muted); }
+.ed-ins-acts { display: flex; gap: 0; }
+.ed-ins-acts .ed-iconbtn { width: 26px; height: 26px; }
+.ed-ins-acts svg { width: 16px; height: 16px; }
+.ed-ins-desc { margin: 8px 0 4px; color: var(--ed-muted); font-size: 12px; }
+.ed-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.ed-item-row {
+  display: flex; align-items: center; gap: 4px; padding: 2px 2px 2px 4px; border: 1px solid transparent; border-radius: var(--ed-radius-sm);
+  background: var(--ed-panel-2);
+}
+.ed-item-row:hover { border-color: var(--ed-border); }
+.ed-item-row.ed-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.ed-item-row.ed-dragging { opacity: .4; }
+.ed-grip { display: inline-flex; color: var(--ed-faint); cursor: grab; }
+.ed-grip svg { width: 14px; height: 14px; }
+.ed-item-label { flex: 1 1 auto; min-width: 0; padding: 4px 2px; border: 0; background: transparent; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-item-acts { display: flex; opacity: .55; }
+.ed-item-row:hover .ed-item-acts, .ed-item-row.ed-on .ed-item-acts, .ed-item-row:focus-within .ed-item-acts { opacity: 1; }
+/* !important: see CONTRACT; a drop indicator must show over .ed-out-row.ed-on / .ed-item-row.ed-on backgrounds
+   and shadows of any specificity for the few hundred ms of a drag. Inset shadows: no layout shift. */
+.ed-drop-before { box-shadow: inset 0 2px 0 var(--ed-accent) !important; }
+.ed-drop-after { box-shadow: inset 0 -2px 0 var(--ed-accent) !important; }
+.ed-drop-into { background: var(--ed-accent-weak) !important; outline: 1px dashed var(--ed-accent); }
+.ed-item-editor { margin-top: 12px; padding: 10px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius); background: var(--ed-panel-2); }
+.ed-item-editor-h { display: flex; align-items: center; gap: 2px; margin-bottom: 10px; }
+.ed-col-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.ed-col-preset { display: flex; gap: 2px; width: 50px; height: 26px; padding: 3px; border: 1px solid var(--ed-border-strong); border-radius: 5px; background: var(--ed-panel); }
+.ed-col-preset span { display: block; background: var(--ed-faint); border-radius: 2px; flex-basis: 0; }
+.ed-col-preset:hover { border-color: var(--ed-accent); }
+.ed-col-preset:hover span { background: var(--ed-accent); }
+.ed-btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.ed-btn-grid .ed-btn { justify-content: flex-start; }
+/* An odd last button spans both columns instead of leaving a hole. */
+.ed-btn-grid .ed-btn:last-child:nth-child(odd) { grid-column: 1 / -1; }
+
+/* Palette */
+.ed-pal-h { margin: 14px 0 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-muted); }
+.ed-pal-h:first-child { margin-top: 0; }
+.ed-pal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.ed-pal-item {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; min-height: 64px; padding: 8px 4px;
+  border: 1px solid var(--ed-border); border-radius: var(--ed-radius); background: var(--ed-panel); text-align: center; cursor: grab;
+  transition: border-color .12s, box-shadow .12s, transform .12s;
+}
+.ed-pal-item:hover { border-color: var(--ed-accent); box-shadow: var(--ed-shadow-sm); color: var(--ed-accent); }
+.ed-pal-item:active { cursor: grabbing; transform: scale(.98); }
+.ed-pal-ic svg { width: 20px; height: 20px; }
+.ed-pal-l { font-size: 12px; font-weight: 500; line-height: 1.2; }
+
+/* Outline */
+.ed-out-region + .ed-out-region { margin-top: 10px; }
+.ed-out-head { padding: 4px 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-muted); border-radius: 4px; }
+.ed-out-sub > .ed-out-head { text-transform: none; letter-spacing: 0; font-weight: 600; padding-left: 4px; }
+/* Nesting shown by indentation + a left rule per level (cheap tree lines, no per-row connectors). */
+.ed-out-list { list-style: none; margin: 0; padding: 0 0 0 10px; border-left: 1px solid var(--ed-border); }
+.ed-out-region > .ed-out-list { padding-left: 0; border-left: 0; }
+.ed-out-empty { padding: 6px 8px; color: var(--ed-faint); font-size: 12px; font-style: italic; border-radius: 4px; }
+.ed-out-row {
+  display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 6px; border-radius: var(--ed-radius-sm); cursor: pointer; min-width: 0;
+}
+.ed-out-row:hover { background: var(--ed-hover); }
+.ed-out-row.ed-on { background: var(--ed-accent-weak); color: var(--ed-accent); }
+.ed-out-row.ed-out-hidden { opacity: .5; }
+.ed-out-ic { display: inline-flex; color: var(--ed-muted); flex: none; }
+.ed-out-ic svg { width: 15px; height: 15px; }
+.ed-out-row.ed-on .ed-out-ic { color: inherit; }
+.ed-out-l { flex: 1 1 auto; min-width: 0; display: flex; gap: 6px; align-items: baseline; overflow: hidden; white-space: nowrap; }
+.ed-out-type { font-weight: 600; flex: none; }
+.ed-out-txt { color: var(--ed-muted); overflow: hidden; text-overflow: ellipsis; }
+.ed-out-badge { font: 600 9px/14px var(--ed-mono); padding: 0 4px; border-radius: 3px; background: var(--ed-hover); color: var(--ed-muted); }
+/* opacity, not visibility: the button stays clickable for pointer users who know where it is, and :focus-visible
+   reveals it for keyboard users. */
+.ed-out-eye { opacity: 0; }
+.ed-out-row:hover .ed-out-eye, .ed-out-row.ed-out-hidden .ed-out-eye, .ed-out-eye:focus-visible, .ed-out-row:focus-visible .ed-out-eye { opacity: 1; }
+/* Files */
+.ed-dropzone {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; width: 100%; padding: 18px 10px; margin-bottom: 10px;
+  border: 1.5px dashed var(--ed-border-strong); border-radius: var(--ed-radius); background: var(--ed-panel-2); color: var(--ed-muted); text-align: center;
+}
+.ed-dropzone:hover, .ed-dropzone.ed-over { border-color: var(--ed-accent); color: var(--ed-accent); background: var(--ed-accent-weak); }
+.ed-dropzone svg { width: 22px; height: 22px; }
+.ed-file-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ed-file { border: 1px solid var(--ed-border); border-radius: var(--ed-radius); background: var(--ed-panel); overflow: hidden; }
+.ed-file-head { display: flex; align-items: center; gap: 8px; padding: 6px; }
+.ed-file-thumb { width: 40px; height: 40px; flex: none; border-radius: 5px; object-fit: cover; background: var(--ed-hover); }
+.ed-file-ic { display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--ed-muted); }
+.ed-file-ic svg { width: 16px; height: 16px; }
+.ed-file-ic small { font: 700 8px/1 var(--ed-mono); margin-top: 2px; }
+.ed-file-info { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.ed-file-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-file-info small { font-size: 11px; }
+.ed-file-det { border-top: 1px solid var(--ed-border); }
+.ed-file-det > summary { padding: 5px 8px; cursor: pointer; font-size: 12px; color: var(--ed-muted); }
+.ed-file-det > .ed-fields { padding: 4px 8px 10px; }
+
+/* Document settings */
+.ed-docset { padding-top: 8px; }
+.ed-subtabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 2px; margin-bottom: 8px; background: var(--ed-hover); border-radius: var(--ed-radius); }
+.ed-subtab { flex: 1 1 auto; height: 26px; padding: 0 8px; border: 0; border-radius: var(--ed-radius-sm); background: transparent; color: var(--ed-muted); font-size: 12px; font-weight: 600; }
+.ed-subtab:hover { color: var(--ed-text); }
+.ed-subtab.ed-on { background: var(--ed-panel); color: var(--ed-text); box-shadow: var(--ed-shadow-sm); }
+.ed-preset-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.ed-preset {
+  display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1.5px solid var(--ed-border); border-radius: var(--ed-radius);
+  background: var(--ed-panel); text-align: left;
+}
+.ed-preset:hover { border-color: var(--ed-faint); }
+.ed-preset.ed-on { border-color: var(--ed-accent); box-shadow: var(--ed-focus); }
+.ed-swatches { display: flex; height: 22px; border-radius: 4px; overflow: hidden; border: 1px solid var(--ed-border); }
+.ed-swatches span { flex: 1 1 0; }
+.ed-preset-l { font-weight: 600; font-size: 12px; }
+.ed-layout-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.ed-layout-card {
+  display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 6px; border: 1.5px solid var(--ed-border);
+  border-radius: var(--ed-radius); background: var(--ed-panel); font-size: 12px; font-weight: 500;
+}
+.ed-layout-card:hover { border-color: var(--ed-faint); }
+.ed-layout-card.ed-on { border-color: var(--ed-accent); color: var(--ed-accent); box-shadow: var(--ed-focus); }
+.ed-layout-ic svg { width: 60px; height: 50px; display: block; fill: currentColor; opacity: .3; }
+.ed-layout-card.ed-on .ed-layout-ic svg { opacity: .65; }
+
+/* Language manager */
+.ed-lang-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ed-lang-row { display: flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius); background: var(--ed-panel); }
+.ed-lang-row.ed-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.ed-lang-main { flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto; column-gap: 8px; align-items: center; padding: 4px 6px; border: 0; background: transparent; text-align: left; }
+.ed-lang-code { grid-row: 1 / span 2; font: 700 12px var(--ed-mono); padding: 4px 6px; border-radius: 5px; background: var(--ed-hover); }
+.ed-lang-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-lang-main small { display: none; }
+.ed-progress { display: block; height: 4px; border-radius: 4px; background: var(--ed-border); overflow: hidden; margin-top: 4px; }
+.ed-progress > span { display: block; height: 100%; background: var(--ed-ok); border-radius: inherit; }
+
+/* Projects */
+.ed-proj-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ed-proj { display: flex; align-items: center; gap: 4px; padding: 4px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius); }
+.ed-proj.ed-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.ed-proj-main { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 6px; border: 0; background: transparent; text-align: left; border-radius: var(--ed-radius-sm); }
+.ed-proj-main:hover { background: var(--ed-hover); }
+.ed-proj-ic { display: grid; place-items: center; width: 34px; height: 40px; border-radius: 5px; background: var(--ed-hover); color: var(--ed-muted); flex: none; }
+.ed-proj-info { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.ed-proj-info strong, .ed-proj-info small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Templates gallery */
+.ed-tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(206px, 1fr)); gap: 14px; }
+.ed-tpl {
+  display: flex; flex-direction: column; padding: 0; overflow: hidden; text-align: left;
+  border: 1.5px solid var(--ed-border); border-radius: var(--ed-radius); background: var(--ed-panel);
+  transition: border-color .12s, box-shadow .12s, transform .12s;
+}
+.ed-tpl:hover { border-color: var(--ed-accent); box-shadow: var(--ed-shadow); transform: translateY(-1px); }
+.ed-tpl-prev { position: relative; height: 262px; overflow: hidden; background: var(--ed-stage); border-bottom: 1px solid var(--ed-border); }
+/* Thumbnail = the real export at 820x1160 (roughly A4 at 96 dpi, desktop width) scaled to 25 %: a scaled iframe
+   is pixel-accurate where a screenshot would need a renderer. Centred with left 50% + translateX(-50%); transform
+   does not change layout, so the box (.ed-tpl-prev) clips it with overflow hidden. */
+.ed-tpl-frame {
+  position: absolute; top: 0; left: 50%; width: 820px; height: 1160px; border: 0; background: #fff;
+  transform: translateX(-50%) scale(.25); transform-origin: top center; pointer-events: none;
+}
+.ed-tpl-fallback { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ed-faint); }
+.ed-tpl-fallback svg { width: 40px; height: 40px; }
+.ed-tpl-info { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px 12px; }
+.ed-tpl-info small { font-size: 12px; line-height: 1.35; }
+.ed-tpl-langs { font: 600 10.5px var(--ed-mono); color: var(--ed-accent); letter-spacing: .04em; }
+/* Grouped gallery (ED.templateGroups): sections, the mode a template needs, module tags. */
+.ed-tpl-group + .ed-tpl-group { margin-top: 22px; }
+.ed-tpl-gh { margin: 4px 0 2px; font-size: 16px; }
+.ed-tpl-gd { margin: 0 0 10px; font-size: 13px; }
+.ed-tpl-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 0 0 12px; }
+.ed-tpl-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.ed-tpl-mode { flex: none; display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 99px; font: 600 11px/1.6 var(--ed-font, inherit); white-space: nowrap; }
+.ed-tpl-mode::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+/* Raw colours (not tokens): a fixed traffic-light semantic (offline = green, serverless = amber, backend = red),
+   identical in every theme; color-mix makes the tint from the same hue. Dark-mode text variants below. */
+.ed-tpl-mode-offline { color: #15803d; background: color-mix(in srgb, #16a34a 14%, transparent); }
+.ed-tpl-mode-serverless { color: #a16207; background: color-mix(in srgb, #eab308 20%, transparent); }
+.ed-tpl-mode-backend { color: #b91c1c; background: color-mix(in srgb, #dc2626 14%, transparent); }
+.ed-tpl-m-offline { border-top: 3px solid #16a34a; }
+.ed-tpl-m-serverless { border-top: 3px solid #eab308; }
+.ed-tpl-m-backend { border-top: 3px solid #dc2626; }
+.ed-tpl-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.ed-tpl-tag { padding: 0 6px; border-radius: 5px; font-size: 11px; line-height: 1.7; background: var(--ed-hover); color: var(--ed-text); border: 1px solid var(--ed-border); }
+.ed-tpl-tag-opt { background: transparent; color: var(--ed-muted); border-style: dashed; }
+.ed-tpl-note { color: var(--ed-muted); font-style: italic; }
+.ed-tpl-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+@media (prefers-color-scheme: dark) { .ed-tpl-mode-offline { color: #4ade80; } .ed-tpl-mode-serverless { color: #facc15; } .ed-tpl-mode-backend { color: #f87171; } }
+
+/* Export */
+.ed-export { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 20px; }
+@media (max-width: 760px) { .ed-export { grid-template-columns: 1fr; } }
+.ed-mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.ed-mode-card {
+  display: flex; flex-direction: column; gap: 3px; padding: 10px; text-align: left;
+  border: 1.5px solid var(--ed-border); border-radius: var(--ed-radius); background: var(--ed-panel);
+}
+.ed-mode-card small { color: var(--ed-muted); line-height: 1.35; }
+.ed-mode-card.ed-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.ed-mode-card strong { display: flex; align-items: center; gap: 6px; }
+.ed-mode-card strong .ed-ic { flex: none; width: 16px; height: 16px; color: var(--ed-accent); }
+/* Needed because .ed-fields sets display, which beats the UA's [hidden] { display: none } rule. */
+.ed-export-extra[hidden] { display: none; }
+.ed-export-report { padding: 14px; border-radius: var(--ed-radius); background: var(--ed-panel-2); border: 1px solid var(--ed-border); display: flex; flex-direction: column; gap: 12px; transition: opacity .15s; }
+.ed-export-report.ed-busy { opacity: .6; }
+.ed-report-h { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-muted); }
+.ed-report-total { display: flex; align-items: baseline; justify-content: space-between; }
+.ed-report-total strong { font-size: 24px; font-variant-numeric: tabular-nums; }
+.ed-report-bars { display: flex; flex-direction: column; gap: 6px; }
+.ed-report-row { display: grid; grid-template-columns: 90px 1fr 64px; gap: 8px; align-items: center; font-size: 12px; }
+.ed-report-bar { height: 6px; border-radius: 6px; background: var(--ed-border); overflow: hidden; }
+.ed-report-bar > span { display: block; height: 100%; background: var(--ed-accent); border-radius: inherit; }
+.ed-report-v { text-align: right; font-variant-numeric: tabular-nums; color: var(--ed-muted); }
+
+/* Preview */
+/* Full-viewport overlay above dialogs; the frame background is white because an exported page without its own
+   background expects the browser default, not the editor's stage colour. */
+.ed-preview { position: fixed; inset: 0; z-index: 250; display: grid; grid-template-rows: auto minmax(0, 1fr); background: var(--ed-stage); animation: ed-in .15s ease-out; }
+.ed-preview-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--ed-panel); border-bottom: 1px solid var(--ed-border); }
+.ed-preview-note { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.ed-preview-note > .ed-muted { font-size: 12px; line-height: 1.3; }
+.ed-preview-stage { display: flex; justify-content: center; overflow: auto; min-height: 0; }
+.ed-preview-stage.ed-framed { padding: 20px; }
+.ed-preview-frame { width: 100%; height: 100%; border: 0; background: #fff; }
+.ed-preview-stage.ed-framed .ed-preview-frame { border-radius: 10px; box-shadow: var(--ed-shadow-lg); max-width: 100%; }
+@media (max-width: 760px) { .ed-hide-sm { display: none; } }
+
+/* Notes (info / warning boxes in settings panels) */
+.ed-note { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0 12px; padding: 9px 11px; border-radius: var(--ed-radius-sm); background: var(--ed-accent-weak); color: var(--ed-text); font-size: 12px; line-height: 1.45; }
+.ed-note .ed-ic { color: var(--ed-accent); margin-top: 1px; }
+.ed-note-warn { background: color-mix(in srgb, var(--ed-warn) 14%, transparent); }
+.ed-note-warn .ed-ic { color: var(--ed-warn); }
+.ed-hint-row { align-items: center; gap: 8px; margin: 6px 0; }
+.ed-hint-row .ed-hint { margin: 0; flex: 1 1 auto; }
+.ed-mono { font-family: var(--ed-mono); font-size: 12px; }
+
+/* Anchor field (products with anchors) */
+.ed-anchor-hash { display: inline-flex; align-items: center; justify-content: center; width: 22px; color: var(--ed-muted); font-weight: 700; flex: none; }
+.ed-anchor { font-family: var(--ed-mono); }
+
+/* Text field with suggestions (datalist) and an optional link picker button */
+.ed-suggest { display: block; width: 100%; }
+.ed-suggest.ed-suggest-has-pick { display: flex; align-items: center; gap: 4px; }
+.ed-suggest-has-pick > .ed-input { flex: 1 1 auto; min-width: 0; }
+.ed-suggest-pick { flex: none; }
+.ed-menu-links { max-height: min(70vh, 520px); overflow-y: auto; }
+
+/* Icon-only segmented control (stage bar device widths) */
+/* (0,2,0) beats .ed-seg-btn (0,1,0) in ui/base.css regardless of order. */
+.ed-seg-ic .ed-seg-btn { padding: 0 7px; min-width: 30px; }
+.ed-seg-ic .ed-seg-btn .ed-ic, .ed-seg-ic .ed-seg-btn svg { width: 16px; height: 16px; }
+#ed-device { margin-right: 6px; }
+@media (max-width: 760px) { #ed-device { display: none; } }

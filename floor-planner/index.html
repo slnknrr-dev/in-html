@@ -1,0 +1,24 @@
+<!doctype html>
+<!-- floor-planner/index.html - plan editor (drawing, furniture palette, inspector, layers, checks, exports). An empty shell: main.js builds the UI into <main>. Both pages share this markup
+     except for title and entry module, so the shell header and nav are identical. Build strips these comments. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Floor Planner</title>
+<!-- Favicon as an SVG data: URI: no request, works offline. %23 = '#' (a raw '#' would start a URL fragment). -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.2' stroke-linejoin='round' d='M6 6h20v20H6zM6 16h8M19 16h7M14 6v6M14 20v6M19 16v10'/%3E%3C/svg%3E">
+<!-- Cascade order is a contract: tokens + primitives (ed-), shell (ap-), this app (fp-). -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- Page registry read by common.js pageHref(): the build rewrites <a href> reliably, JS string literals it would not. -->
+<a id="pg-plan" href="index.html" hidden></a>
+<a id="pg-seating" href="seating.html" hidden></a>
+<!-- Mount point; module scripts are deferred, so #main exists when main.js runs. -->
+<main class="ap-main" id="main"></main>
+<script type="module" src="./main.js"></script>
+</body>
+</html>

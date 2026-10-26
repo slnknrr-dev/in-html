@@ -1,0 +1,185 @@
+/* batumi-map/app.css - Batumi Map: the map page (search and selection panel beside a full-height map stage with
+   zoom buttons, scale bar and attribution; night colours of the labels in the dark scheme) and the street list
+   (filter and exports, letter index, the gazetteer table). Needs ui/base.css + ui/app.css.
+
+   CONTRACT
+   - Namespace: own classes start with `bm-`; shared primitives `ed-` (ui/base.css), shell `ap-` (ui/app.css).
+   - Specificity: one class, two for state/context (`.bm-res.bm-on`, `.bm-dark .bm-scale-t`). The night theme of the
+     map is a class on the stage (.bm-dark, set by JS from the effective theme), not a media query: the map has its
+     own palette (mapdata.js LIGHT / DARK) that must switch together with the SVG it draws.
+   - Colours: UI chrome uses tokens. The map itself (stage background, dots, scale bar, attribution) uses raw colours
+     because it mirrors the cartographic style table in geo/osm.js / mapdata.js, which is not token-based; each raw
+     colour has a .bm-dark counterpart below.
+   - The house / selection accent #e11d48 (rose) is deliberately outside the token set: it must contrast with every
+     map layer (roads, water, green) in both themes, which the UI accent blue does not over water.
+   - !important: only in the phone table layout (see there). */
+
+.bm-mono { font-family: var(--ed-mono); font-size: 12.5px; }
+.bm-muted { color: var(--ed-muted); font-style: normal; font-size: 12px; }
+/* Visually hidden but announced (the classic sr-only pattern): clip + 1px box keeps it in the accessibility tree,
+   unlike display: none or visibility: hidden which remove it. */
+.bm-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* Links styled as buttons (export downloads): undo the link colour and underline the button primitive does not
+   reset because it targets <button>. */
+a.ed-btn { color: inherit; text-decoration: none; }
+
+/* ---------------------------------------------------------------- map page: layout */
+.bm-main { padding-top: 14px; padding-bottom: 10px; }
+/* Side panel + map. align-items: stretch so the map column is as tall as the row. */
+.bm-work { display: grid; gap: 14px; grid-template-columns: minmax(290px, 360px) minmax(0, 1fr); align-items: stretch; }
+/* The side panel scrolls on its own and is capped to the viewport minus shell header/footer (158px measured from
+   the shell), so search results never push the map off screen. dvh: excludes mobile browser chrome. */
+.bm-side { display: flex; flex-direction: column; gap: 14px; min-width: 0; max-height: calc(100dvh - 158px); overflow: auto; padding-right: 2px; }
+.bm-mapcol { min-width: 0; display: flex; }
+/* Phones: one column; the selection card is ordered after the map so the map is reached right after the search. */
+@media (max-width: 860px) {
+  .bm-work { grid-template-columns: minmax(0, 1fr); }
+  .bm-side { max-height: none; overflow: visible; order: 0; }
+  .bm-mapcol { order: 1; }
+  .bm-selcard { order: 2; }
+}
+
+/* ---------------------------------------------------------------- search */
+.bm-qwrap { position: relative; display: flex; align-items: center; }
+/* Search icon overlaid inside the input; pointer-events: none so clicks fall through to the input. */
+.bm-qwrap > .ed-ic { position: absolute; inset-inline-start: 10px; color: var(--ed-muted); pointer-events: none; display: inline-flex; }
+.bm-q { padding-inline-start: 34px; font-size: 15px; min-height: 40px; }
+.bm-search .ed-hint { margin-top: 6px; }
+.bm-status { font-size: 12.5px; color: var(--ed-muted); margin-top: 8px; }
+/* :empty collapses status and result containers when JS clears them; no class toggling needed. */
+.bm-status:empty { display: none; }
+.bm-status.bm-none { color: var(--ed-danger); }
+.bm-results { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 42vh; overflow: auto; }
+.bm-results:empty { display: none; }
+.bm-res {
+  display: flex; gap: 9px; align-items: center; padding: 7px 9px; border-radius: 9px; cursor: pointer;
+  border: 1px solid var(--ed-border); background: var(--ed-panel-2);
+}
+.bm-res.bm-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.bm-res-ic { display: inline-flex; flex: none; color: var(--ed-accent); }
+/* House results use the map's house colour, so list and map markers read as the same thing. */
+.bm-res[data-kind="house"] .bm-res-ic { color: #e11d48; }
+.bm-res-t { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+/* overflow-wrap: anywhere: long Georgian street names without spaces must wrap in the narrow panel. */
+.bm-res-main { font-weight: 600; overflow-wrap: anywhere; }
+.bm-res-sub { font-size: 12px; color: var(--ed-muted); overflow-wrap: anywhere; }
+.bm-count { flex: none; font-size: 11.5px; font-weight: 600; color: var(--ed-muted); white-space: nowrap; }
+
+/* ---------------------------------------------------------------- selection */
+.bm-sel { display: flex; flex-direction: column; gap: 10px; }
+.bm-sel-h { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.bm-sel-h .ed-ic { color: var(--ed-accent); display: inline-flex; }
+.bm-kv { font-size: 13px; }
+.bm-kv a { color: var(--ed-accent); }
+.bm-sel .ap-actions { margin-top: 0; }
+.bm-empty { padding: 14px 8px; }
+.bm-link { background: none; border: 0; padding: 0; color: var(--ed-accent); text-align: start; cursor: pointer; font: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.bm-houses { display: flex; flex-direction: column; gap: 8px; }
+.bm-hq { max-width: 160px; }
+.bm-hchips { display: flex; flex-wrap: wrap; gap: 5px; max-height: 190px; overflow: auto; align-items: center; }
+.bm-hchip {
+  min-width: 38px; min-height: 30px; padding: 3px 8px; border-radius: 8px; border: 1px solid var(--ed-border);
+  background: var(--ed-panel-2); color: var(--ed-text); font-size: 12.5px; font-variant-numeric: tabular-nums;
+}
+.bm-hchip:hover { border-color: var(--ed-border-strong); }
+.bm-hchip.bm-on { border-color: #e11d48; color: #e11d48; box-shadow: inset 0 0 0 1px #e11d48; }
+
+/* ---------------------------------------------------------------- map stage */
+/* The map stage. touch-action: none hands all touch gestures (pan, pinch) to the JS pointer handlers instead of
+   the browser's page scroll/zoom. user-select: none stops drags from selecting label text. contain: strict
+   (size + layout + paint + style) isolates the stage: its many SVG nodes never trigger layout of the page, and the
+   explicit height below satisfies size containment (a strictly contained box without a size would collapse to 0).
+   outline: none is safe because :focus-visible below draws a ring instead. */
+.bm-stage {
+  position: relative; flex: 1 1 auto; min-height: 420px; height: calc(100dvh - 158px); overflow: hidden;
+/* #f4f1ea is the land colour of the light style, shown before the first SVG paints. */
+  border-radius: 14px; border: 1px solid var(--ed-border); background: #f4f1ea; touch-action: none; user-select: none;
+  -webkit-user-select: none; cursor: grab; outline: none; contain: strict;
+}
+.bm-stage.bm-dark { background: #1a1d21; }
+.bm-stage:focus-visible { box-shadow: var(--ed-focus); border-color: var(--ed-accent); }
+.bm-stage.bm-grab { cursor: grabbing; }
+@media (max-width: 860px) { .bm-stage { height: 64dvh; min-height: 340px; } }
+/* Pan/zoom by CSS transform on the layer (GPU compositing, no re-render per frame); will-change promotes it to its
+   own layer up front. The SVG is redrawn only when a gesture ends (geo/render.js). */
+.bm-layer { position: absolute; transform-origin: 50% 50%; will-change: transform; }
+.bm-layer > svg { position: absolute; inset: 0; display: block; }
+.bm-dots circle { fill: #e11d48; stroke: #fff; stroke-width: 1.5; }
+/* Halo labels: paint-order: stroke draws the white stroke under the fill, so text stays legible over any road. */
+.bm-dots text { font: 600 11px/1 var(--ed-font); fill: #9f1239; paint-order: stroke; stroke: #fff; stroke-width: 3px; stroke-linejoin: round; }
+/* Night labels: geo/render.js writes fill attributes, CSS overrides them. Attribute selectors match the exact
+   colours render.js emits; a presentation attribute has the lowest priority in the cascade, so any author rule
+   beats it without !important. Fragile by design: changing a label colour in geo/osm.js requires updating these. */
+/* Night labels: geo/render.js writes fill attributes, CSS overrides them. */
+.bm-dark .bm-layer text[fill="#4a4a48"] { fill: #cfd5dd; }
+.bm-dark .bm-layer text[fill="#333"], .bm-dark .bm-layer text[fill="#222"] { fill: #e6e9ef; }
+.bm-dark .bm-dots circle { stroke: #111317; }
+.bm-dark .bm-dots text { fill: #fecdd3; stroke: #111317; }
+
+/* Map controls above the layer (z-index 2); inset-inline-end mirrors them for right-to-left layouts. */
+.bm-ctrl { position: absolute; top: 10px; inset-inline-end: 10px; display: flex; flex-direction: column; gap: 6px; z-index: 2; }
+/* 40px buttons: close to the 44px touch target, sized to fit the corner of a phone map. */
+.bm-zbtn {
+  width: 40px; height: 40px; display: inline-flex; align-items: center; justify-content: center; border-radius: 10px;
+  border: 1px solid var(--ed-border-strong); background: var(--ed-panel); color: var(--ed-text); box-shadow: var(--ed-shadow-sm); cursor: pointer;
+}
+.bm-zbtn:hover:not(:disabled) { border-color: var(--ed-accent); color: var(--ed-accent); }
+.bm-zbtn:disabled { opacity: .45; cursor: default; }
+.bm-zbtn svg { width: 20px; height: 20px; }
+/* Scale bar: pointer-events: none so it never blocks a pan that starts on it. */
+.bm-scale { position: absolute; left: 10px; bottom: 10px; z-index: 2; display: flex; flex-direction: column; gap: 2px; pointer-events: none; }
+.bm-scale-bar { display: block; height: 7px; border: 2px solid #374151; border-top: 0; background: rgba(255, 255, 255, .55); }
+/* Double text-shadow forms a halo: readable over both land and water without a background box. */
+.bm-scale-t { font: 600 11px/1.2 var(--ed-font); color: #1f2937; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
+.bm-dark .bm-scale-bar { border-color: #d1d5db; background: rgba(0, 0, 0, .35); }
+.bm-dark .bm-scale-t { color: #e5e7eb; text-shadow: 0 0 3px #000, 0 0 3px #000; }
+/* ODbL attribution: required by the OpenStreetMap licence whenever the map is shown; kept visible on every size,
+   only width-capped to leave room for the scale bar. */
+.bm-attr {
+  position: absolute; right: 0; bottom: 0; z-index: 2; padding: 3px 8px; font-size: 11px; line-height: 1.3;
+  background: rgba(255, 255, 255, .82); color: #374151; border-top-left-radius: 8px; max-width: calc(100% - 120px); text-align: end;
+}
+.bm-attr a { color: #1d4ed8; }
+.bm-dark .bm-attr { background: rgba(17, 19, 23, .82); color: #d1d5db; }
+.bm-dark .bm-attr a { color: #93c5fd; }
+
+/* ---------------------------------------------------------------- street list */
+.bm-list { max-width: 1280px; }
+.bm-st-title { margin: 0 0 6px; font-size: 22px; letter-spacing: -.01em; }
+.bm-st-head .ap-lead a { color: var(--ed-accent); }
+.bm-st-work { display: grid; gap: 18px; grid-template-columns: minmax(260px, 320px) minmax(0, 1fr); align-items: start; }
+/* Sticky filter card beside the long table on desktop; static on phones where it would cover the list. */
+.bm-st-work > .ap-card { position: sticky; top: 76px; }
+@media (max-width: 860px) { .bm-st-work { grid-template-columns: minmax(0, 1fr); } .bm-st-work > .ap-card { position: static; } }
+.bm-st-count { margin-top: 10px; font-size: 13px; color: var(--ed-muted); }
+.bm-st-main { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.bm-letters { display: flex; flex-wrap: wrap; gap: 4px; }
+.bm-letter {
+  min-width: 28px; padding: 2px 6px; text-align: center; border-radius: 7px; border: 1px solid var(--ed-border);
+  background: var(--ed-panel); color: var(--ed-text); text-decoration: none; font-weight: 600; font-size: 13px;
+}
+.bm-letter:hover { border-color: var(--ed-accent); color: var(--ed-accent); }
+.bm-st-wrap { max-height: none; }
+.bm-st-table td, .bm-st-table th { vertical-align: middle; }
+.bm-st-table .bm-num { text-align: end; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Letter group rows. scroll-margin-top keeps the row from hiding under the sticky shell header when a letter link
+   jumps to it. position: static is defensive: the shared sticky rule (.ap-table thead th) targets thead cells only, and a sticky
+   letter row inside tbody would stack under the real header. */
+.bm-st-letter th { background: var(--ed-panel-2); font-size: 15px; color: var(--ed-accent); position: static; scroll-margin-top: 80px; }
+.bm-onmap { white-space: nowrap; }
+/* Phones: the table becomes cards. thead hidden, each row a 2-column grid: name and sub-lines left, count and the
+   "on map" action right. Column roles come from nth-child, so the column order in streets.js is part of this
+   contract. */
+@media (max-width: 640px) {
+  .bm-st-table thead { display: none; }
+  .bm-st-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 8px 4px; border-bottom: 1px solid var(--ed-border); }
+  .bm-st-table td { border: 0; padding: 0 4px; }
+  .bm-st-table td:nth-child(1) { font-weight: 600; grid-column: 1; }
+  .bm-st-table td:nth-child(2), .bm-st-table td:nth-child(3) { grid-column: 1; font-size: 12.5px; color: var(--ed-muted); }
+  .bm-st-table td:nth-child(4) { grid-column: 2; grid-row: 1; }
+  .bm-st-table td:nth-child(5) { grid-column: 2; grid-row: 2 / span 2; align-self: center; }
+/* !important: the letter row must stay a single full-width block, overriding the generic `tr { display: grid }`
+   just above: `.bm-st-table tr` is (0,1,1) and outranks `.bm-st-letter` (0,1,0) regardless of order. */
+  .bm-st-letter { display: block !important; }
+  .bm-st-letter th { display: block; }
+}

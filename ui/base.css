@@ -1,0 +1,529 @@
+/* ui/base.css — shared UI stylesheet of every application: design tokens (light / dark), reset, base elements, controls,
+   fields, collapsible sections, overlays (toasts, dialogs, menus, popovers), loading state. Loaded FIRST; ui/app.css
+   (single-page tool shell) and the app's own stylesheet follow, so equal-specificity rules there win by source order.
+
+   CONTRACT
+   - Namespace: every class is `ed-` (historically "editor"; now the shared primitive prefix). Ids `#ed-overlays`,
+     `#ed-loading`, `#ed-scroll` are singletons created by JS / page HTML. Shell classes are `ap-` (ui/app.css), apps
+     use their own prefix (`uc-`, …). A prefix = an owner: grep `ed-btn` finds every user across the repository.
+   - Specificity budget: one class (0,1,0) for a primitive; two classes for a variant or state (`.ed-btn.ed-primary`
+     0,2,0; `.ed-iconbtn.ed-on`). Variants are COMPOUND (`.ed-btn.ed-sm`), never bare (`.ed-sm`): a bare modifier
+     would leak onto every component that reuses the word, and the compound outranks the base regardless of order.
+     Hover rules use `:hover:not(:disabled)` (0,3,0 on a compound) so a disabled control never lights up.
+     Consequence for apps: overriding a primitive needs (0,1,0) placed after this file, or (0,2,0) anywhere; a variant
+     needs (0,2,0)+ after, or (0,3,0). Ids appear only for the singletons above, where no app restyles them.
+   - Tokens: all colours, shadows, radii, fonts are custom properties `--ed-*` on :root. Components read tokens only,
+     so a theme is a single block of overrides; raw colours below are deliberate exceptions and say why.
+   - Theme switching (three states, driven by ui/app.js applyTheme):
+       no [data-theme]       → follow the OS: light tokens, overridden by the prefers-color-scheme: dark block;
+       [data-theme="light"]  → the dark media block is excluded by :not([data-theme="light"]);
+       [data-theme="dark"]   → the explicit block applies whatever the OS says.
+     The dark values are written twice (media block + attribute block) because plain CSS has no mixin and a media
+     query cannot be OR-ed with an attribute selector. Alternative `light-dark()` would need one declaration per
+     token but is too new for the older embedded engines this repository targets. KEEP THE TWO BLOCKS IDENTICAL.
+     `color-scheme` is set with the tokens so native parts (scrollbars, form controls, date pickers) match the theme.
+   - !important only in three places: `[hidden]` (beat author `display`), `.ed-out` (beat an element's own opacity
+     during fade-out) and prefers-reduced-motion (beat every animation, including inline and app ones).
+   - Sizes: 13px base / 32px control height (editor density). Single-page tools raise it to 14px via body.ap. */
+
+/* ==========================================================================
+   Tokens (light; dark follows the system or [data-theme])
+   ========================================================================== */
+/* Semantic names, not colour names: --ed-panel is "card surface", not "white", so the dark block can remap it.
+   Surface ladder: bg (page) < panel (cards) ≈ panel-2 (insets, footers) < hover. Text ladder: text > muted > faint
+   (faint is placeholders / decorative only, it does not meet 4.5:1 body-text contrast). Pairs come as base + weak
+   (tinted background) + text-on (foreground on the solid colour): --ed-accent / -weak / -text, --ed-danger / -weak /
+   -solid / --ed-on-danger. --ed-danger is for text and icons, --ed-danger-solid for filled surfaces — in dark mode
+   they differ (light red text reads on dark panels, but white text needs a darker red fill). */
+:root {
+  --ed-bg: #f6f7f9;
+  --ed-panel: #ffffff;
+  --ed-panel-2: #f9fafb;
+  --ed-hover: #f1f3f6;
+  --ed-border: #e3e6eb;
+  --ed-border-strong: #cfd4dc;
+  --ed-text: #1d2330;
+  --ed-muted: #6b7280;
+  --ed-faint: #9aa1ad;
+  --ed-accent: #2563eb;
+  --ed-accent-hover: #1d4ed8;
+  --ed-accent-weak: #e8efff;
+  --ed-accent-text: #ffffff;
+  --ed-danger: #dc2626;
+  --ed-danger-weak: #fde8e8;
+  --ed-danger-solid: #dc2626;
+  --ed-on-danger: #fff;
+  --ed-ok: #16a34a;
+  --ed-warn: #d97706;
+  /* Backdrop behind canvases / previews (ui/app.css .ap-surface, editor stages): slightly darker than bg so a white
+     page or image reads as an object on a table. */
+  --ed-stage: #e8ebf0;
+  /* Radii and shadows are theme-independent in shape; shadows get stronger alpha in dark (below) because a
+     low-alpha shadow on a dark surface is invisible. Shadow colour is a blue-grey (16,24,40), not pure black:
+     reads softer on light panels. */
+  --ed-radius: 8px;
+  --ed-radius-sm: 6px;
+  --ed-shadow-sm: 0 1px 2px rgba(16, 24, 40, .06);
+  --ed-shadow: 0 4px 16px rgba(16, 24, 40, .10), 0 1px 3px rgba(16, 24, 40, .08);
+  --ed-shadow-lg: 0 24px 64px rgba(16, 24, 40, .22), 0 4px 12px rgba(16, 24, 40, .10);
+  /* Focus ring as a box-shadow token (see :focus-visible): follows border-radius, does not shift layout, and its
+     colour = accent at 35% so it is visible on both panel and accent-filled buttons. Duplicates the accent RGB
+     because rgba() cannot take a hex token; color-mix() could, at the cost of older engines. */
+  --ed-focus: 0 0 0 3px rgba(37, 99, 235, .35);
+  /* System font stack: zero downloads (offline apps, no font requests to audit). Georgian fallbacks are explicit
+     ("Noto Sans Georgian", Windows' Sylfaen) because the repository ships a Georgian UI and system-ui on some
+     platforms has no Mkhedruli glyphs. */
+  --ed-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Noto Sans Georgian", Sylfaen, sans-serif;
+  --ed-mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  /* Layout tokens of the editor shells (studio/editor.css: side panel widths, top bar height). Live here so every
+     editor shares one geometry and apps can read them in calc(). */
+  --ed-left-w: 272px;
+  --ed-right-w: 332px;
+  --ed-top-h: 52px;
+  color-scheme: light;
+}
+/* OS dark, unless the user forced light. :root:not([data-theme="light"]) = (0,2,0) beats :root (0,1,0), so the
+   override does not depend on being later in the file. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ed-bg: #14171c;
+    --ed-panel: #1b1f26;
+    --ed-panel-2: #20252d;
+    --ed-hover: #262c35;
+    --ed-border: #2c323c;
+    --ed-border-strong: #3a414d;
+    --ed-text: #e6e9ef;
+    --ed-muted: #9aa3b2;
+    --ed-faint: #6f7886;
+    /* Lighter accent in dark: #2563eb on #1b1f26 is too low-contrast for text; and accent-text flips to near-black
+       because white on #5b8cff fails contrast. */
+    --ed-accent: #5b8cff;
+    --ed-accent-hover: #7aa2ff;
+    --ed-accent-weak: #1f2c4d;
+    --ed-accent-text: #0b1220;
+    --ed-danger: #f87171;
+    --ed-danger-weak: #3a1d1d;
+    --ed-danger-solid: #b91c1c;
+    --ed-ok: #4ade80;
+    --ed-warn: #fbbf24;
+    --ed-stage: #0f1216;
+    --ed-shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
+    --ed-shadow: 0 4px 16px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .3);
+    --ed-shadow-lg: 0 24px 64px rgba(0, 0, 0, .6), 0 4px 12px rgba(0, 0, 0, .4);
+    --ed-focus: 0 0 0 3px rgba(91, 140, 255, .45);
+    color-scheme: dark;
+  }
+}
+/* User forced dark: same values as the block above (see CONTRACT: keep identical). Not inside a media query, so it
+   wins on a light OS. Radii, fonts, layout tokens and --ed-on-danger are not repeated: they do not change. */
+:root[data-theme="dark"] {
+  --ed-bg: #14171c;
+  --ed-panel: #1b1f26;
+  --ed-panel-2: #20252d;
+  --ed-hover: #262c35;
+  --ed-border: #2c323c;
+  --ed-border-strong: #3a414d;
+  --ed-text: #e6e9ef;
+  --ed-muted: #9aa3b2;
+  --ed-faint: #6f7886;
+  --ed-accent: #5b8cff;
+  --ed-accent-hover: #7aa2ff;
+  --ed-accent-weak: #1f2c4d;
+  --ed-accent-text: #0b1220;
+  --ed-danger: #f87171;
+  --ed-danger-weak: #3a1d1d;
+  --ed-danger-solid: #b91c1c;
+  --ed-ok: #4ade80;
+  --ed-warn: #fbbf24;
+  --ed-stage: #0f1216;
+  --ed-shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
+  --ed-shadow: 0 4px 16px rgba(0, 0, 0, .45), 0 1px 3px rgba(0, 0, 0, .3);
+  --ed-shadow-lg: 0 24px 64px rgba(0, 0, 0, .6), 0 4px 12px rgba(0, 0, 0, .4);
+  --ed-focus: 0 0 0 3px rgba(91, 140, 255, .45);
+  color-scheme: dark;
+}
+
+/* ==========================================================================
+   Base & layout
+   ========================================================================== */
+/* border-box everywhere, pseudo-elements included: width:100% + padding + border never overflows its parent. */
+*, *::before, *::after { box-sizing: border-box; }
+/* Full-height root for the editor shells (fixed grid, internal scroll panes). Single-page tools undo this with
+   body.ap { height: auto } in ui/app.css so the document itself scrolls. */
+html, body { height: 100%; }
+/* One font shorthand sets size/line-height/family at once; every descendant inherits via `inherit` below.
+   -webkit-font-smoothing: grayscale AA on macOS — subpixel AA makes light-on-dark text look bold. */
+body {
+  margin: 0;
+  font: 13px/1.45 var(--ed-font);
+  color: var(--ed-text);
+  background: var(--ed-bg);
+  -webkit-font-smoothing: antialiased;
+}
+/* Form controls do not inherit font/colour by default (UA styles set system font, 13.33px, black text): without
+   this, inputs ignore the theme's text colour in dark mode and the UI font. */
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+/* Disabled = dimmed, not hidden: keeps layout stable and tells the user the action exists. */
+button:disabled { cursor: default; opacity: .45; }
+/* :focus-visible (keyboard focus only, not mouse clicks) gets the token ring; outline removed only because a
+   replacement is provided. Specificity (0,1,0): component rules that set their own box-shadow on :focus-visible
+   (.ed-menu-item) override it. */
+:focus-visible { outline: none; box-shadow: var(--ed-focus); }
+/* !important: the UA rule `[hidden] { display: none }` has the lowest priority, so any author `display`
+   (.ed-btn { display: inline-flex }) would resurrect a hidden element. JS toggles el.hidden everywhere. */
+[hidden] { display: none !important; }
+h2, h3 { margin: 0; }
+kbd, .ed-kbd { font: 11px var(--ed-mono); color: var(--ed-muted); }
+/* Utility classes: one property each, used inside flex rows. .ed-spacer pushes following items to the far end. */
+.ed-spacer { flex: 1 1 auto; }
+.ed-muted { color: var(--ed-muted); }
+.ed-center { text-align: center; }
+.ed-block { display: block; }
+.ed-error { color: var(--ed-danger); }
+.ed-hint { color: var(--ed-muted); font-size: 12px; margin: 8px 0; line-height: 1.4; }
+/* Icon wrapper produced by ui/icons.js iconEl(): <span class="ed-ic"><svg class="ed-ico">. Fixed 18px box, flex:none
+   so it never shrinks in a crowded row; the svg is display:block to kill the inline baseline gap under it.
+   Contexts resize with a two-class selector (`.ed-btn.ed-sm .ed-ic`, `.uc-read .ed-ic svg`). */
+.ed-ic { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 18px; height: 18px; }
+.ed-ic svg, .ed-ico { width: 18px; height: 18px; display: block; }
+
+/* ==========================================================================
+   Controls
+   ========================================================================== */
+/* Button. inline-flex + gap: icon and label align without margins; height (not padding) fixes the size so icon-only
+   and text buttons line up in a row. Border uses border-strong: on a panel-coloured background the border is the
+   only edge. nowrap — a two-line button breaks row alignment; long labels should ellipsize in their container. */
+.ed-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px;
+  border: 1px solid var(--ed-border-strong); border-radius: var(--ed-radius-sm); background: var(--ed-panel); font-weight: 500;
+  white-space: nowrap;
+}
+.ed-btn:hover:not(:disabled) { background: var(--ed-hover); }
+.ed-btn.ed-sm { height: 28px; padding: 0 9px; font-size: 12px; }
+.ed-btn.ed-sm .ed-ic, .ed-btn.ed-sm svg { width: 15px; height: 15px; }
+/* Variants: (0,2,0) outranks the base (0,1,0), but NOT the base hover `.ed-btn:hover:not(:disabled)` (0,3,0), so the
+   primary needs its own hover rule (0,4,0) — otherwise hovering a primary would paint it grey. */
+.ed-btn.ed-primary { background: var(--ed-accent); border-color: var(--ed-accent); color: var(--ed-accent-text); }
+.ed-btn.ed-primary:hover:not(:disabled) { background: var(--ed-accent-hover); }
+/* Danger alone = red text on a neutral button (secondary destructive). With primary = filled red (confirm delete). */
+.ed-btn.ed-danger { color: var(--ed-danger); }
+.ed-btn.ed-primary.ed-danger { background: var(--ed-danger-solid); border-color: var(--ed-danger-solid); color: var(--ed-on-danger); }
+/* Hover darkens by mixing with black rather than a separate token: one less token per theme, works for both. */
+.ed-btn.ed-primary.ed-danger:hover:not(:disabled) { background: color-mix(in srgb, var(--ed-danger-solid) 85%, #000); }
+/* "Add item" button under a list: dashed border reads as a placeholder slot. Meant to be combined with .ed-btn. */
+.ed-block-btn { width: 100%; margin-top: 8px; border-style: dashed; color: var(--ed-accent); }
+/* Borderless square icon button (toolbars). 30px — compact for desktop toolbars; touch contexts enlarge it locally. */
+.ed-iconbtn {
+  display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; flex: none;
+  border: 0; border-radius: var(--ed-radius-sm); background: transparent; color: var(--ed-muted);
+}
+.ed-iconbtn:hover:not(:disabled) { background: var(--ed-hover); color: var(--ed-text); }
+/* Toggled-on state (pressed tool). (0,2,0) loses to hover (0,3,0): hovering an "on" button shows hover colours —
+   acceptable, it returns to accent on mouse-out. */
+.ed-iconbtn.ed-on { color: var(--ed-accent); background: var(--ed-accent-weak); }
+.ed-iconbtn.ed-sm { width: 24px; height: 24px; }
+.ed-iconbtn.ed-sm svg { width: 15px; height: 15px; }
+/* Danger icon buttons look neutral until hovered: a column of red trash icons would shout. (0,4,0) beats the
+   generic hover. */
+.ed-iconbtn.ed-danger:hover:not(:disabled) { color: var(--ed-danger); background: var(--ed-danger-weak); }
+/* Favourite star: fill follows currentColor so the outline icon becomes solid without a second glyph. */
+.ed-iconbtn.ed-star-on { color: var(--ed-warn); }
+.ed-iconbtn.ed-star-on svg { fill: currentColor; }
+/* Text input / select base. width:100% + min-width:0: fills its field and may shrink inside flex rows (an input's
+   intrinsic min width is ~20 characters and would overflow a narrow side panel otherwise). */
+.ed-input {
+  width: 100%; min-width: 0; height: 32px; padding: 0 9px;
+  border: 1px solid var(--ed-border-strong); border-radius: var(--ed-radius-sm); background: var(--ed-panel);
+}
+.ed-input:hover { border-color: var(--ed-faint); }
+/* :focus, not :focus-visible: a text field shows the ring on mouse focus too (it is where typing goes). (0,2,0) —
+   apps that must keep an error border while focused need !important or (0,3,0) (see unit-converter .uc-invalid). */
+.ed-input:focus { outline: none; border-color: var(--ed-accent); box-shadow: var(--ed-focus); }
+.ed-input::placeholder { color: var(--ed-faint); }
+/* Required-but-empty field: the placeholder itself turns warning-coloured and italic, so no extra message row. */
+.ed-input.ed-missing::placeholder { color: var(--ed-warn); font-style: italic; }
+/* Modifier combined with .ed-input on a <textarea>: undoes the fixed height. */
+.ed-textarea { height: auto; min-height: 60px; padding: 7px 9px; resize: vertical; line-height: 1.4; }
+/* Code editing: pre + overflow:auto = horizontal scroll instead of soft-wrap (line structure matters in code).
+   KNOWN DEFECT: the font stack duplicates --ed-mono literally; a change to the token will not reach code fields.
+   Fix: `font: 12px/1.5 var(--ed-mono)`. */
+.ed-textarea.ed-code { font: 12px/1.5 ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace; white-space: pre; overflow: auto; tab-size: 2; }
+/* Native select keeps its UA arrow; smaller right padding leaves room for it without clipping the text. */
+.ed-select { padding-right: 4px; }
+.ed-search { margin-bottom: 10px; }
+/* Number + unit suffix on one row: the input takes the remaining width, the unit keeps its natural width. */
+.ed-num-wrap { display: flex; align-items: center; gap: 6px; }
+.ed-num-wrap .ed-num { flex: 1 1 auto; }
+.ed-unit { color: var(--ed-muted); font-size: 12px; min-width: 18px; }
+/* Range + live value. accent-color themes the native slider without re-implementing its parts per engine.
+   The value has a min-width and tabular digits so the slider does not jitter as the number changes width. */
+.ed-range-wrap { display: flex; align-items: center; gap: 8px; }
+.ed-range { flex: 1 1 auto; accent-color: var(--ed-accent); min-width: 0; }
+.ed-range-val { min-width: 44px; text-align: right; color: var(--ed-muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+/* Switch: a real <input type=checkbox role=switch> restyled (keyboard, form state and a11y come free), not a div.
+   appearance:none strips the native box; the knob is ::after (allowed on checkboxes once appearance is none in all
+   current engines). Knob travel 14px = 34 − 16 − 2·2. The knob is literal white: it must stay white on both the grey
+   and the accent track in both themes, no token means that. */
+.ed-switch {
+  appearance: none; -webkit-appearance: none; position: relative; flex: none; width: 34px; height: 20px; margin: 0;
+  border-radius: 999px; background: var(--ed-border-strong); transition: background .15s; cursor: pointer;
+}
+.ed-switch::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, .3); transition: transform .15s;
+}
+.ed-switch:checked { background: var(--ed-accent); }
+/* transform, not `left`: compositor-only animation, no layout per frame. */
+.ed-switch:checked::after { transform: translateX(14px); }
+/* Colour input. The swatch is a vendor pseudo-element per engine; the WebKit and Gecko rules must stay SEPARATE —
+   one selector list with an unknown pseudo-element would be dropped entirely by the engine that does not know it. */
+.ed-color-wrap { display: flex; align-items: center; gap: 6px; }
+.ed-color { flex: none; width: 34px; height: 32px; padding: 2px; border: 1px solid var(--ed-border-strong); border-radius: var(--ed-radius-sm); background: var(--ed-panel); cursor: pointer; }
+.ed-color::-webkit-color-swatch-wrapper { padding: 0; }
+.ed-color::-webkit-color-swatch { border: 0; border-radius: 4px; }
+.ed-color::-moz-color-swatch { border: 0; border-radius: 4px; }
+/* "No colour" state (an <input type=color> always holds a value; emptiness is app state): checkerboard on the input,
+   swatch made transparent so the checkerboard shows through. Same separate-rules rule as above. */
+.ed-color-empty .ed-color { background: repeating-conic-gradient(var(--ed-border) 0 25%, var(--ed-panel) 0 50%) 0 0 / 10px 10px; }
+.ed-color-empty .ed-color::-webkit-color-swatch { opacity: 0; }
+.ed-color-empty .ed-color::-moz-color-swatch { opacity: 0; }
+.ed-color-txt { font-family: var(--ed-mono); font-size: 12px; }
+/* Segmented control (ui/app.js seg(), theme switch): a track (hover colour) with buttons; the selected one is a
+   raised panel. flex-wrap + max-width:100% — many options wrap instead of overflowing a narrow panel. */
+.ed-seg { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 2px; background: var(--ed-hover); border-radius: var(--ed-radius-sm); max-width: 100%; }
+.ed-seg-btn {
+  flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-height: 26px; padding: 0 10px;
+  border: 0; border-radius: 4px; background: transparent; color: var(--ed-muted); font-size: 12px; font-weight: 500;
+}
+.ed-seg-btn:hover { color: var(--ed-text); }
+.ed-seg-btn.ed-on { background: var(--ed-panel); color: var(--ed-text); box-shadow: var(--ed-shadow-sm); }
+/* Toggle chips (multi-select filters). Pill radius 999px: fully round at any height. */
+.ed-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.ed-chip {
+  height: 26px; padding: 0 10px; border: 1px solid var(--ed-border-strong); border-radius: 999px; background: var(--ed-panel);
+  font-size: 12px; font-weight: 500; color: var(--ed-muted);
+}
+.ed-chip:hover { color: var(--ed-text); border-color: var(--ed-faint); }
+/* (0,2,0) ties with .ed-chip:hover (0,2,0); declared later, so a hovered selected chip stays accent. Order matters. */
+.ed-chip.ed-on { background: var(--ed-accent-weak); border-color: var(--ed-accent); color: var(--ed-accent); }
+.ed-sugg { margin: 6px 0 10px; }
+/* Generic one-axis row; a direct-child input stretches, siblings (buttons) keep their width. */
+.ed-row { display: flex; align-items: center; gap: 6px; }
+.ed-row > .ed-input { flex: 1 1 auto; }
+.ed-copy-row { flex-wrap: wrap; }
+/* width:auto undoes .ed-input's 100% so flex-basis 90px governs; selects then share the row and wrap when narrow. */
+.ed-copy-row .ed-select { flex: 1 1 90px; width: auto; }
+/* Read-only tags and badges (non-interactive, unlike .ed-chip). */
+.ed-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.ed-tag { padding: 2px 8px; border-radius: 999px; background: var(--ed-hover); font-size: 12px; }
+.ed-tag-accent { background: var(--ed-accent-weak); color: var(--ed-accent); font-family: var(--ed-mono); font-size: 11px; }
+.ed-badge { padding: 1px 8px; border-radius: 999px; background: var(--ed-accent-weak); color: var(--ed-accent); font-size: 11px; font-weight: 600; white-space: nowrap; }
+
+/* Fields — label + control + hint, built by ui/app.js field() and the editors' form generators. */
+/* Vertical stack with gap (no margin collapsing, no :last-child fixups). The nested rule restates the gap so a
+   nested group does not inherit a different gap an app might set on the outer one. */
+.ed-fields { display: flex; flex-direction: column; gap: 12px; }
+.ed-fields .ed-fields { gap: 12px; }
+/* Two-column form grid; checkboxes and wide fields span both columns (`1 / -1` = first to last line). 1fr here, not
+   minmax(0,1fr): fields carry min-width:0 themselves (below), which is what lets 1fr shrink. */
+.ed-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 10px; }
+.ed-grid2 > .ed-field-check, .ed-grid2 > .ed-field-wide { grid-column: 1 / -1; }
+.ed-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+/* Checkbox field: control then label on one row (ui/app.js field() swaps the order for checkboxes); the hint is
+   forced to its own row with flex-basis:100%. */
+.ed-field-check { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.ed-field-check > .ed-hint { flex-basis: 100%; margin: 0; }
+.ed-field-check > .ed-label { flex: 1 1 0; min-width: 0; }
+/* A checkbox label is the clickable text of the option, so it reads as body text (not the muted caps-ish label). */
+.ed-field-check .ed-label { font-weight: 500; color: var(--ed-text); cursor: pointer; }
+/* Dependent option, indented under its parent checkbox. margin-inline-start: flips correctly in RTL. */
+.ed-field-check.ed-sub { margin-inline-start: 24px; }
+.ed-field-err { margin: 2px 0 0; font-size: 12px; line-height: 1.35; }
+.ed-label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--ed-muted); }
+/* Language marker of a multilingual field, pushed to the right end of the label row by margin-left:auto. */
+.ed-lang-badge { margin-left: auto; padding: 0 5px; border-radius: 4px; background: var(--ed-accent-weak); color: var(--ed-accent); font: 600 10px/16px var(--ed-mono); text-transform: uppercase; }
+/* Year + month pickers: fixed-width year, month grows; wraps under narrow widths. */
+.ed-date { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ed-date .ed-year { width: 84px; flex: none; }
+.ed-date .ed-month { width: auto; flex: 1 1 70px; }
+.ed-check-inline { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; cursor: pointer; }
+/* Attachment control: selector + preview card. overflow-wrap:anywhere breaks long file names without spaces. */
+.ed-att-ctl { display: flex; flex-direction: column; gap: 6px; }
+.ed-att-ctl .ed-select { flex: 1 1 auto; }
+.ed-att-prev { display: flex; align-items: center; gap: 8px; padding: 6px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel-2); }
+.ed-att-prev img { width: 44px; height: 44px; object-fit: cover; border-radius: 4px; background: var(--ed-hover); }
+.ed-att-meta { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.ed-att-meta small { color: var(--ed-muted); }
+/* Rich-text field: a read-only preview styled as an input (combined with .ed-input), capped at 96px with scroll;
+   editing happens in a dialog. cursor:default — it is not a text box you can type in. */
+.ed-rich-ctl { display: flex; flex-direction: column; gap: 6px; }
+.ed-rich-prev {
+  height: auto; min-height: 32px; max-height: 96px; overflow: auto; padding: 6px 9px; line-height: 1.4;
+  background: var(--ed-panel-2); cursor: default; overflow-wrap: anywhere;
+}
+.ed-rich-prev.ed-missing { color: var(--ed-faint); font-style: italic; }
+.ed-rich-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ed-rich-foot .ed-hint { margin: 0; }
+/* Icon picker button: [icon][name…]. :nth-child(2) is the name span (iconEl is child 1); it grows and ellipsizes. */
+.ed-icon-pick { justify-content: flex-start; width: 100%; }
+.ed-icon-pick > span:nth-child(2) { flex: 1 1 auto; text-align: left; overflow: hidden; text-overflow: ellipsis; }
+.ed-icon-picker { display: flex; flex-direction: column; gap: 8px; width: 300px; }
+/* auto-fill + minmax(36px,1fr): as many 36px+ cells per row as fit, stretched to fill the row exactly. */
+.ed-icon-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(36px, 1fr)); gap: 4px; max-height: 260px; overflow: auto; }
+/* Transparent 1px border reserves the space the hover/selected border will use: no 1px jump on state change. */
+.ed-icon-cell { display: inline-flex; align-items: center; justify-content: center; height: 36px; border: 1px solid transparent; border-radius: var(--ed-radius-sm); background: var(--ed-panel-2); color: var(--ed-text); }
+.ed-icon-cell svg { width: 20px; height: 20px; }
+.ed-icon-cell:hover { border-color: var(--ed-border-strong); }
+.ed-icon-cell.ed-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); color: var(--ed-accent); }
+
+/* Sections (collapsible) — native <details class="ed-sec"><summary class="ed-sec-h">: keyboard and open state for free,
+   no JS. The UA disclosure triangle is removed (list-style:none for Gecko/Blink, ::-webkit-details-marker for
+   Safari) and replaced by the first .ed-ic chevron, rotated when open. */
+.ed-sec { border-bottom: 1px solid var(--ed-border); }
+.ed-sec:last-child { border-bottom: 0; }
+.ed-sec-h {
+  display: flex; align-items: center; gap: 6px; padding: 10px 2px; cursor: pointer; list-style: none;
+  font-weight: 650; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--ed-text);
+}
+.ed-sec-h::-webkit-details-marker { display: none; }
+.ed-sec-h > .ed-ic { width: 14px; height: 14px; color: var(--ed-muted); transition: transform .15s; }
+.ed-sec-h > .ed-ic svg { width: 14px; height: 14px; }
+/* Child combinators all the way down: a nested <details> inside the body must not rotate the outer chevron's
+   siblings, and only the summary's FIRST icon is the chevron (others may be decorative). */
+.ed-sec[open] > .ed-sec-h > .ed-ic:first-child { transform: rotate(90deg); }
+.ed-sec-b { padding: 2px 2px 14px; }
+
+/* Field warnings (e.g. end date before start): a hint promoted to a warning with a left rule; text stays body
+   colour for readability (yellow text on white fails contrast). (0,2,0) overrides .ed-hint's margin. */
+.ed-hint.ed-hint-warn { margin: 6px 0 0; padding-left: 7px; border-left: 3px solid var(--ed-warn); color: var(--ed-text); }
+
+/* ==========================================================================
+   Overlays — ui/overlays.js. Layer order (z-index): page shell < #ed-overlays 100 { backdrop 200 < popover 300 <
+   toasts 400 } < #ed-loading 500 < .ed-noscript 600.
+   ========================================================================== */
+/* One fixed full-viewport host for every overlay (created by ui/app.js startApp or by the page HTML).
+   position:fixed + z-index makes it a stacking context: the z-indices of its children only order them among
+   themselves, and the whole layer sits above any app content with z-index < 100 (the sticky .ap-top is 30).
+   pointer-events:none lets clicks fall through the empty host to the page; its direct children opt back in. */
+#ed-overlays { position: fixed; inset: 0; z-index: 100; pointer-events: none; }
+#ed-overlays > * { pointer-events: auto; }
+/* (1,1,0) beats (1,0,0): the toast column spans a tall strip of the screen and must not block clicks; each
+   .ed-toast re-enables its own pointer events. */
+#ed-overlays > .ed-toasts { pointer-events: none; }
+/* Bottom-right stack, newest last (appended). bottom:40px clears a typical status bar / footer. */
+.ed-toasts { position: fixed; right: 16px; bottom: 40px; z-index: 400; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; pointer-events: none; }
+/* Inverted colours (text token as background, panel as text): a toast contrasts with the page in either theme
+   without dedicated tokens. max-width min(440px, viewport − gutters) keeps it on-screen on phones. */
+.ed-toast {
+  display: flex; align-items: center; gap: 8px; max-width: min(440px, calc(100vw - 32px)); padding: 9px 8px 9px 12px;
+  background: var(--ed-text); color: var(--ed-panel); border-radius: var(--ed-radius); box-shadow: var(--ed-shadow-lg);
+  pointer-events: auto; animation: ed-in .18s ease-out;
+}
+.ed-toast-ok .ed-ic { color: var(--ed-ok); }
+.ed-toast-warn .ed-ic { color: var(--ed-warn); }
+.ed-toast-error { background: var(--ed-danger-solid); color: var(--ed-on-danger); }
+.ed-toast-msg { flex: 1 1 auto; }
+/* Action link inside the toast ("Undo"): accent-weak reads as a light accent on the dark (inverted) toast. */
+.ed-toast-act { border: 0; background: transparent; color: var(--ed-accent-weak); font-weight: 700; padding: 2px 6px; border-radius: 4px; }
+/* Neutral grey at 25%: visible on both inverted backgrounds (dark toast in light theme, light toast in dark). */
+.ed-toast-act:hover { background: rgba(127, 127, 127, .25); }
+.ed-toast-x { display: inline-flex; border: 0; background: transparent; color: inherit; opacity: .6; padding: 2px; border-radius: 4px; }
+.ed-toast-x svg { width: 14px; height: 14px; }
+.ed-toast-x:hover { opacity: 1; }
+/* Fade-out before removal (JS removes the node after the transition). !important: some elements set their own
+   opacity (.ed-toast-x, animations), and this must win for any element it is put on. */
+.ed-out { opacity: 0 !important; transition: opacity .2s; }
+/* Shared entry animation: opacity + transform only (compositor, no layout). */
+@keyframes ed-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* Accessibility: users who ask the OS for reduced motion get no animation anywhere. Universal selector + !important
+   is intentional: it must also beat app stylesheets loaded later and inline styles. JS that waits for transitionend
+   would hang — overlays.js uses setTimeout for removal, so it is unaffected. */
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* Modal backdrop. Grid + place-items:center centres the dialog in both axes; the single minmax(0,1fr) column lets
+   a dialog with width:min(480px,100%) shrink on phones instead of forcing overflow. padding:24px = minimum margin
+   around the dialog. The scrim colour is literal: it dims whatever is under it, in either theme. */
+.ed-backdrop {
+  position: fixed; inset: 0; z-index: 200; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; padding: 24px;
+  background: rgba(15, 18, 24, .45); animation: ed-in .15s ease-out;
+}
+/* Column layout: head / body (scrolls) / foot. max-height caps at 86vh so head and foot stay visible; the body's
+   min-height:0 (below) is what lets it shrink and scroll inside the flex column (default min-height:auto would
+   push the foot off-screen). outline:none — the dialog itself takes focus (tabindex=-1) as a fallback target. */
+.ed-dialog {
+  display: flex; flex-direction: column; width: min(480px, 100%); max-height: min(86vh, 900px);
+  background: var(--ed-panel); border-radius: 12px; box-shadow: var(--ed-shadow-lg); border: 1px solid var(--ed-border); outline: none;
+}
+.ed-dialog.ed-wide { width: min(920px, 100%); }
+.ed-dlg-head { display: flex; align-items: center; gap: 8px; padding: 14px 14px 10px 18px; }
+.ed-dlg-title { flex: 1 1 auto; font-size: 16px; font-weight: 650; }
+.ed-dlg-body { padding: 4px 18px 16px; overflow: auto; min-height: 0; }
+.ed-dlg-text { margin: 0; line-height: 1.5; }
+/* Buttons right-aligned (platform convention: primary last). Bottom radius repeated because the foot's background
+   would otherwise square off the dialog's rounded corners (the dialog has no overflow:hidden — it would clip focus
+   rings). */
+.ed-dlg-foot { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--ed-border); background: var(--ed-panel-2); border-radius: 0 0 12px 12px; }
+.ed-field-col { display: flex; flex-direction: column; gap: 6px; }
+
+/* Popover (and menus, which are popovers). position:fixed with left/top set by JS in viewport coordinates;
+   max-width/height keep it inside the viewport with an 8px margin, overflow:auto scrolls a tall menu. */
+.ed-popover {
+  position: fixed; z-index: 300; padding: 8px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow: auto;
+  background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: var(--ed-radius); box-shadow: var(--ed-shadow-lg);
+  outline: none; animation: ed-in .12s ease-out;
+}
+.ed-menu-pop { padding: 4px; }
+.ed-menu { display: flex; flex-direction: column; min-width: 200px; }
+.ed-menu-insert .ed-menu { min-width: 220px; }
+/* Menu item = <button>: native focus and activation. nowrap: menus grow to the longest label rather than wrap. */
+.ed-menu-item {
+  display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 10px 0 8px; border: 0; border-radius: 5px;
+  background: transparent; text-align: left; white-space: nowrap;
+}
+.ed-menu-item .ed-ic { color: var(--ed-muted); }
+.ed-menu-item .ed-ic svg { width: 16px; height: 16px; }
+/* Hover and keyboard focus look the same (arrow-key navigation moves focus). box-shadow:none replaces the global
+   focus ring: inside a menu the highlighted background is the focus indicator. */
+.ed-menu-item:hover:not(:disabled), .ed-menu-item:focus-visible { background: var(--ed-accent-weak); color: var(--ed-accent); box-shadow: none; }
+.ed-menu-item:hover:not(:disabled) .ed-ic, .ed-menu-item:focus-visible .ed-ic { color: inherit; }
+.ed-menu-item.ed-danger { color: var(--ed-danger); }
+.ed-menu-item.ed-danger .ed-ic { color: inherit; }
+/* ui/contextmenu.js areas: a long press opens the menu instead of the callout / text selection (fields keep theirs).
+   -webkit-touch-callout: iOS "copy / look up" bubble. user-select:none only on hover:none devices (touch-first):
+   on desktop, text in the area stays selectable with the mouse. Fields are re-enabled with :is(), whose
+   specificity is that of its most specific argument — (0,2,0) total with .ed-ctx, beating (0,1,0). */
+.ed-ctx { -webkit-touch-callout: none; }
+@media (hover: none) {
+  .ed-ctx { -webkit-user-select: none; user-select: none; }
+  .ed-ctx :is(input, textarea, [contenteditable=""], [contenteditable="true"]) { -webkit-user-select: text; user-select: text; }
+}
+/* Context menus get taller rows; 44px on coarse pointers = touch-target guideline. */
+.ed-ctx-menu .ed-menu-item { min-height: 36px; }
+@media (pointer: coarse) { .ed-ctx-menu .ed-menu-item { min-height: 44px; } }
+/* (0,3,0), later than the generic hover (0,3,0): danger items hover red, not accent.
+   KNOWN DEFECT: no :not(:disabled), so a disabled danger item still lights up on hover. Fix: add :not(:disabled). */
+.ed-menu-item.ed-danger:hover { background: var(--ed-danger-weak); color: var(--ed-danger); }
+.ed-menu-l { flex: 1 1 auto; }
+.ed-menu-sep { height: 1px; margin: 4px 6px; background: var(--ed-border); }
+.ed-menu-h { padding: 8px 10px 3px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-faint); }
+
+/* Loading / noscript — page-HTML splash shown until the module graph boots (the app's boot code removes #ed-loading,
+   e.g. studio/boot.js, sudoku-game/main.js). It covers the whole viewport with the page background so the unstyled
+   shell is never seen. On a failed boot studio/boot.js adds .ed-load-err: the spinner hides and the message turns red (it may include a <code> path). */
+#ed-loading {
+  position: fixed; inset: 0; z-index: 500; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+  background: var(--ed-bg); color: var(--ed-muted); font-size: 14px; text-align: center; padding: 24px;
+}
+/* CSS-only spinner: a ring with one accent-coloured side, rotated. No image, follows the theme. */
+.ed-spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--ed-border); border-top-color: var(--ed-accent); animation: ed-spin .8s linear infinite; }
+@keyframes ed-spin { to { transform: rotate(360deg); } }
+#ed-loading.ed-load-err { color: var(--ed-danger); }
+#ed-loading.ed-load-err .ed-spinner { display: none; }
+#ed-loading code { font-family: var(--ed-mono); padding: 1px 5px; border-radius: 4px; background: var(--ed-hover); color: var(--ed-text); }
+/* <noscript> message: above the loading splash (600 > 500), because with JS off the splash would never go away. */
+.ed-noscript { position: fixed; inset: 0; z-index: 600; display: grid; place-items: center; padding: 24px; background: var(--ed-bg); color: var(--ed-text); text-align: center; font-size: 15px; }
+
+/* Thin scrollbars inside panels (standard properties; Firefox and Chromium 121+; older WebKit ignores them).
+   Track transparent so it blends with the panel in both themes. */
+.ed-panel-body, .ed-dlg-body, #ed-scroll { scrollbar-width: thin; scrollbar-color: var(--ed-border-strong) transparent; }

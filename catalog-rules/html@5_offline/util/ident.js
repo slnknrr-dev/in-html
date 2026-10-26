@@ -1,0 +1,12 @@
+function normalizeMac(v,{sep=':',lower=false}={}){const hex=String(v??'').trim().replace(/[\s:.\-]/g,'');if(!/^[0-9a-fA-F]{12}$/.test(hex))return null;const s=hex.match(/../g).join(sep);return lower?s.toLowerCase():s.toUpperCase();}
+function normalizeIPv4(v){const p=String(v??'').trim().split('.');if(p.length!==4||!p.every((x)=>/^\d{1,3}$/.test(x)&&+x<=255))return null;return p.map(Number).join('.');}
+function normalizeIPv6(v){let s=String(v??'').trim();if(s[0]==='['&&s[s.length-1]===']')s=s.slice(1,-1);let zone='';const z=s.indexOf('%');if(z>=0){zone=s.slice(z);s=s.slice(0,z);if(!/^%[\w.~-]+$/.test(zone))return null;}
+if(!/^[0-9a-fA-F:.]+$/.test(s)||!s.includes(':'))return null;let tail=[];const lastColon=s.lastIndexOf(':');if(s.indexOf('.',lastColon)>0){const v4=normalizeIPv4(s.slice(lastColon+1));if(!v4)return null;const b=v4.split('.').map(Number);tail=[(b[0]<<8)|b[1],(b[2]<<8)|b[3]];s=s.slice(0,lastColon+1);if(!s.endsWith('::'))s=s.slice(0,-1);}
+const halves=s.split('::');if(halves.length>2)return null;const part=(x)=>(x===''?[]:x.split(':'));const head=part(halves[0]),rest=halves.length===2?part(halves[1]):[];if([...head,...rest].some((g)=>!/^[0-9a-fA-F]{1,4}$/.test(g)))return null;const known=head.length+rest.length+tail.length;if(halves.length===2?known>7:known!==8)return null;const groups=[...head,...Array(halves.length===2?8-known:0).fill('0'),...rest].map((g)=>parseInt(g,16)).concat(tail);if(groups.slice(0,5).every((g)=>g===0)&&groups[5]===0xffff){return`::ffff:${groups[6]>>8}.${groups[6]&255}.${groups[7]>>8}.${groups[7]&255}${zone}`;}
+let best=-1,bestLen=1;for(let i=0;i<8;){if(groups[i]!==0){i++;continue;}
+let j=i;while(j<8&&groups[j]===0)j++;if(j-i>bestLen){best=i;bestLen=j-i;}
+i=j;}
+const hex=groups.map((g)=>g.toString(16));const out=best<0?hex.join(':'):hex.slice(0,best).join(':')+'::'+hex.slice(best+bestLen).join(':');return out+zone;}
+const normalizeIp=(v)=>normalizeIPv4(v)??normalizeIPv6(v);function normalizeCode(v){const s=String(v??'').trim().replace(/\s+/g,' ');return/^[\p{L}\p{N}\-_/.# ]{1,64}$/u.test(s)?s:null;}
+function normalizeIdent(type,v){if(type==='mac'||type==='bssid')return normalizeMac(v);if(type==='ip')return normalizeIp(v);return normalizeCode(v);}
+export{normalizeIdent};

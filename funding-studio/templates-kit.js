@@ -1,0 +1,115 @@
+// funding-studio/templates-kit.js - template building kit of the funding product (on sample/kit.js): per-language
+// texts by key, pages, items, generated SVG illustrations (no text, identical on every build) and the base document.
+// Templates are fictional: organisations, people, places and figures are invented; payment details are left empty
+// (the owner enters real ones under Payments) so that no template ever points at a real account or address.
+import { tplBaseKit, tplSampleFiles } from '../sample/kit.js';
+
+const hsl = (h, s, l) => `hsl(${((h % 360) + 360) % 360} ${s}% ${l}%)`;
+
+// Illustrations: 800 × 520 scenes drawn from a hue. kind: kitchen, van, code, sketch, school, heating, flood, people.
+// Procedural and deterministic (no Math.random: positions come from index arithmetic like (i * 131) % 760), so every
+// build produces byte-identical templates and tests can compare them. No text inside: nothing to translate.
+// Gradient ids 's'/'g' are local to each SVG; that is safe because scenes are stored as image attachments (<img>),
+// where ids do not share the page's id space.
+export function sceneSVG(kind, hue = 20) {
+  const H = hue;
+  const p = [`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 520" width="800" height="520"><defs>`
+    + `<linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${hsl(H + 20, 70, 82)}"/><stop offset="1" stop-color="${hsl(H, 65, 64)}"/></linearGradient>`
+    + `<linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${hsl(H + 150, 35, 46)}"/><stop offset="1" stop-color="${hsl(H + 170, 40, 30)}"/></linearGradient>`
+    + `</defs><rect width="800" height="520" fill="url(#s)"/>`];
+  const sun = (x, y, r) => `<circle cx="${x}" cy="${y}" r="${r}" fill="${hsl(H + 40, 95, 72)}"/><circle cx="${x}" cy="${y}" r="${r + 26}" fill="${hsl(H + 40, 95, 80)}" opacity=".35"/>`;
+  const hills = `<path d="M0 380 C160 320 300 360 420 330 C560 295 680 340 800 310 L800 520 L0 520Z" fill="url(#g)"/>`
+    + `<path d="M0 430 C200 390 360 450 520 410 C640 380 720 420 800 400 L800 520 L0 520Z" fill="${hsl(H + 160, 38, 26)}" opacity=".8"/>`;
+  switch (kind) {
+    case 'kitchen':
+      p.push(sun(650, 110, 52), hills);
+      p.push(`<rect x="120" y="300" width="560" height="22" rx="8" fill="${hsl(H, 45, 30)}"/>`);
+      for (let i = 0; i < 4; i++) {
+        const x = 190 + i * 140;
+        p.push(`<path d="M${x - 50} 270 h100 a50 42 0 0 1 -100 0z" fill="${hsl(H + i * 25, 70, 52)}"/><ellipse cx="${x}" cy="270" rx="50" ry="10" fill="${hsl(H + 40, 80, 86)}"/>`);
+        p.push(`<path d="M${x - 14} 240 c-12 -20 12 -30 0 -50 M${x + 10} 238 c-12 -20 12 -30 0 -50" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round" opacity=".75"/>`);
+      }
+      break;
+    case 'van':
+      p.push(sun(140, 110, 48), hills);
+      p.push(`<rect x="250" y="250" width="300" height="120" rx="18" fill="${hsl(H, 70, 54)}"/><path d="M550 290 h70 l40 50 v30 h-110z" fill="${hsl(H, 70, 46)}"/>`
+        + `<rect x="565" y="300" width="50" height="30" rx="6" fill="${hsl(H + 200, 60, 85)}"/><circle cx="320" cy="378" r="30" fill="#2b2b2b"/><circle cx="580" cy="378" r="30" fill="#2b2b2b"/>`
+        + `<circle cx="320" cy="378" r="12" fill="#ddd"/><circle cx="580" cy="378" r="12" fill="#ddd"/><path d="M300 300 h120 M300 325 h80" stroke="#fff" stroke-width="10" stroke-linecap="round" opacity=".8"/>`);
+      break;
+    case 'code':
+      p.push(`<rect width="800" height="520" fill="${hsl(H, 30, 14)}"/>`);
+      for (let i = 0; i < 9; i++) {
+        const w = 120 + ((i * 97) % 260);
+        p.push(`<rect x="${90 + (i % 3) * 30}" y="${80 + i * 38}" width="${w}" height="14" rx="7" fill="${hsl(H + i * 30, 60, 60)}" opacity=".85"/>`);
+      }
+      for (let i = 0; i < 6; i++) {
+        const x = 560 + (i % 2) * 110;
+        const y = 120 + Math.floor(i / 2) * 120;
+        p.push(`<circle cx="${x}" cy="${y}" r="26" fill="none" stroke="${hsl(H + 40, 70, 62)}" stroke-width="6"/>`);
+        if (i < 4) p.push(`<path d="M${x} ${y + 26} L${560 + ((i + 1) % 2) * 110} ${y + 94}" stroke="${hsl(H + 40, 50, 50)}" stroke-width="4"/>`);
+      }
+      break;
+    case 'sketch':
+      p.push(sun(600, 130, 60));
+      p.push(`<path d="M0 400 L180 220 L300 330 L430 180 L620 380 L800 260 L800 520 L0 520Z" fill="${hsl(H + 200, 35, 55)}"/><path d="M380 230 L430 180 L475 225 L440 215z" fill="#fff" opacity=".85"/>`);
+      p.push(`<g transform="rotate(-8 400 420)"><rect x="230" y="360" width="340" height="190" rx="10" fill="#fffaf2"/><path d="M400 360 v190" stroke="${hsl(H, 40, 70)}" stroke-width="4"/>`
+        + `<path d="M260 400 h110 M260 425 h90 M260 450 h120 M430 400 h110 M430 425 h70" stroke="${hsl(H + 260, 40, 60)}" stroke-width="7" stroke-linecap="round"/></g>`);
+      break;
+    case 'school':
+      p.push(sun(130, 100, 46), hills);
+      p.push(`<rect x="260" y="200" width="300" height="190" fill="${hsl(H + 20, 60, 88)}"/><path d="M240 205 L410 110 L580 205z" fill="${hsl(H, 70, 48)}"/>`
+        + `<rect x="385" y="300" width="50" height="90" rx="4" fill="${hsl(H + 200, 50, 40)}"/><circle cx="410" cy="170" r="20" fill="#fff"/>`);
+      for (let i = 0; i < 4; i++) p.push(`<rect x="${285 + i * 64 + (i > 1 ? 40 : 0)}" y="${i % 2 ? 300 : 230}" width="44" height="40" rx="4" fill="${hsl(H + 200, 70, 75)}"/>`);
+      p.push(`<rect x="620" y="300" width="14" height="90" fill="${hsl(H, 40, 28)}"/><circle cx="627" cy="280" r="50" fill="${hsl(H + 140, 45, 42)}"/>`);
+      break;
+    case 'heating':
+      p.push(`<rect width="800" height="520" fill="${hsl(H + 190, 45, 88)}"/>`);
+      for (let i = 0; i < 14; i++) p.push(`<path d="M${(i * 131) % 760 + 20} ${(i * 67) % 240 + 20} m-10 0 h20 m-10 -10 v20 m-7 -7 l14 14 m0 -14 l-14 14" stroke="#fff" stroke-width="3" stroke-linecap="round"/>`);
+      for (let i = 0; i < 7; i++) p.push(`<rect x="${230 + i * 50}" y="250" width="36" height="170" rx="18" fill="${hsl(H, 70, 55 - (i % 2) * 6)}"/>`);
+      p.push(`<rect x="220" y="410" width="360" height="22" rx="8" fill="${hsl(H, 40, 34)}"/>`);
+      break;
+    case 'flood':
+      p.push(`<rect width="800" height="520" fill="${hsl(H + 200, 25, 72)}"/>`);
+      for (let i = 0; i < 40; i++) p.push(`<path d="M${(i * 53) % 800} ${(i * 37) % 300} l-12 26" stroke="#fff" stroke-width="3" opacity=".55"/>`);
+      for (let i = 0; i < 3; i++) p.push(`<g transform="translate(${150 + i * 200} ${250 + (i % 2) * 20})"><rect width="110" height="90" fill="${hsl(H + i * 20, 35, 70)}"/><path d="M-12 4 L55 -46 L122 4z" fill="${hsl(H, 50, 38)}"/><rect x="40" y="40" width="30" height="50" fill="${hsl(H + 200, 30, 35)}"/></g>`);
+      for (let i = 0; i < 4; i++) p.push(`<path d="M0 ${330 + i * 50} C100 ${310 + i * 50} 200 ${350 + i * 50} 300 ${330 + i * 50} S500 ${310 + i * 50} 600 ${330 + i * 50} S760 ${350 + i * 50} 800 ${330 + i * 50} L800 520 L0 520Z" fill="${hsl(H + 200, 55, 40 - i * 5)}" opacity=".55"/>`);
+      break;
+    default: // people: hands and hearts
+      p.push(sun(400, 160, 70), hills);
+      for (let i = 0; i < 5; i++) p.push(`<circle cx="${180 + i * 110}" cy="${300 - (i % 2) * 20}" r="34" fill="${hsl(H + i * 40, 55, 60)}"/><rect x="${150 + i * 110}" y="${330 - (i % 2) * 20}" width="60" height="110" rx="28" fill="${hsl(H + i * 40, 55, 48)}"/>`);
+  }
+  p.push('</svg>');
+  return p.join('');
+}
+
+// Kit: K.t(key) per-language text from T[lang][key] (falls back to English, then the first language), K.page, K.item.
+export function tplKit(V, langs, T) {
+  const files = tplSampleFiles(V, { pdf: { producer: 'fd funding studio', creator: 'fd funding templates' } });
+  const K = tplBaseKit(V, langs, files);
+  K.t = (key) => {
+    const o = {};
+    for (const l of langs) {
+      const v = (T[l] && T[l][key] != null ? T[l][key] : T.en && T.en[key] != null ? T.en[key] : (T[langs[0]] || {})[key]);
+      o[l] = v == null ? '' : String(v);
+    }
+    return o;
+  };
+  K.item = (props = {}) => ({ id: V.uid(), ...props });
+  K.page = (kind, slug, props, blocks) => K.B('campaign', { kind, slug, ...props, blocks });
+  K.scene = (name, kind, hue) => K.svg(name + '.svg', sceneSVG(kind, hue));
+  K.doc = (o) => {
+    const d = V.newDoc({ langs, defaultLang: o.defaultLang || langs[0] });
+    const now = new Date().toISOString();
+    d.name = o.name;
+    d.meta = { ...d.meta, title: o.title || {}, description: o.description || {}, author: o.author || '', created: now, modified: now };
+    const preset = V.THEMES[o.preset] ? o.preset : 'clean';
+    d.theme = { ...d.theme, ...V.THEMES[preset].vars, preset, ...(o.theme || {}) };
+    d.output = { ...d.output, ...(o.output || {}) };
+    d.org = { ...d.org, ...(o.org || {}) };
+    if (o.pay) d.pay = { ...d.pay, ...o.pay };
+    d.regions = { header: [], main: [], footer: [] };
+    d.attachments = K.atts;
+    return d;
+  };
+  return K;
+}

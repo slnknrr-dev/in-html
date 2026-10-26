@@ -1,0 +1,4 @@
+import"./viewer.js";import{normalizeDoc}from"./doc/model.js";import{homePage,livePages}from"./model.js";import{exportHTML}from"./doc/export.js";async function buildSite(doc,opts={}){const d=normalizeDoc(doc);const home=homePage(d);const files=[];const pages=[];let report=null;for(const p of livePages(d)){const isHome=home&&p.id===home.id;let api=null;if(opts.api&&typeof opts.api.base==='string'){const b=opts.api.base;api={...opts.api,base:/^(https?:)?\/\//.test(b)||b.startsWith('/')?b:(isHome?'':'../')+b};}
+const r=await exportHTML(d,{...opts,route:'file',page:p.id,api,embedSource:isHome?!!opts.embedSource:false});const name=isHome?'index.html':p.slug+'/index.html';files.push({name,data:r.html});pages.push({id:p.id,slug:p.slug,kind:p.kind,path:isHome?'':p.slug+'/'});if(isHome)report=r.report;}
+return{files,pages,report:report||{},doc:d};}
+export{buildSite};

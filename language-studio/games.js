@@ -1,0 +1,352 @@
+// language-studio/games.js - mini-games: remember the letters (symbol → sound, sound → symbol, type the
+// transcription, listen and choose), draw the letter from its sound or over a model (the deviation is measured),
+// spaced-repetition cards, and the games of each course (Georgian word builder, sandhi, syllable weight, tones,
+// character composition, Russian roots, English origins).
+//
+//   gameList(C) -> [{ id, title, hint, script? }]       playGame(C, id, host, { script, back })
+import { h } from '../ui/dom.js';
+import { iconEl } from '../ui/icons.js';
+import { t } from '../ui/i18n.js';
+import { dueItems, review } from '../lingua/srs.js';
+import { RULES, join } from '../lingua/sandhi.js';
+import { scan } from '../lingua/meter.js';
+import { ROLES, SCREEVES, VERSIONS, PERSONS, verbForm } from '../lingua/kartuli.js';
+import { parse as parsePinyin } from '../lingua/pinyin.js';
+import { recordScore } from './progress.js';
+import { COMPOSE } from './courses/cjk.js';
+import { VERBS } from './courses/ka.js';
+import { NEUTRAL } from './courses/ru.js';
+import { letterId, srsItems } from './courses/index.js';
+import { drawPad, evaluate, FONTS } from './draw.js';
+import { partsEl, speakBtn, X } from './views.js';
+import { XL_GAMES } from './xl-games.js';
+
+// Design: every game runs inside shell() (rounds, progress bar, score, best result), so a new game only supplies
+// next(api, i) and calls api.done(points 0..1). Letter answers feed spaced repetition (review() from lingua/srs.js)
+// as a side effect of playing: games are the practice, the SRS schedule decides what comes up next.
+// Randomness is Math.random on purpose: game order is not part of any record that must replay.
+const ROUNDS = 10;
+// Fisher-Yates on a copy: unbiased (unlike sort(() => Math.random() - 0.5)) and leaves the course data untouched.
+const shuffle = (a) => { const r = [...a]; for (let i = r.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [r[i], r[j]] = [r[j], r[i]]; } return r; };
+const sample = (a, n, not = []) => shuffle(a.filter((x) => !not.includes(x))).slice(0, n);
+// Lenient comparison of typed transcriptions: NFD splits letters from their diacritics, then combining marks
+// (U+0300..U+036F) and apostrophe-like marks (' ’ ʼ, used for ejectives such as k') are dropped and case folded.
+// So "kʼ", "k'" and "k" are equal; a stricter check would punish keyboard differences rather than knowledge.
+const norm = (s) => String(s).normalize('NFD').replace(/[̀-ͯ'’ʼ]/g, '').toLowerCase().trim();
+
+export function gameList(C) {
+  const out = [];
+  for (const sc of C.course.scripts) {
+    const n = (k) => ({ id: k + ':' + sc.id, game: k, script: sc.id, title: t('ls.game.' + k), sub: X(C, sc.name), hint: t('ls.game.' + k + 'Hint') });
+    out.push(n('sym2sound'), n('sound2sym'), n('type'));
+    if (C.canSpeak) out.push(n('listen'));
+    out.push(n('draw'), n('trace'));
+  }
+  out.push({ id: 'cards', game: 'cards', title: t('ls.game.cards'), hint: t('ls.game.cardsHint') });
+  for (const g of C.course.games || []) out.push({ id: g, game: g, title: t('ls.game.' + g), hint: t('ls.game.' + g + 'Hint') });
+  return out;
+}
+
+// --- shell -------------------------------------------------------------------------------------------------------------
+function shell(C, host, { title, key, rounds = ROUNDS, back, next }) {
+  const S = { i: 0, score: 0, total: rounds };
+  const bar = h('div', { class: 'ls-gbar' }, h('button', { type: 'button', class: 'ed-btn', onclick: back }, iconEl('chevLeft'), t('ls.back')), h('b', null, title));
+  const prog = h('div', { class: 'ls-gprog' });
+  const stage = h('div', { class: 'ls-stage' });
+  host.replaceChildren(bar, prog, stage);
+  const paint = () => { prog.replaceChildren(h('span', null, t('ls.game.round', { i: Math.min(S.i + 1, S.total), n: S.total })), h('span', { class: 'ap-progress' }, h('span', { style: { width: (S.i / S.total) * 100 + '%' } })), h('span', null, t('ls.game.score', { n: Math.round(S.score) }))); };
+  const api = {
+    stage,
+    // points 0 … 1 for this round
+    done(points) { S.score += points * (100 / S.total); S.i++; paint(); C.save(); },
+    nextBtn(label = t('ls.next')) { const b = h('button', { type: 'button', class: 'ed-btn ed-primary ls-next', onclick: () => api.go() }, label, iconEl('chevRight')); setTimeout(() => b.focus(), 20); return b; },
+    go() {
+      if (S.i >= S.total) {
+        const pct = Math.round(S.score);
+        const r = recordScore(C.doc, key, pct);
+        C.save();
+        stage.replaceChildren(h('div', { class: 'ls-final' }, h('div', { class: 'ls-big' }, pct + ' %'), h('p', null, r.best ? t('ls.game.newBest') : t('ls.game.best', { n: r.record.best })),
+          h('div', { class: 'ap-actions' }, h('button', { type: 'button', class: 'ed-btn ed-primary', onclick: () => { S.i = 0; S.score = 0; paint(); api.go(); } }, iconEl('refresh'), t('ls.game.again')), h('button', { type: 'button', class: 'ed-btn', onclick: back }, t('ls.back')))));
+        return;
+      }
+      stage.replaceChildren();
+      next(api, S.i);
+    },
+  };
+  paint();
+  return api;
+}
+
+// Multiple choice: one click locks all buttons (no second guess), marks the pick, and on a wrong pick also reveals
+// the right answer, so every round teaches. The state classes need !important in app.css to beat :hover.
+function choices(options, correct, onPick, render = (x) => x) {
+  const box = h('div', { class: 'ls-choices' });
+  for (const o of options) {
+    const b = h('button', { type: 'button', class: 'ls-choice' }, render(o));
+    b.addEventListener('click', () => {
+      for (const x of box.children) { x.disabled = true; }
+      const ok = o === correct;
+      b.classList.add(ok ? 'ls-ok' : 'ls-bad');
+      if (!ok) [...box.children][options.indexOf(correct)].classList.add('ls-ok');
+      onPick(ok, o);
+    });
+    box.append(b);
+  }
+  return box;
+}
+
+// letters to ask: due / new first (spaced repetition), then the rest at random
+function letterQueue(C, sc) {
+  const ids = sc.letters.map((l) => letterId(C.course, sc, l));
+  const order = dueItems(C.doc.cards, ids, Date.now(), ROUNDS);
+  const pickIds = [...order, ...shuffle(ids.filter((x) => !order.includes(x)))].slice(0, ROUNDS);
+  return shuffle(pickIds.map((id) => sc.letters[ids.indexOf(id)]));
+}
+// A letter round grades 2 (good) or 0 (again) on the SRS scale 0..3; the flash-card game lets the learner choose.
+const grade = (C, sc, l, ok) => { const id = letterId(C.course, sc, l); C.doc.cards[id] = review(C.doc.cards[id], ok ? 2 : 0); };
+const uniqueTr = (letters, l) => letters.filter((x) => x.tr !== l.tr);
+const fontOf = (C) => FONTS[C.course.script] || 'sans-serif';
+const glyph = (C, l, cls = 'ls-glyph') => h('span', { class: cls, lang: C.course.id, style: { fontFamily: fontOf(C) } }, l.ch);
+
+function letterGame(C, kind, sc, host, back) {
+  const queue = letterQueue(C, sc);
+  const say = (l) => l.say || l.ch;
+  const g = shell(C, host, {
+    title: t('ls.game.' + kind) + ' · ' + X(C, sc.name), key: `${C.course.id}:${kind}:${sc.id}`, back, rounds: Math.min(ROUNDS, queue.length),
+    next(api, i) {
+      const l = queue[i];
+      const others = sample(uniqueTr(sc.letters, l), 3);
+      const opts = shuffle([l, ...others]);
+      const after = (ok) => { grade(C, sc, l, ok); api.done(ok ? 1 : 0); api.stage.append(h('div', { class: 'ls-explain' }, glyph(C, l, 'ls-glyph-sm'), h('b', null, l.tr), l.ipa ? h('span', { class: 'ls-tr' }, '/' + l.ipa + '/') : null, l.hint ? h('span', null, X(C, l.hint)) : null, l.m ? h('span', null, X(C, l.m)) : null, speakBtn(C, say(l))), api.nextBtn()); };
+      if (kind === 'sym2sound') api.stage.append(h('div', { class: 'ls-q' }, glyph(C, l)), choices(opts, l, after, (o) => h('span', null, o.tr)));
+      else if (kind === 'sound2sym') api.stage.append(h('div', { class: 'ls-q' }, h('span', { class: 'ls-qtr' }, l.tr), l.ipa && l.ipa !== l.tr ? h('span', { class: 'ls-tr' }, '/' + l.ipa + '/') : null, speakBtn(C, say(l))), choices(opts, l, after, (o) => glyph(C, o, 'ls-glyph-opt')));
+      else if (kind === 'listen') { C.speak(say(l)); api.stage.append(h('div', { class: 'ls-q' }, h('button', { type: 'button', class: 'ed-btn ls-play', onclick: () => C.speak(say(l)) }, iconEl('play'), t('ls.listen'))), choices(opts, l, after, (o) => glyph(C, o, 'ls-glyph-opt'))); }
+      else if (kind === 'type') {
+        const inp = h('input', { class: 'ed-input ls-type', autocomplete: 'off', spellcheck: 'false', autocapitalize: 'none', 'aria-label': t('ls.game.typeLabel') });
+        const go = () => {
+          const v = inp.value;
+          const exact = v.trim().toLowerCase() === l.tr.toLowerCase();
+          const near = !exact && norm(v) === norm(l.tr);
+          inp.disabled = true; btn.disabled = true;
+          inp.classList.add(exact ? 'ls-ok' : near ? 'ls-near' : 'ls-bad');
+          api.stage.append(h('p', null, exact ? t('ls.game.right') : near ? t('ls.game.near', { a: l.tr }) : t('ls.game.wrong', { a: l.tr })));
+          after(exact || near);
+          if (near) { /* half a point: the diacritics matter in IAST, pinyin and Georgian abruptives */ }
+        };
+        const btn = h('button', { type: 'button', class: 'ed-btn ed-primary', onclick: go }, t('ls.check'));
+        inp.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !inp.disabled) go(); });
+        api.stage.append(h('div', { class: 'ls-q' }, glyph(C, l)), h('div', { class: 'ls-ctl' }, inp, btn));
+        setTimeout(() => inp.focus(), 20);
+      }
+    },
+  });
+  g.go();
+}
+
+function drawGame(C, sc, host, back, trace) {
+  const queue = letterQueue(C, sc);
+  const g = shell(C, host, {
+    title: t(trace ? 'ls.game.trace' : 'ls.game.draw') + ' · ' + X(C, sc.name), key: `${C.course.id}:${trace ? 'trace' : 'draw'}:${sc.id}`, back, rounds: Math.min(ROUNDS, queue.length),
+    next(api, i) {
+      const l = queue[i];
+      const model = { ch: l.ch, font: fontOf(C), strokes: l.strokes || null };
+      const size = Math.min(320, Math.max(220, (host.clientWidth || 320) - 40));
+      const pad = drawPad({ size, guide: trace ? { ...model, faint: false } : null });
+      const res = h('div', { class: 'ls-draw-res' });
+      const check = h('button', { type: 'button', class: 'ed-btn ed-primary', disabled: true }, iconEl('check'), t('ls.check'));
+      pad.onChange = () => { check.disabled = !pad.strokes().length; };
+      check.addEventListener('click', () => {
+        const r = evaluate(pad.strokes(), model);
+        if (!r) return;
+        pad.showResult(r);
+        check.disabled = true;
+        const verdicts = r.strokes ? r.strokes.verdicts.map((v) => h('li', null, t('ls.draw.' + v, { n: r.strokes.missing || r.strokes.extra || r.strokes.reversed }))) : [];
+        res.replaceChildren(h('div', { class: 'ls-big' }, r.score + ' / 100'), glyph(C, l, 'ls-glyph-sm'),
+          h('p', { class: 'ed-hint' }, t('ls.draw.raster', { p: Math.round(r.raster.precision * 100), c: Math.round(r.raster.coverage * 100) })),
+          verdicts.length ? h('ul', null, verdicts) : '', h('p', { class: 'ed-hint' }, t('ls.draw.legend')), api.nextBtn());
+        grade(C, sc, l, r.score >= 60);
+        api.done(r.score / 100);
+      });
+      api.stage.append(h('div', { class: 'ls-q' }, trace ? glyph(C, l, 'ls-glyph-sm') : null, h('span', { class: 'ls-qtr' }, l.tr), l.m ? h('span', { class: 'ls-m' }, X(C, l.m)) : null, speakBtn(C, l.say || l.ch)),
+        h('div', { class: 'ls-draw' }, pad.el, h('div', { class: 'ls-draw-side' },
+          h('div', { class: 'ap-actions' }, check, h('button', { type: 'button', class: 'ed-btn', onclick: () => pad.undo() }, iconEl('undo'), t('ls.undo')), h('button', { type: 'button', class: 'ed-btn', onclick: () => pad.clear() }, iconEl('trash'), t('ls.clear')),
+            !trace ? h('button', { type: 'button', class: 'ed-btn', onclick: () => pad.setGuide({ ...model, faint: true }) }, iconEl('eye'), t('ls.draw.hint')) : null),
+          l.strokes ? h('p', { class: 'ed-hint' }, t('ls.draw.hasStrokes')) : h('p', { class: 'ed-hint' }, t('ls.draw.byShape')), res)));
+      host._pad = pad; // e2e hook
+    },
+  });
+  g.go();
+}
+
+// Flash cards over due items only (up to 20): front, "show", then self-grading 0..3 (again / hard / good / easy), the
+// classic SM-2 style loop. Self-grading is the honest choice for recall of meanings, which no checker can verify.
+function cardsGame(C, host, back) {
+  const items = srsItems(C.course);
+  const ids = dueItems(C.doc.cards, items.map((x) => x.id), Date.now(), 20);
+  const byId = new Map(items.map((x) => [x.id, x]));
+  const g = shell(C, host, {
+    title: t('ls.game.cards'), key: `${C.course.id}:cards`, back, rounds: Math.max(1, ids.length),
+    next(api, i) {
+      const it = byId.get(ids[i]);
+      if (!it) { api.stage.append(h('p', null, t('ls.game.nothingDue'))); api.done(1); api.stage.append(api.nextBtn()); return; }
+      const front = it.kind === 'word' ? h('div', { class: 'ls-q' }, h('span', { class: 'ls-glyph ls-glyph-word', lang: C.course.id }, it.w.w), speakBtn(C, it.w.w)) : h('div', { class: 'ls-q' }, glyph(C, it.l));
+      const backSide = it.kind === 'word' ? h('div', { class: 'ls-explain' }, it.w.tr ? h('b', null, it.w.tr) : null, h('span', null, X(C, it.w.m)), it.w.note ? h('span', { class: 'ls-note' }, X(C, it.w.note)) : null)
+        : h('div', { class: 'ls-explain' }, h('b', null, it.l.tr), it.l.hint ? h('span', null, X(C, it.l.hint)) : null, it.l.m ? h('span', null, X(C, it.l.m)) : null);
+      backSide.hidden = true;
+      const grades = h('div', { class: 'ls-grades', hidden: true }, [0, 1, 2, 3].map((gr) => h('button', { type: 'button', class: 'ed-btn ls-g' + gr, onclick: () => { C.doc.cards[it.id] = review(C.doc.cards[it.id], gr); api.done(gr / 3); api.go(); } }, t('ls.grade.' + gr))));
+      const show = h('button', { type: 'button', class: 'ed-btn ed-primary', onclick: () => { backSide.hidden = false; grades.hidden = false; show.hidden = true; } }, t('ls.game.show'));
+      api.stage.append(front, backSide, show, grades);
+      setTimeout(() => show.focus(), 20);
+    },
+  });
+  g.go();
+}
+
+// --- course games ------------------------------------------------------------------------------------------------------
+function kaBuild(C, host, back) {
+  const g = shell(C, host, {
+    title: t('ls.game.ka-build'), key: 'ka:build', back,
+    next(api) {
+      const v = VERBS[Math.floor(Math.random() * VERBS.length)];
+      const screeve = SCREEVES[Math.floor(Math.random() * SCREEVES.length)];
+      const version = ['neutral', 'subjective', 'objective'][Math.floor(Math.random() * 3)];
+      let f = null, s, o;
+      while (!f) { s = PERSONS[Math.floor(Math.random() * 6)]; o = PERSONS[Math.floor(Math.random() * 6)]; f = verbForm(v, { screeve: screeve.id, s, o, version }); }
+      const target = f.parts.map((p) => p.s);
+      const tiles = shuffle(f.parts.map((p, i) => ({ ...p, i })));
+      const built = [];
+      const line = h('div', { class: 'ls-build', lang: 'ka' });
+      const pool = h('div', { class: 'ls-tiles', lang: 'ka' });
+      const paint = () => {
+        line.replaceChildren(...built.map((p, k) => h('button', { type: 'button', class: 'ls-tile ls-r-' + p.role, onclick: () => { built.splice(k, 1); paint(); } }, p.s)));
+        pool.replaceChildren(...tiles.filter((p) => !built.includes(p)).map((p) => h('button', { type: 'button', class: 'ls-tile', onclick: () => { built.push(p); paint(); if (built.length === tiles.length) finish(); } }, p.s)));
+      };
+      const finish = () => {
+        const ok = built.map((p) => p.s).join('') === target.join('');
+        for (const b of [...line.children, ...pool.children]) b.disabled = true;
+        api.done(ok ? 1 : 0);
+        api.stage.append(h('p', null, ok ? t('ls.game.right') : t('ls.game.wrong', { a: f.form })), partsEl(C, f.parts, ROLES), api.nextBtn());
+      };
+      const task = `${X(C, v.m)} — ${X(C, screeve)}, ${t('ls.ka.subject')} ${s}${version === 'objective' ? `, ${t('ls.ka.object')} ${o}` : ''}, ${X(C, VERSIONS.find((x) => x.id === version))}`;
+      api.stage.append(h('p', { class: 'ls-task' }, task), line, pool);
+      paint();
+    },
+  });
+  g.go();
+}
+
+const SANDHI_PAIRS = [['deva', 'indra'], ['mahā', 'ṛṣi'], ['iti', 'api'], ['su', 'ukta'], ['rāmaḥ', 'gacchati'], ['tat', 'ca'], ['sat', 'ānanda'], ['naraḥ', 'asti'], ['vāk', 'mayī'], ['tava', 'eva'],
+  ['deve', 'atra'], ['guruḥ', 'vadati'], ['jagat', 'nātha'], ['nadī', 'atra'], ['vadhū', 'āgatā'], ['tam', 'gacchati'], ['punaḥ', 'ramate'], ['śrīḥ', 'ca'], ['mahā', 'oṣadhi'], ['sādhu', 'iti']];
+function saSandhiGame(C, host, back) {
+  const pairs = shuffle(SANDHI_PAIRS);
+  const g = shell(C, host, {
+    title: t('ls.game.sa-sandhi'), key: 'sa:sandhi', back,
+    next(api, i) {
+      const [a, b] = pairs[i % pairs.length];
+      const r = join(a, b);
+      const wrong = new Set();
+      wrong.add(a + ' ' + b);
+      for (const [x, y] of shuffle(SANDHI_PAIRS)) { if (wrong.size >= 4) break; const alt = join(x, y); if (alt.rule !== r.rule) wrong.add(r.parts[0].slice(0, -1) + alt.parts[0].slice(-1) + (alt.text.includes(' ') ? ' ' : '') + r.parts[1]); }
+      const opts = shuffle([r.text, ...[...wrong].filter((x) => x !== r.text).slice(0, 3)]);
+      api.stage.append(h('div', { class: 'ls-q' }, h('span', { class: 'ls-qtr' }, `${a} + ${b}`)), choices(opts, r.text, (ok) => {
+        api.done(ok ? 1 : 0);
+        api.stage.append(h('div', { class: 'ls-explain' }, h('b', null, r.text), h('span', null, X(C, RULES[r.rule]))), api.nextBtn());
+      }));
+    },
+  });
+  g.go();
+}
+
+function saWeightGame(C, host, back) {
+  const padas = shuffle(C.course.sections.find((s) => s.id === 'quotes').lines.map((l) => l.w));
+  const g = shell(C, host, {
+    title: t('ls.game.sa-weight'), key: 'sa:weight', back, rounds: Math.min(6, padas.length),
+    next(api, i) {
+      const syl = scan(padas[i]).padas[0].syl;
+      const marks = syl.map(() => false);
+      const row = h('div', { class: 'ls-syls ls-syls-game' });
+      const paint = () => row.replaceChildren(...syl.map((s, k) => h('button', { type: 'button', class: 'ls-syl' + (marks[k] ? ' ls-heavy' : ' ls-light'), onclick: () => { marks[k] = !marks[k]; paint(); } }, h('b', null, marks[k] ? '–' : '⏑'), h('small', null, s.text))));
+      paint();
+      const btn = h('button', { type: 'button', class: 'ed-btn ed-primary', onclick: () => {
+        const right = syl.filter((s, k) => s.heavy === marks[k]).length;
+        btn.disabled = true;
+        for (const b of row.children) b.disabled = true;
+        api.done(right / syl.length);
+        api.stage.append(h('p', null, t('ls.game.weightResult', { r: right, n: syl.length })), h('div', { class: 'ls-syls' }, syl.map((s) => h('span', { class: 'ls-syl' + (s.heavy ? ' ls-heavy' : ' ls-light'), title: t('ls.sa.why.' + s.why) }, h('b', null, s.heavy ? '–' : '⏑'), h('small', null, s.text)))), api.nextBtn());
+      } }, t('ls.check'));
+      api.stage.append(h('p', { class: 'ls-task' }, t('ls.game.weightTask')), row, btn);
+    },
+  });
+  g.go();
+}
+
+function zhToneGame(C, host, back) {
+  const words = shuffle(C.course.toneWords);
+  const g = shell(C, host, {
+    title: t('ls.game.zh-tone'), key: 'zh:tone', back,
+    next(api, i) {
+      const w = words[i % words.length];
+      const p = parsePinyin(w.py);
+      C.speak(w.ch);
+      api.stage.append(h('div', { class: 'ls-q' }, h('span', { class: 'ls-glyph', lang: 'zh' }, w.ch), h('span', { class: 'ls-qtr' }, p.plain), speakBtn(C, w.ch)),
+        choices([1, 2, 3, 4], p.tone, (ok) => { api.done(ok ? 1 : 0); api.stage.append(h('div', { class: 'ls-explain' }, h('b', null, w.py), h('span', null, X(C, w.m))), api.nextBtn()); }, (n) => h('span', null, t('ls.zh.toneN', { n }))));
+    },
+  });
+  g.go();
+}
+
+function composeGame(C, host, back) {
+  const items = shuffle(COMPOSE);
+  const g = shell(C, host, {
+    title: t('ls.game.cjk-compose'), key: C.course.id + ':compose', back,
+    next(api, i) {
+      const it = items[i % items.length];
+      const opts = shuffle([it, ...sample(COMPOSE.filter((x) => x[1] !== it[1]), 3)]);
+      api.stage.append(h('div', { class: 'ls-q' }, h('span', { class: 'ls-qtr', lang: C.course.id }, it[1].split(' ').join(' + ') + ' = ?')),
+        choices(opts, it, (ok) => { api.done(ok ? 1 : 0); api.stage.append(h('div', { class: 'ls-explain' }, h('b', { lang: C.course.id }, it[0]), h('span', null, X(C, { ru: it[2], zh: it[3], ja: it[4] })), h('span', { class: 'ls-note' }, it[5])), api.nextBtn()); }, (o) => h('span', { class: 'ls-glyph-opt', lang: C.course.id }, o[0])));
+    },
+  });
+  g.go();
+}
+
+function ruRootGame(C, host, back) {
+  const items = shuffle(NEUTRAL);
+  const g = shell(C, host, {
+    title: t('ls.game.ru-root'), key: 'ru:root', back,
+    next(api, i) {
+      const it = items[i % items.length];
+      const chunks = it.parts.map((p) => p[0]);
+      const rootIdx = it.parts.findIndex((p) => !/^(together|in|at|through|around|very|before|along|out|giving|linking|verb|noun|ending|infinitive|action|state|imperative|plural|adjective|adverb)/i.test(p[1]));
+      const root = chunks[rootIdx >= 0 ? rootIdx : 0];
+      api.stage.append(h('div', { class: 'ls-q' }, h('span', { class: 'ls-glyph ls-glyph-word', lang: 'ru' }, it.w), h('span', { class: 'ls-m' }, X(C, it.m))),
+        h('p', { class: 'ls-task' }, t('ls.game.rootTask')),
+        choices(chunks, root, (ok) => { api.done(ok ? 1 : 0); api.stage.append(partsEl(C, it.parts), h('p', null, h('b', null, t('ls.literally') + ' '), X(C, it.lit)), api.nextBtn()); }, (c) => h('span', { lang: 'ru' }, c)));
+    },
+  });
+  g.go();
+}
+
+function enOriginGame(C, host, back) {
+  const items = shuffle(C.course.etym);
+  const g = shell(C, host, {
+    title: t('ls.game.en-origin'), key: 'en:origin', back,
+    next(api, i) {
+      const it = items[i % items.length];
+      const opts = shuffle([it, ...sample(C.course.etym.filter((x) => x !== it), 3)]);
+      api.stage.append(h('div', { class: 'ls-q' }, h('span', { class: 'ls-glyph ls-glyph-word', lang: 'en' }, it.w), speakBtn(C, it.w)),
+        choices(opts, it, (ok) => { api.done(ok ? 1 : 0); api.stage.append(h('div', { class: 'ls-explain' }, h('b', null, X(C, it.m)), h('span', { class: 'ls-note' }, X(C, it.note))), api.nextBtn()); }, (o) => h('span', null, o.path)));
+    },
+  });
+  g.go();
+}
+
+export function playGame(C, id, host, back) {
+  const [game, scriptId] = id.split(':');
+  const sc = C.course.scripts.find((s) => s.id === scriptId) || C.course.scripts[0];
+  if (['sym2sound', 'sound2sym', 'type', 'listen'].includes(game)) return letterGame(C, game, sc, host, back);
+  if (game === 'draw' || game === 'trace') return drawGame(C, sc, host, back, game === 'trace');
+  if (game === 'cards') return cardsGame(C, host, back);
+  const map = { 'ka-build': kaBuild, 'sa-sandhi': saSandhiGame, 'sa-weight': saWeightGame, 'zh-tone': zhToneGame, 'cjk-compose': composeGame, 'ru-root': ruRootGame, 'en-origin': enOriginGame, ...XL_GAMES };
+  if (map[game]) return map[game](C, host, back);
+  back();
+}

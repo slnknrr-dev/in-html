@@ -1,0 +1,163 @@
+// contract/samples.js - the built-in templates: the residential lease (lease.js) and three short documents — a
+// services agreement, a receipt for a deposit (with the first month's rent as an option) and a simple power of
+// attorney — each in Russian (main) and English.
+//
+//   SAMPLES -> [raw template]  (normalize with contract/model.js normalizeTemplate)
+import { LEASE } from './lease.js';
+
+// Data file: commented at the structure level. Each sample is a RAW template (not normalized) on purpose: the same
+// normalizeTemplate path that imported files take is exercised by the built-ins, so a sample that violates the
+// model is cleaned (or caught by tests) exactly like user input would be. Validators are JS source strings, see
+// lease.js for why code travels as text.
+const L = (ru, en) => ({ ru, en });
+
+const SERVICES = {
+  id: 'services-agreement', version: 1, builtin: true, kind: 'services', langs: ['ru', 'en'], main: 'ru',
+  name: L('Договор оказания услуг', 'Services agreement'),
+  description: L('Возмездное оказание услуг: перечень с ценами, сроки, предоплата, приёмка, конфиденциальность.', 'Services for a fee: a priced list, dates, prepayment, acceptance, confidentiality.'),
+  title: L('ДОГОВОР ВОЗМЕЗДНОГО ОКАЗАНИЯ УСЛУГ № {{number}}', 'SERVICES AGREEMENT No. {{number}}'),
+  modifiers: [
+    { id: 'prepay', label: L('Предоплата', 'Prepayment'), default: true },
+    { id: 'nda', label: L('Конфиденциальность', 'Confidentiality') },
+  ],
+  levels: [],
+  groups: [{ id: 'doc', label: L('Договор', 'Agreement') }, { id: 'parties', label: L('Стороны', 'Parties') }, { id: 'work', label: L('Услуги и оплата', 'Services and payment') }],
+  fields: [
+    { id: 'number', type: 'text', group: 'doc', label: L('Номер', 'Number'), default: '1' },
+    { id: 'city', type: 'text', group: 'doc', label: L('Город', 'City'), required: true },
+    { id: 'signDate', type: 'date', group: 'doc', label: L('Дата', 'Date'), default: 'today', required: true },
+    { id: 'customer', type: 'party', group: 'parties', label: L('Заказчик', 'Customer'), required: true },
+    { id: 'contractor', type: 'party', group: 'parties', label: L('Исполнитель', 'Contractor'), required: true },
+    { id: 'items', type: 'list', group: 'work', label: L('Услуги', 'Services'), min: 1, currency: 'RUB',
+      items: [{ id: 'name', type: 'text', label: L('Услуга', 'Service'), required: true }, { id: 'qty', type: 'number', label: L('Кол-во', 'Qty') }, { id: 'price', type: 'money', label: L('Стоимость', 'Price'), currency: 'RUB', required: true }] },
+    { id: 'total', type: 'computed', group: 'work', label: L('Итого', 'Total'), expr: "sum(items, 'price')", format: 'money', currency: 'RUB' },
+    { id: 'start', type: 'date', group: 'work', label: L('Начало оказания', 'Start'), required: true },
+    { id: 'end', type: 'date', group: 'work', label: L('Окончание оказания', 'End'), required: true, after: 'start' },
+    { id: 'prepayPct', type: 'number', group: 'work', label: L('Предоплата, %', 'Prepayment, %'), min: 1, max: 100, default: 50 },
+    { id: 'prepayAmount', type: 'computed', group: 'work', label: L('Сумма предоплаты', 'Prepayment amount'), expr: 'round(total * prepayPct / 100, 2)', format: 'money', currency: 'RUB' },
+    { id: 'acceptDays', type: 'number', group: 'work', label: L('Срок приёмки, рабочих дней', 'Acceptance, working days'), min: 1, max: 60, default: 5 },
+    { id: 'ndaYears', type: 'number', group: 'work', label: L('Срок конфиденциальности, лет', 'Confidentiality, years'), min: 1, max: 10, default: 3 },
+  ],
+  sections: [
+    { id: 'head', kind: 'plain', clauses: [
+      { id: 'place', text: L('г. {{city}}\t{{signDate}}', '{{city}}\t{{signDate}}') },
+      { id: 'parties', text: L('{{customer}}, {{customer|g:\'именуемый\',\'именуемая\',\'именуемое\'}} в дальнейшем «Заказчик», и {{contractor}}, {{contractor|g:\'именуемый\',\'именуемая\',\'именуемое\'}} в дальнейшем «Исполнитель», заключили настоящий договор о нижеследующем:',
+        '{{customer}}, the “Customer”, and {{contractor}}, the “Contractor”, have agreed as follows:') },
+    ] },
+    { id: 'subject', title: L('Предмет договора', 'Subject'), clauses: [
+      { id: 's1', text: L('Исполнитель обязуется оказать услуги, указанные ниже, а Заказчик — принять и оплатить их:\n{{items}}', 'The Contractor shall provide the services below, and the Customer shall accept and pay for them:\n{{items}}') },
+      { id: 's2', text: L('Срок оказания услуг: с {{start}} по {{end}}.', 'Term of the services: from {{start}} to {{end}}.') },
+    ] },
+    { id: 'price', title: L('Цена и оплата', 'Price and payment'), clauses: [
+      { id: 'p1', text: L('Общая стоимость услуг составляет {{total}}.', 'The total price of the services is {{total}}.') },
+      { id: 'p2', text: L('[[if prepay]]Заказчик вносит предоплату {{prepayPct|num}} % — {{prepayAmount}} — в течение 3 (трёх) рабочих дней с даты подписания Договора; остаток оплачивается в течение 5 (пяти) рабочих дней после подписания акта.[[else]]Оплата производится в течение 5 (пяти) рабочих дней после подписания акта оказанных услуг.[[end]]',
+        '[[if prepay]]The Customer pays {{prepayPct|num}} % in advance — {{prepayAmount}} — within 3 (three) working days of signing; the rest within 5 (five) working days after the acceptance act is signed.[[else]]Payment is due within 5 (five) working days after the acceptance act is signed.[[end]]') },
+    ] },
+    { id: 'accept', title: L('Приёмка', 'Acceptance'), clauses: [
+      { id: 'a1', text: L('Заказчик в течение {{acceptDays}} ({{acceptDays|words}}) рабочих {{acceptDays|plural:\'дня\',\'дней\',\'дней\'}} подписывает акт оказанных услуг или направляет мотивированный отказ.', 'Within {{acceptDays}} ({{acceptDays|words}}) working days the Customer signs the acceptance act or sends a reasoned refusal.') },
+    ] },
+    { id: 'conf', title: L('Конфиденциальность', 'Confidentiality'), when: 'nda', clauses: [
+      { id: 'n1', text: L('Стороны не раскрывают третьим лицам сведения, полученные при исполнении Договора, в течение {{ndaYears}} ({{ndaYears|words}}) {{ndaYears|plural:\'года\',\'лет\',\'лет\'}} после его окончания.', 'The Parties keep information received under the Agreement confidential for {{ndaYears}} ({{ndaYears|words}}) years after it ends.') },
+    ] },
+    { id: 'final', title: L('Заключительные положения', 'Final provisions'), clauses: [
+      { id: 'f1', text: L('Договор вступает в силу с момента подписания и действует до исполнения обязательств. Споры разрешаются в суде по месту нахождения ответчика.', 'The Agreement enters into force on signing and remains in force until performed. Disputes go to the court of the defendant\'s location.') },
+    ] },
+    { id: 'signs', kind: 'signatures', title: L('Подписи сторон', 'Signatures'), clauses: [
+      { id: 'sg1', text: L('**Заказчик**\n{{customer|details}}\n\n________________ / {{customer|initials}} /', '**Customer**\n{{customer|details}}\n\n________________ / {{customer|initials}} /') },
+      { id: 'sg2', text: L('**Исполнитель**\n{{contractor|details}}\n\n________________ / {{contractor|initials}} /', '**Contractor**\n{{contractor|details}}\n\n________________ / {{contractor|initials}} /') },
+    ] },
+  ],
+  validator: `// Example: warn when the services take longer than three months.
+const issues = [];
+if (fields.start && fields.end && helpers.days(fields.start, fields.end) > 92)
+  issues.push({ field: 'end', level: 'warning', message: ctx.lang === 'ru' ? 'Услуги дольше трёх месяцев: подумайте о поэтапной приёмке.' : 'Services over three months: consider staged acceptance.' });
+return issues;
+`,
+  sample: {
+    modifiers: { prepay: true, nda: false }, levels: {},
+    values: {
+      number: '12-У', city: 'Санкт-Петербург', signDate: '2027-02-01', start: '2027-02-03', end: '2027-02-28', prepayPct: 30,
+      customer: { kind: 'org', name: 'ООО «Северный ветер»', inn: '7707083893', ogrn: '1027700132195', address: 'г. Санкт-Петербург, Невский пр., д. 100, оф. 5', rep: 'Козлова Петра Ивановича', repTitle: 'генерального директора', repBasis: 'Устава' },
+      contractor: { kind: 'person', name: 'Белова Мария Сергеевна', gender: 'f', passport: '40 17 330125', address: 'г. Санкт-Петербург, ул. Марата, д. 9, кв. 4', inn: '500100732259', phone: '+7 921 300-40-50' },
+      items: [{ name: 'Аудит сайта', qty: 1, price: 40000 }, { name: 'Редизайн главной страницы', qty: 1, price: 85000 }],
+    },
+  },
+};
+
+const RECEIPT = {
+  id: 'deposit-receipt', version: 1, builtin: true, kind: 'receipt', langs: ['ru', 'en'], main: 'ru',
+  name: L('Расписка в получении платежа', 'Receipt for a payment'),
+  description: L('Расписка в получении обеспечительного платежа по договору найма; по желанию — и платы за первый месяц.', 'A receipt for a lease deposit; optionally with the first month\'s rent.'),
+  title: L('РАСПИСКА', 'RECEIPT'),
+  modifiers: [{ id: 'firstRent', label: L('И плата за 1-й месяц', 'And the first month\'s rent') }],
+  levels: [],
+  groups: [],
+  fields: [
+    { id: 'city', type: 'text', label: L('Город', 'City'), required: true },
+    { id: 'date', type: 'date', label: L('Дата', 'Date'), default: 'today', required: true },
+    { id: 'receiver', type: 'party', label: L('Получатель', 'Recipient'), kinds: ['person'], required: true, parts: { person: ['name', 'gender', 'birthDate', 'passport', 'passportIssuer', 'passportDate', 'address'] } },
+    { id: 'payer', type: 'party', label: L('Плательщик', 'Payer'), kinds: ['person'], required: true, parts: { person: ['name', 'gender', 'birthDate', 'passport', 'passportIssuer', 'passportDate', 'address'] } },
+    { id: 'contractNo', type: 'text', label: L('Номер договора найма', 'Lease number'), required: true },
+    { id: 'contractDate', type: 'date', label: L('Дата договора найма', 'Lease date'), required: true },
+    { id: 'deposit', type: 'money', label: L('Обеспечительный платёж', 'Deposit'), currency: 'RUB', required: true, min: 1 },
+    { id: 'rent', type: 'money', label: L('Плата за первый месяц', 'First month\'s rent'), currency: 'RUB', required: true, min: 1 },
+    { id: 'sum', type: 'computed', label: L('Всего получено', 'Total received'), expr: 'deposit + (firstRent ? rent : 0)', format: 'money', currency: 'RUB' },
+  ],
+  sections: [
+    { id: 'body', kind: 'plain', clauses: [
+      { id: 'place', text: L('г. {{city}}\t{{date}}', '{{city}}\t{{date}}') },
+      { id: 'r1', text: L('Я, {{receiver}}, получил[[if receiver.gender == \'f\']]а[[end]] от {{payer}} денежные средства в размере {{sum}}[[if firstRent]], из которых {{deposit}} — обеспечительный платёж и {{rent}} — плата за первый расчётный период[[else]] в качестве обеспечительного платежа[[end]] по договору найма жилого помещения № {{contractNo}} от {{contractDate}}.',
+        'I, {{receiver}}, have received from {{payer}} the sum of {{sum}}[[if firstRent]], of which {{deposit}} is the deposit and {{rent}} the rent for the first billing period[[else]] as the deposit[[end]] under the residential lease No. {{contractNo}} dated {{contractDate}}.') },
+      { id: 'r2', text: L('Деньги получены полностью, пересчитаны, претензий не имею.', 'The money has been received in full and counted; I have no claims.') },
+      { id: 'r3', text: L('\n____________________ / {{receiver|initials}} /', '\n____________________ / {{receiver|initials}} /') },
+    ] },
+  ],
+  validator: '',
+  sample: { modifiers: { firstRent: true }, levels: {}, values: {
+    city: 'Москва', date: '2027-01-20', contractNo: '23/01-2027', contractDate: '2027-01-20', deposit: 65000, rent: 65000,
+    receiver: { kind: 'person', name: 'Соколова Анна Викторовна', gender: 'f', passport: '45 08 731942', passportIssuer: 'ОВД района Хамовники г. Москвы', passportDate: '2008-06-02' },
+    payer: { kind: 'person', name: 'Морозов Илья Андреевич', gender: 'm', passport: '46 15 204871', passportIssuer: 'ТП УФМС России по Московской обл. в г. Химки', passportDate: '2015-10-12' },
+  } },
+};
+
+const POA = {
+  id: 'power-of-attorney', version: 1, builtin: true, kind: 'poa', langs: ['ru', 'en'], main: 'ru',
+  name: L('Доверенность (простая письменная)', 'Power of attorney (simple written)'),
+  description: L('Доверенность физического лица на сдачу квартиры в найм: полномочия списком, срок, право передоверия.', 'A person\'s power of attorney to let a flat: powers as a list, validity, delegation.'),
+  title: L('ДОВЕРЕННОСТЬ', 'POWER OF ATTORNEY'),
+  modifiers: [{ id: 'delegation', label: L('С правом передоверия', 'With delegation') }],
+  levels: [],
+  groups: [],
+  fields: [
+    { id: 'city', type: 'text', label: L('Город', 'City'), required: true },
+    { id: 'date', type: 'date', label: L('Дата', 'Date'), default: 'today', required: true },
+    { id: 'principal', type: 'party', label: L('Доверитель', 'Principal'), kinds: ['person'], required: true },
+    { id: 'agent', type: 'party', label: L('Представитель', 'Attorney'), kinds: ['person'], required: true },
+    { id: 'address', type: 'longtext', label: L('Адрес квартиры', 'Address of the flat'), required: true },
+    { id: 'powers', type: 'list', label: L('Полномочия', 'Powers'), min: 1, items: [{ id: 'text', type: 'text', label: L('Полномочие', 'Power'), required: true }] },
+    { id: 'until', type: 'date', label: L('Действует до', 'Valid until'), required: true, after: 'date' },
+  ],
+  sections: [
+    { id: 'body', kind: 'plain', clauses: [
+      { id: 'place', text: L('г. {{city}}\t{{date}}', '{{city}}\t{{date}}') },
+      { id: 'p1', text: L('Я, {{principal}}, настоящей доверенностью уполномочиваю {{agent}} представлять мои интересы по вопросам сдачи в найм принадлежащей мне квартиры по адресу: {{address}}, для чего предоставляю право:',
+        'I, {{principal}}, hereby authorise {{agent}} to represent me in letting my flat at: {{address}}, and for this purpose to:') },
+      { id: 'p2', text: L('[[each powers as p]]{{index}}) {{p.text}}[[if index < count(powers)]];\n[[end]][[end]].', '[[each powers as p]]{{index}}) {{p.text}}[[if index < count(powers)]];\n[[end]][[end]].') },
+      { id: 'p3', text: L('Доверенность выдана сроком до {{until}} [[if delegation]]с правом передоверия[[else]]без права передоверия[[end]].', 'This power of attorney is valid until {{until}} [[if delegation]]with the right of delegation[[else]]without the right of delegation[[end]].') },
+      { id: 'p4', text: L('\nПодпись доверителя: ____________________ / {{principal|initials}} /', '\nSignature of the principal: ____________________ / {{principal|initials}} /') },
+    ] },
+  ],
+  validator: `const issues = [];
+if (fields.date && fields.until && helpers.days(fields.date, fields.until) > 365 * 3)
+  issues.push({ field: 'until', level: 'warning', message: ctx.lang === 'ru' ? 'Срок больше трёх лет: проверьте, что это намеренно.' : 'Valid for more than three years: make sure this is intended.' });
+return issues;
+`,
+  sample: { modifiers: { delegation: false }, levels: {}, values: {
+    city: 'Москва', date: '2026-12-01', until: '2027-12-31', address: 'г. Москва, Комсомольский проспект, д. 28, кв. 112',
+    principal: { kind: 'person', name: 'Соколова Анна Викторовна', gender: 'f', birthDate: '1979-04-14', passport: '45 08 731942', passportIssuer: 'ОВД района Хамовники г. Москвы', passportDate: '2008-06-02', address: 'г. Москва, ул. Остоженка, д. 12, кв. 7' },
+    agent: { kind: 'person', name: 'Лебедев Олег Сергеевич', gender: 'm', birthDate: '1986-02-11', passport: '45 11 552010', passportIssuer: 'Отделом УФМС России по г. Москве по району Арбат', passportDate: '2011-03-15', address: 'г. Москва, Смоленский б-р, д. 4, кв. 18' },
+    powers: [{ text: 'подыскивать нанимателей и показывать им квартиру' }, { text: 'заключать и подписывать договор найма и акт приёма-передачи на условиях по своему усмотрению' }, { text: 'получать плату за наём и обеспечительный платёж' }, { text: 'расторгать договор найма' }],
+  } },
+};
+
+export const SAMPLES = [LEASE, SERVICES, RECEIPT, POA];

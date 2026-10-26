@@ -1,0 +1,181 @@
+// media-player/ui.js - shared pieces of the interface: icons, covers (real pictures with a generated fallback),
+// presence badges, time / size / date formatting, work rows and cards, tag chips, section headers, empty states,
+// small form helpers on top of ui/ (dom, i18n, overlays).
+
+import { h } from '../ui/dom.js';
+import { t } from '../ui/i18n.js';
+import { addIcons, icon, iconEl } from '../ui/icons.js';
+import { facts } from '../catalog/facts.js';
+import { coverChain } from '../catalog/covers.js';
+import { tagIndex } from '../catalog/tags.js';
+import { coverURL, generatedURL } from './access.js';
+
+addIcons({
+  play: 'M7 4.5v15l12-7.5z', pause: 'M7 4h3.5v16H7zM13.5 4H17v16h-3.5z', next: 'M5 5v14l10-7zM17 5h2v14h-2z', prev: 'M19 5v14L9 12zM5 5h2v14H5z',
+  stop: 'M6 6h12v12H6z', shuffle: 'M3 7h4l10 10h4M17 7h4l-2-2m2 2-2 2M3 17h4l3-3M21 17l-2-2m2 2-2 2M14 10l3-3', repeat: 'M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3',
+  repeatOne: 'M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3M11 10h1.5v5', heart: 'M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z',
+  queue: 'M4 6h12M4 11h12M4 16h8M17 14v6l4-3z', lyrics: 'M4 5h16M4 10h10M4 15h12M4 20h7M18 13v6a2 2 0 1 1-2-2h2', eq: 'M5 4v16M12 4v16M19 4v16M3 15h4M10 8h4M17 13h4',
+  moon: 'M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z', speed: 'M12 14l4-6M4 18a9 9 0 1 1 16 0', ab: 'M4 18l4-12 4 12M5.5 14h5M14 6h4a3 3 0 0 1 0 6h-4zM14 12h5a3 3 0 0 1 0 6h-5z',
+  volume: 'M4 9v6h4l5 4V5L8 9zM16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12', mute: 'M4 9v6h4l5 4V5L8 9zM17 9l5 6M22 9l-5 6', mini: 'M3 5h18v14H3zM12 12h7v5h-7z',
+  theatre: 'M2 5h20v12H2zM8 21h8M12 17v4', fullscreen: 'M3 9V3h6M21 9V3h-6M3 15v6h6M21 15v6h-6', more: 'M5 12h.01M12 12h.01M19 12h.01', back10: 'M11 5 4 12l7 7M20 5l-7 7 7 7',
+  fwd10: 'M13 5l7 7-7 7M4 5l7 7-7 7', bookmark: 'M6 3h12v18l-6-4-6 4z', subtitles: 'M3 5h18v14H3zM6 13h4M12 13h6M6 16h8', audio: 'M9 18V5l12-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM21 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
+  music: 'M9 18V5l12-2v13M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zM21 16a3 3 0 1 1-6 0 3 3 0 0 1 6 0z', book: 'M4 4h6a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H4zM20 4h-6a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h7z',
+  tv: 'M3 6h18v12H3zM8 21h8M9 2l3 4 3-4', film: 'M3 3h18v18H3zM7 3v18M17 3v18M3 8h4M3 13h4M3 18h4M17 8h4M17 13h4M17 18h4', anime: 'M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6-4.5-4.2 6.1-.7z',
+  mic: 'M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3zM5 11a7 7 0 0 0 14 0M12 18v3', video: 'M3 6h12v12H3zM15 10l6-3v10l-6-3z', home: 'M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
+  search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM21 21l-5-5', list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01', tag: 'M3 12V3h9l9 9-9 9zM7.5 7.5h.01',
+  chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2', folderTree: 'M3 5h6l2 2h10v4H3zM3 11h18v8H3z', source: 'M4 6h16M4 12h16M4 18h10M18 16l2 2-2 2', convert: 'M4 7h13l-3-3M20 17H7l3 3',
+  palette: 'M12 3a9 9 0 1 0 0 18c1 0 1.6-.8 1.3-1.7-.4-1.2.5-2.3 1.7-2.3H17a4 4 0 0 0 4-4c0-5.5-4-10-9-10zM7.5 11h.01M10 7h.01M15 7h.01', settings: 'M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
+  link: 'M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1', card: 'M3 5h18v14H3zM7 9h6M7 13h10', file2: 'M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M9 15l2 2 4-4',
+  wand: 'M15 4V2M15 16v-2M8 9h2M20 9h2M17.8 11.8 19 13M17.8 6.2 19 5M3 21l9-9M12.2 6.2 11 5', star: 'M12 3l2.6 5.6 6.1.7-4.5 4.2 1.2 6L12 16.6 6.6 19.5l1.2-6-4.5-4.2 6.1-.7z',
+  grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z', layers: 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5M3 17l9 5 9-5', rows: 'M4 5h16v4H4zM4 11h16v4H4zM4 17h16v2H4z',
+  skip: 'M5 5v14l8-7zM13 5v14l8-7z', sync: 'M21 12a9 9 0 0 1-15 6.7L3 16M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M3 21v-5h5', pin: 'M12 17v5M5 17h14l-2-6V4H7v7z',
+  download2: 'M12 3v12M7 10l5 5 5-5M5 21h14', cloud: 'M7 18a5 5 0 0 1-.9-9.9A6 6 0 0 1 17.7 8 4.5 4.5 0 0 1 17.5 18z', check2: 'M20 6 9 17l-5-5', gamepad: 'M6 11h4M8 9v4M15 12h.01M18 10h.01M7 6h10a5 5 0 0 1 5 5v2a4 4 0 0 1-7 2.6L14 15h-4l-1 .6A4 4 0 0 1 2 13v-2a5 5 0 0 1 5-5z',
+});
+
+export { icon, iconEl };
+
+// Formatting helpers are total: NaN, negative or missing input renders as 0:00 / '' rather than "NaN:NaN", because
+// media durations are often unknown until metadata loads.
+export function fmtTime(s) {
+  if (!Number.isFinite(s) || s < 0) s = 0;
+  s = Math.floor(s);
+  const hh = Math.floor(s / 3600), mm = Math.floor((s % 3600) / 60), ss = s % 60;
+  return (hh ? hh + ':' + String(mm).padStart(2, '0') : mm) + ':' + String(ss).padStart(2, '0');
+}
+export function fmtDuration(s) {
+  if (!s) return '';
+  const hh = Math.floor(s / 3600), mm = Math.round((s % 3600) / 60);
+  return hh ? t('mp.dur.hm', { h: hh, m: mm }) : t('mp.dur.m', { m: Math.max(1, mm) });
+}
+export function fmtSize(n) {
+  if (!n) return '';
+  if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+  if (n < 1024 ** 3) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  return (n / 1024 ** 3).toFixed(2) + ' GB';
+}
+// Intl with the UI language from <html lang>, so dates follow the chosen UI language, not the OS locale; the ISO
+// fallback covers engines without Intl data for that locale.
+export function fmtDate(ms) {
+  if (!ms) return '';
+  try { return new Intl.DateTimeFormat(document.documentElement.lang || 'en', { dateStyle: 'medium' }).format(new Date(ms)); } catch { return new Date(ms).toISOString().slice(0, 10); }
+}
+
+// A cover image: the first picture of the cover chain that loads, else the generated one.
+// Progressive cover: the generated SVG is shown at once (never an empty box), then each real candidate is probed in
+// a detached Image and swapped in only when it loads, so a broken link never shows the browser's broken-image icon.
+// loading="lazy" + decoding="async": grids of hundreds of covers fetch and decode only what scrolls into view.
+// Leaves (track, episode, chapter) fall back to the parent's generated cover, so an album's tracks look related.
+export function coverEl(db, node, { size = 256, cls = '', round = false, eager = false } = {}) {
+  const img = h('img', { class: 'mp-cover' + (cls ? ' ' + cls : '') + (round ? ' mp-round' : ''), alt: '', loading: eager ? 'eager' : 'lazy', decoding: 'async', draggable: 'false' });
+  const chain = node ? coverChain(db, node) : [];
+  const fallback = node ? generatedURL(node.type === 'work' && ['track', 'episode', 'chapter'].includes(node.kind) && node.parent && db.get(node.parent) ? db.get(node.parent) : node, size) : '';
+  img.src = fallback;
+  (async () => {
+    for (const ref of chain) {
+      if (ref.gen) { img.src = await coverURL(ref, size); return; }
+      const u = await coverURL(ref, size);
+      if (!u) continue;
+      const ok = await new Promise((res) => { const probe = new Image(); probe.onload = () => res(true); probe.onerror = () => res(false); probe.src = u; });
+      if (ok) { img.src = u; return; }
+    }
+  })();
+  return img;
+}
+
+export function presenceBadge(p, { small = false } = {}) {
+  const ic = { file: 'file2', source: 'link', nominal: 'card' }[p] || 'card';
+  return h('span', { class: `mp-pres mp-pres-${p}${small ? ' mp-small' : ''}`, title: t('mp.presence.' + p + '.hint'), 'aria-label': t('mp.presence.' + p) }, iconEl(ic), small ? null : h('span', {}, t('mp.presence.' + p)));
+}
+
+export function tagChip(db, key, { onClick, onRemove } = {}) {
+  const ix = tagIndex(db);
+  const color = ix.color(key);
+  const chip = h('span', { class: 'mp-chip', style: color ? { '--chip': color } : null, role: onClick ? 'button' : null, tabindex: onClick ? '0' : null, onclick: onClick ? () => onClick(key) : null }, h('span', {}, ix.label(key)));
+  if (onRemove) chip.append(h('button', { type: 'button', class: 'mp-chip-x', 'aria-label': t('mp.remove'), onclick: (e) => { e.stopPropagation(); onRemove(key); }, html: icon('close') }));
+  return chip;
+}
+
+export const subtitleOf = (db, w) => {
+  const f = facts(db, w);
+  if (w.kind === 'episode') return [f.show, f.season != null ? t('mp.seasonEp', { s: f.season, e: f.episode ?? f.absolute ?? '?' }) : f.episode != null ? t('mp.ep', { e: f.episode }) : ''].filter(Boolean).join(' · ');
+  if (w.kind === 'chapter') return [f.book, f.author[0]].filter(Boolean).join(' · ');
+  if (w.kind === 'book' || w.kind === 'bookseries') return [f.author.join(', '), f.narrator.length ? t('mp.readBy', { n: f.narrator.join(', ') }) : ''].filter(Boolean).join(' · ');
+  if (w.kind === 'show' || w.kind === 'season') return [f.year, f.format ? t('mp.format.' + f.format) : '', f.total ? t('mp.nEpisodes', { n: f.total }) : ''].filter(Boolean).join(' · ');
+  if (w.kind === 'movie') return [f.year, f.director[0]].filter(Boolean).join(' · ');
+  if (w.kind === 'album') return [f.albumartist[0] || f.artist[0], f.year].filter(Boolean).join(' · ');
+  return [(f.artist.length ? f.artist : f.author).join(', '), f.album].filter(Boolean).join(' · ');
+};
+
+// A row of a work list. opts: { index, onPlay, onOpen, menu(work, anchor), selected, number, extra }
+export function workRow(app, w, opts = {}) {
+  const { db } = app;
+  const f = facts(db, w);
+  const row = h('div', { class: 'mp-row' + (f.presence === 'nominal' ? ' mp-nominal' : ''), role: 'row', tabindex: '0', dataset: { id: w.id } });
+  const num = opts.number != null ? h('span', { class: 'mp-row-n' }, String(opts.number)) : coverEl(db, w, { size: 96, cls: 'mp-row-cover' });
+  const playing = app.engine.current() && app.engine.current().work.id === w.id;
+  if (playing) row.classList.add('mp-playing');
+  const titleEl = h('div', { class: 'mp-row-main' }, h('div', { class: 'mp-row-t' }, f.title || t('mp.untitled')), h('div', { class: 'mp-row-s' }, opts.subtitle ?? subtitleOf(db, w)));
+  const right = h('div', { class: 'mp-row-r' },
+    f.plays && w.kind !== 'show' ? h('span', { class: 'mp-watched', title: t('mp.plays', { n: f.plays }) }, iconEl('check2')) : null,
+    presenceBadge(f.presence, { small: true }),
+    f.duration ? h('span', { class: 'mp-row-d' }, w.kind === 'show' || w.kind === 'album' || w.kind === 'book' ? fmtDuration(f.duration) : fmtTime(f.duration)) : null,
+    h('button', { type: 'button', class: 'mp-icon-btn', 'aria-label': t('mp.more'), html: icon('more'), onclick: (e) => { e.stopPropagation(); app.workMenu(w, e.currentTarget, opts.menuExtra); } }));
+  row.append(num, titleEl, right);
+  row.addEventListener('click', () => (opts.onOpen ? opts.onOpen(w) : opts.onPlay ? opts.onPlay(w) : app.open(w)));
+  row.addEventListener('dblclick', (e) => { e.preventDefault(); (opts.onPlay || ((x) => app.playWork(x)))(w); });
+  row.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); (opts.onPlay || ((x) => app.open(x)))(w); } });
+  return row;
+}
+
+export function workCard(app, w, { subtitle, onOpen, progress } = {}) {
+  const { db } = app;
+  const f = facts(db, w);
+  const round = false;
+  const card = h('div', { class: 'mp-card' + (f.presence === 'nominal' ? ' mp-nominal' : ''), tabindex: '0', role: 'button', dataset: { id: w.id, focus: '1' } },
+    h('div', { class: 'mp-card-art' }, coverEl(app.db, w, { size: 320, round }),
+      h('button', { type: 'button', class: 'mp-card-play', 'aria-label': t('mp.play'), html: icon('play'), tabindex: '-1', onclick: (e) => { e.stopPropagation(); app.playWork(w); } }),
+      h('span', { class: 'mp-card-pres' }, presenceBadge(f.presence, { small: true })),
+      progress != null ? h('div', { class: 'mp-card-prog' }, h('i', { style: { width: Math.round(progress * 100) + '%' } })) : null),
+    h('div', { class: 'mp-card-t' }, f.title || t('mp.untitled')), h('div', { class: 'mp-card-s' }, subtitle ?? subtitleOf(app.db, w)));
+  card.addEventListener('click', () => (onOpen ? onOpen(w) : app.open(w)));
+  card.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); card.click(); } });
+  card.addEventListener('contextmenu', (e) => { e.preventDefault(); app.workMenu(w, { x: e.clientX, y: e.clientY }); });
+  return card;
+}
+
+export function section(title, ...kids) {
+  return h('section', { class: 'mp-section' }, title ? h('h2', { class: 'mp-section-h' }, title) : null, ...kids);
+}
+export const grid = (kids, cls = '') => h('div', { class: 'mp-grid ' + cls }, kids);
+export const shelf = (kids) => h('div', { class: 'mp-shelf' }, kids);
+export const empty = (text, ...actions) => h('div', { class: 'mp-empty' }, h('p', {}, text), actions.length ? h('div', { class: 'mp-actions' }, actions) : null);
+
+export function btn(label, ic, onClick, kind = '') {
+  return h('button', { type: 'button', class: 'ed-btn' + (kind ? ' ed-' + kind : ''), onclick: onClick }, ic ? iconEl(ic) : null, label ? h('span', {}, label) : null);
+}
+export const iconBtn = (ic, label, onClick, cls = '') => h('button', { type: 'button', class: 'mp-icon-btn ' + cls, title: label, 'aria-label': label, html: icon(ic), onclick: onClick });
+
+export function tabs(items, current, onPick) {
+  return h('div', { class: 'mp-tabs-bar', role: 'tablist' }, items.map(([k, label]) => h('button', { type: 'button', role: 'tab', class: 'mp-tab' + (k === current ? ' mp-on' : ''), 'aria-selected': String(k === current), onclick: () => onPick(k) }, label)));
+}
+
+export function inputRow(label, control, hint) {
+  return h('label', { class: 'mp-field' }, h('span', { class: 'mp-field-l' }, label), control, hint ? h('span', { class: 'mp-field-h' }, hint) : null);
+}
+export const textField = (value, onInput, attrs = {}) => { const i = h(attrs.multiline ? 'textarea' : 'input', { class: 'ed-input' + (attrs.multiline ? ' ed-textarea' : ''), value: value ?? '', spellcheck: 'false', ...attrs, multiline: null }); i.addEventListener('input', () => onInput(i.value)); return i; };
+export function selectField(options, value, onChange) {
+  const s = h('select', { class: 'ed-input ed-select' }, options.map(([v, l]) => h('option', { value: String(v), selected: String(v) === String(value) }, l)));
+  s.addEventListener('change', () => onChange(s.value));
+  return s;
+}
+export function checkField(label, checked, onChange) {
+  const c = h('input', { type: 'checkbox', class: 'ed-switch', role: 'switch', checked: !!checked });
+  c.addEventListener('change', () => onChange(c.checked));
+  return h('label', { class: 'mp-check' }, c, h('span', {}, label));
+}
+export function rangeField(min, max, step, value, onInput, fmt = (v) => String(v)) {
+  const out = h('output', { class: 'mp-range-v' }, fmt(value));
+  const r = h('input', { type: 'range', class: 'ed-range', min, max, step, value });
+  r.addEventListener('input', () => { out.textContent = fmt(+r.value); onInput(+r.value); });
+  return h('div', { class: 'mp-range' }, r, out);
+}

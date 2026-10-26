@@ -1,0 +1,445 @@
+// crypto-tool/hashing-ui.js - the hashing page: text and files (streamed in chunks with progress) through any set of
+// registered algorithms, HMAC / keyed modes, digest formats, comparison with an expected checksum, verification of
+// checksum lists (sha256sum / BSD format) and password hashing (KDFs).
+// 
+// Performance: text is hashed synchronously on input (debounced 120 ms); files stream in 1 MiB slices through all
+// selected algorithms at once (one read, N hash updates) and yield every ~30 ms so the page stays responsive. Files are
+// processed one at a time (queue) to bound memory.
+import { button, card, copyText, dropZone, field, seg, select, textInput, toast, toggle } from '../ui/app.js';
+import { h, lsGet, lsSet } from '../ui/dom.js';
+import { iconEl } from '../ui/icons.js';
+import { getHash, getHashes, createHash } from './hashing.js';
+import { fmtSize, formatDigest, grouped, startShell, t } from './shell.js';
+import { parseChecksumList } from './checksums.js';
+import { pickFiles } from '../ui/files.js';
+import { debounce } from '../ui/dom.js';
+import { base64ToBytes, bytesToHex, hexToBytes, utf8ToBytes } from '../crypto/encoding.js';
+import { randomBytes } from '../crypto/random.js';
+import { nextTick } from '../crypto/kdf.js';
+
+const COMMON = ['md5', 'sha-1', 'sha-256', 'sha-512', 'sha3-256', 'blake2b-512', 'crc-32'];
+const CHUNK = 1 << 20;
+const defs = () => getHashes().map(getHash);
+const digestDefs = () => defs().filter((d) => !d.kdf && d.keyed !== 'required');
+
+const S = {
+  selected: new Set(lsGet('ct-hash-sel', COMMON).filter((id) => getHash(id))),
+  format: lsGet('ct-hash-fmt', 'hex'),
+  tab: lsGet('ct-hash-tab', 'text'),
+  hmac: false, key: '', keyEnc: 'text',
+  expected: '',
+  text: '',
+  files: [],
+  list: { text: '', algo: 'auto', entries: [], checked: [] },
+  kdf: { id: 'argon2id', password: '', salt: bytesToHex(randomBytes(16)), saltEnc: 'hex', dkLen: 32, m: 64, t: 3, p: 4, logN: 14, r: 8, iterations: 600000, info: '', out: null, busy: false, ms: 0, progress: 0 },
+};
+const main = document.getElementById('ct-main');
+const save = () => { lsSet('ct-hash-sel', [...S.selected]); lsSet('ct-hash-fmt', S.format); lsSet('ct-hash-tab', S.tab); };
+
+// The HMAC / BLAKE2 key as bytes (null when off or empty).
+function keyBytes() {
+  if (!S.hmac || !S.key) return null;
+  try { return S.keyEnc === 'hex' ? hexToBytes(S.key) : utf8ToBytes(S.key); } catch { return null; }
+}
+const selectedDefs = () => grouped(digestDefs()).flatMap(([, list]) => list).filter((d) => S.selected.has(d.id));
+const optionsFor = (d) => { const key = keyBytes(); return key && d.keyed ? { key } : {}; };
+
+// Expected value: hex (any case, separators ignored) or base64, compared with every digest.
+// Expected checksum accepted as hex (any case, ":" "-" or spaces) or base64; comparison is on bytes, so the display format does not matter.
+function expectedBytes() {
+  const s = S.expected.trim();
+  if (!s) return null;
+  try { if (/^[0-9a-f\s:-]+$/i.test(s)) return hexToBytes(s); } catch { /* not hex */ }
+  try { return base64ToBytes(s); } catch { return null; }
+}
+const sameBytes = (a, b) => a && b && a.length === b.length && a.every((x, i) => x === b[i]);
+
+// --- digest table -----------------------------------------------------------------------------
+
+function resultTable(results) {
+  const exp = expectedBytes();
+  const rows = [];
+  for (const d of selectedDefs()) {
+    const r = results.get(d.id);
+    const match = r && exp && sameBytes(r, exp);
+    const text = r ? formatDigest(r, S.format) : '';
+    const keyed = !!keyBytes() && d.keyed;
+    rows.push(h('tr', { class: match ? 'ct-match' : '' },
+      h('td', { class: 'ct-algo', title: d.label }, (keyed ? (d.group === 'blake2' ? 'keyed ' : 'HMAC-') : '') + d.label),
+      h('td', { class: 'ct-digest' }, r ? text : '…'),
+      h('td', { class: 'ct-act' }, r ? h('button', { type: 'button', class: 'ed-iconbtn ed-sm', title: t('ap.copy'), 'aria-label': `${t('ap.copy')} ${d.label}`, onclick: () => copyText(text) }, iconEl('copy')) : null)));
+  }
+  return h('div', { class: 'ap-table-wrap' }, h('table', { class: 'ap-table ct-table' }, h('tbody', {}, rows)));
+}
+
+function compareLine(resultsList) {
+  const exp = expectedBytes();
+  if (!S.expected.trim()) return null;
+  if (!exp) return h('div', { class: 'ct-line' }, h('span', { class: 'ct-status ct-bad' }, iconEl('warn'), t('hash.badExpected')));
+  for (const results of resultsList) {
+    for (const d of selectedDefs()) {
+      if (sameBytes(results.get(d.id), exp)) return h('div', { class: 'ct-line' }, h('span', { class: 'ct-status ct-ok' }, iconEl('check'), t('hash.match', { algo: d.label })));
+    }
+  }
+  return h('div', { class: 'ct-line' }, h('span', { class: 'ct-status ct-bad' }, iconEl('warn'), t('hash.noMatch')));
+}
+
+// --- side panel ------------------------------------------------------------------------------------
+
+// Algorithm chips toggle in place (aria-pressed) without re-rendering the card, so focus stays on the chip.
+function algoCard() {
+  const groups = grouped(digestDefs()).map(([g, list]) => h('div', { class: 'ct-group' },
+    h('h3', { class: 'ct-group-h' }, t('grp.' + g)),
+    h('div', { class: 'ct-chips' }, list.map((d) => h('button', {
+      type: 'button', class: 'ed-chip', 'aria-pressed': String(S.selected.has(d.id)), title: d.note ? t('note.' + d.note) : null,
+      onclick: (e) => {
+        if (S.selected.has(d.id)) S.selected.delete(d.id); else S.selected.add(d.id);
+        e.currentTarget.setAttribute('aria-pressed', String(S.selected.has(d.id)));
+        save();
+        refreshResults();
+      },
+    }, d.label)))));
+  const pick = (ids) => { S.selected = new Set(ids); save(); render(); };
+  return card('hash.algos',
+    h('div', { class: 'ap-row', style: { marginBottom: '10px' } },
+      button('hash.common', '', () => pick(COMMON)), button('hash.all', '', () => pick(digestDefs().map((d) => d.id))), button('hash.none', '', () => pick([]))),
+    groups);
+}
+
+function outputCard() {
+  const keyIn = textInput(S.key, (v) => { S.key = v; refreshResults(); }, { placeholder: t('hash.keyPh'), 'aria-label': t('hash.key'), autocomplete: 'off' });
+  const keyBox = h('div', { class: 'ed-fields', hidden: !S.hmac },
+    field('hash.key', keyIn),
+    seg([{ v: 'text', l: 'enc.text' }, { v: 'hex', l: 'enc.hex' }], S.keyEnc, (v) => { S.keyEnc = v; refreshResults(); }, 'hash.keyEnc'),
+    h('div', { class: 'ed-hint' }, t('hash.keyHint')));
+  return card('hash.output',
+    field('hash.format', seg([{ v: 'hex', l: '=hex' }, { v: 'HEX', l: '=HEX' }, { v: 'base64', l: '=Base64' }], S.format, (v) => { S.format = v; save(); refreshResults(); }, 'hash.format')),
+    field('hash.hmac', toggle(S.hmac, (v) => { S.hmac = v; keyBox.hidden = !v; refreshResults(); })),
+    keyBox);
+}
+
+function compareCard() {
+  const inp = textInput(S.expected, (v) => { S.expected = v; refreshResults(); }, { placeholder: t('hash.expectedPh'), spellcheck: 'false', autocomplete: 'off' });
+  inp.classList.add('ct-mono-in');
+  return card('hash.compare', field('hash.expected', inp), h('div', { id: 'ct-compare' }));
+}
+
+// --- text ------------------------------------------------------------------------------------------
+
+let textResults = new Map();
+function hashText() {
+  const data = utf8ToBytes(S.text);
+  textResults = new Map();
+  for (const d of selectedDefs()) {
+    try { textResults.set(d.id, createHash(d.id, optionsFor(d)).update(data).digest()); } catch (e) { console.error(e); }
+  }
+}
+
+function textPanel() {
+  const later = debounce(refreshResults, 120);
+  const area = textInput(S.text, (v) => { S.text = v; later(); }, { multiline: true, class: 'ed-input ed-textarea ct-area', placeholder: t('hash.inputPh'), 'aria-label': t('hash.input') });
+  return h('div', { class: 'ct-panel' },
+    card('hash.input', area, h('div', { class: 'ed-hint', id: 'ct-text-len' })),
+    card('ap.result', h('div', { id: 'ct-text-results' })));
+}
+
+// --- files -----------------------------------------------------------------------------------------
+
+// "|| o === 0" runs the loop once for empty files, so they get the digest of the empty string.
+async function hashFile(entry) {
+  const ds = selectedDefs();
+  entry.ids = ds.map((d) => d.id);
+  entry.results = new Map();
+  entry.status = 'busy';
+  entry.done = 0;
+  entry.error = '';
+  const ctxs = ds.map((d) => [d.id, createHash(d.id, optionsFor(d))]);
+  const t0 = performance.now();
+  let last = t0;
+  try {
+    for (let o = 0; o < entry.file.size || o === 0; o += CHUNK) {
+      const chunk = new Uint8Array(await entry.file.slice(o, o + CHUNK).arrayBuffer());
+      for (const [, c] of ctxs) {
+        c.update(chunk);
+        if (performance.now() - last > 30) { await nextTick(); last = performance.now(); if (entry.cancel) throw new Error('cancelled'); }
+      }
+      entry.done = Math.min(entry.file.size, o + CHUNK);
+      paintFile(entry);
+      if (entry.cancel) throw new Error('cancelled');
+      if (entry.file.size === 0) break;
+    }
+    for (const [id, c] of ctxs) entry.results.set(id, c.digest());
+    entry.status = 'done';
+    entry.ms = performance.now() - t0;
+  } catch (e) {
+    entry.status = entry.cancel ? 'cancelled' : 'error';
+    entry.error = e.message;
+  }
+  paintFile(entry, true);
+  refreshCompare();
+}
+
+function addFiles(files) {
+  if (!selectedDefs().length) { toast(t('hash.pickAlgo'), 'warn'); return; }
+  for (const file of files) {
+    const entry = { file, status: 'wait', done: 0, results: new Map(), el: null };
+    S.files.push(entry);
+    const list = document.getElementById('ct-files');
+    if (list) list.append(fileCard(entry));
+  }
+  queue();
+}
+
+let running = false;
+// Single worker loop: re-entrancy guarded by running; new files are picked up by the find() on each iteration.
+async function queue() {
+  if (running) return;
+  running = true;
+  for (let e; (e = S.files.find((x) => x.status === 'wait'));) await hashFile(e);
+  running = false;
+}
+
+function fileCard(entry) {
+  const prog = h('div', { class: 'ap-progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100' }, h('i'));
+  const meta = h('span', { class: 'ct-file-meta' });
+  const act = h('span');
+  const body = h('div');
+  entry.el = { root: h('div', { class: 'ct-file' }, h('div', { class: 'ct-file-h' }, iconEl('file'), h('span', { class: 'ct-file-name', title: entry.file.name }, entry.file.name), h('span', { class: 'ed-spacer' }), meta, act), prog, body), prog, meta, act, body };
+  paintFile(entry, true);
+  return entry.el.root;
+}
+
+function paintFile(entry, full = false) {
+  const el = entry.el;
+  if (!el || !el.root.isConnected && !full) return;
+  const pct = entry.file.size ? Math.floor((entry.done / entry.file.size) * 100) : entry.status === 'done' ? 100 : 0;
+  el.prog.firstChild.style.width = pct + '%';
+  el.prog.setAttribute('aria-valuenow', String(pct));
+  el.prog.hidden = entry.status === 'done';
+  if (entry.status === 'busy') el.meta.textContent = `${fmtSize(entry.file.size)} · ${t('hash.hashing', { p: pct })}`;
+  else if (entry.status === 'done') el.meta.textContent = `${fmtSize(entry.file.size)} · ${t('hash.took', { s: (entry.ms / 1000).toFixed(2) })}`;
+  else if (entry.status === 'wait') el.meta.textContent = `${fmtSize(entry.file.size)} · ${t('hash.queued')}`;
+  else el.meta.textContent = `${fmtSize(entry.file.size)} · ${entry.status === 'cancelled' ? t('hash.cancelled') : entry.error}`;
+  if (!full) return;
+  el.act.textContent = '';
+  if (entry.status === 'busy' || entry.status === 'wait') {
+    el.act.append(h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => { entry.cancel = true; if (entry.status === 'wait') { entry.status = 'cancelled'; paintFile(entry, true); } } }, t('hash.cancel')));
+  } else {
+    el.act.append(h('button', { type: 'button', class: 'ed-iconbtn ed-sm', title: t('hash.rehash'), 'aria-label': t('hash.rehash'), onclick: () => { entry.cancel = false; entry.status = 'wait'; paintFile(entry, true); queue(); } }, iconEl('refresh')),
+      h('button', { type: 'button', class: 'ed-iconbtn ed-sm ed-danger', title: t('hash.remove'), 'aria-label': t('hash.remove'), onclick: () => { S.files.splice(S.files.indexOf(entry), 1); el.root.remove(); refreshCompare(); } }, iconEl('close')));
+  }
+  el.body.textContent = '';
+  if (entry.status === 'done') el.body.append(resultTable(entry.results));
+}
+
+function filesPanel() {
+  const list = h('div', { id: 'ct-files' }, S.files.map(fileCard));
+  return h('div', { class: 'ct-panel' },
+    card('', dropZone({ onFiles: addFiles, multiple: true, label: 'hash.dropFiles' }), h('div', { class: 'ed-hint' }, t('hash.filesHint'))),
+    card('ap.result', S.files.length ? null : h('div', { class: 'ap-empty', id: 'ct-files-empty' }, t('hash.noFiles')), list));
+}
+
+// --- checksum lists --------------------------------------------------------------------------------
+
+const base = (n) => String(n).split(/[\\/]/).pop();
+
+// Files match list entries by base name (exact, then case-insensitive); a file listed with several algorithms is hashed once per distinct algorithm.
+async function verifyFiles(files) {
+  const L = S.list;
+  if (!L.entries.length) { toast(t('hash.listEmpty'), 'warn'); return; }
+  for (const file of files) {
+    const matches = L.entries.filter((e) => base(e.name) === file.name);
+    const found = matches.length ? matches : L.entries.filter((e) => base(e.name).toLowerCase() === file.name.toLowerCase());
+    if (!found.length) { L.checked.push({ name: file.name, status: 'extra' }); continue; }
+    for (const e of found) {
+      e.status = e.algo ? 'busy' : 'unknown';
+      e.done = 0;
+      e.size = file.size;
+    }
+    paintList();
+    const ids = [...new Set(found.filter((e) => e.algo).map((e) => e.algo))];
+    const ctxs = ids.map((id) => [id, createHash(id)]);
+    let last = performance.now();
+    for (let o = 0; o < file.size || o === 0; o += CHUNK) {
+      const chunk = new Uint8Array(await file.slice(o, o + CHUNK).arrayBuffer());
+      for (const [, c] of ctxs) { c.update(chunk); if (performance.now() - last > 30) { await nextTick(); last = performance.now(); } }
+      for (const e of found) e.done = Math.min(file.size, o + CHUNK);
+      paintList(true);
+      if (!file.size) break;
+    }
+    const digests = new Map(ctxs.map(([id, c]) => [id, bytesToHex(c.digest())]));
+    for (const e of found) if (e.algo) e.status = digests.get(e.algo) === e.hex ? 'ok' : 'bad';
+    paintList();
+  }
+  paintList();
+}
+
+function listStatus(e) {
+  if (e.status === 'ok') return h('span', { class: 'ct-status ct-ok' }, iconEl('check'), t('hash.ok'));
+  if (e.status === 'bad') return h('span', { class: 'ct-status ct-bad' }, iconEl('warn'), t('hash.bad'));
+  if (e.status === 'extra') return h('span', { class: 'ct-status ct-wait' }, t('hash.extra'));
+  if (e.status === 'unknown') return h('span', { class: 'ct-status ct-bad' }, t('hash.unknownAlgo'));
+  if (e.status === 'busy') return h('span', { class: 'ct-status ct-wait' }, t('hash.hashing', { p: e.size ? Math.floor((e.done / e.size) * 100) : 0 }));
+  return h('span', { class: 'ct-status ct-wait' }, t('hash.pending'));
+}
+
+// Progress updates touch only the status cells of busy entries; the table is rebuilt only on state changes.
+function paintList(progressOnly = false) {
+  const box = document.getElementById('ct-list-results');
+  if (!box) return;
+  const L = S.list;
+  if (progressOnly && box.firstChild) {
+    for (const e of L.entries) if (e.status === 'busy' && e.cell) { e.cell.textContent = ''; e.cell.append(listStatus(e)); }
+    return;
+  }
+  box.textContent = '';
+  if (!L.entries.length) { box.append(h('div', { class: 'ap-empty' }, L.text.trim() ? t('hash.listEmpty') : t('hash.listNone'))); return; }
+  const ok = L.entries.filter((e) => e.status === 'ok').length, bad = L.entries.filter((e) => e.status === 'bad').length;
+  box.append(h('div', { class: 'ct-line', style: { marginBottom: '8px' } },
+    h('span', {}, t('hash.listSummary', { n: L.entries.length })),
+    ok ? h('span', { class: 'ct-status ct-ok' }, iconEl('check'), `${ok} ${t('hash.ok')}`) : null,
+    bad ? h('span', { class: 'ct-status ct-bad' }, iconEl('warn'), `${bad} ${t('hash.bad')}`) : null));
+  const rows = [...L.entries, ...L.checked].map((e) => {
+    e.cell = h('td', { style: { width: '150px' } }, listStatus(e));
+    return h('tr', {}, h('td', { class: 'ct-digest', style: { fontFamily: 'inherit', userSelect: 'text' } }, e.name),
+      h('td', { style: { width: '110px', whiteSpace: 'nowrap' } }, e.algo ? getHash(e.algo).label : e.status === 'extra' ? '' : '?'), e.cell);
+  });
+  box.append(h('div', { class: 'ap-table-wrap' }, h('table', { class: 'ap-table ct-table' },
+    h('thead', {}, h('tr', {}, h('th', {}, t('hash.col.file')), h('th', { style: { width: '110px' } }, t('hash.col.algo')), h('th', { style: { width: '150px' } }, t('hash.col.status')))),
+    h('tbody', {}, rows))));
+}
+
+function setList(text) {
+  S.list.text = text;
+  S.list.entries = parseChecksumList(text, S.list.algo);
+  S.list.checked = [];
+  paintList();
+}
+
+function listPanel() {
+  const area = textInput(S.list.text, (v) => setList(v), { multiline: true, class: 'ed-input ed-textarea ct-area', placeholder: t('hash.listPh'), 'aria-label': t('tab.list') });
+  const load = async (f) => { const txt = await f.text(); area.value = txt; setList(txt); };
+  // A checksum file can also be dropped onto the text area.
+  area.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
+  area.addEventListener('drop', (e) => { const f = e.dataTransfer?.files?.[0]; if (f) { e.preventDefault(); load(f); } });
+  const algos = [{ v: 'auto', l: 'hash.auto' }, ...digestDefs().filter((d) => d.group !== 'mac').map((d) => ({ v: d.id, l: '=' + d.label }))];
+  return h('div', { class: 'ct-panel' },
+    card('hash.listTitle',
+      h('div', { class: 'ed-hint', style: { marginTop: 0 } }, t('hash.listHelp')),
+      area,
+      h('div', { class: 'ap-actions' }, button('hash.listFile', 'upload', async () => { const [f] = await pickFiles({ accept: '.txt,.sha1,.sha256,.sha512,.md5,.md4,.md2,.sums,text/plain' }); if (f) load(f); })),
+      field('hash.col.algo', select(algos, S.list.algo, (v) => { S.list.algo = v; setList(S.list.text); }))),
+    card('hash.verify', dropZone({ onFiles: verifyFiles, multiple: true, label: 'hash.verifyDrop', paste: false }), h('div', { id: 'ct-list-results', style: { marginTop: '12px' } })));
+}
+
+// --- key derivation --------------------------------------------------------------------------------
+
+// The KDF form converts UI units to library units: Argon2 memory in MiB -> KiB (×1024), scrypt cost as log2 N.
+function kdfPanel() {
+  const K = S.kdf;
+  const kdfDefs = defs().filter((d) => d.kdf);
+  const num = (key, min, max, label, step = 1) => field(label, textInput(String(K[key]), (v) => { K[key] = Math.max(min, Math.min(max, Math.floor(+v || min))); }, { type: 'number', min, max, step, inputmode: 'numeric' }));
+  const params = h('div', { class: 'ct-grid3' });
+  const paint = () => {
+    params.textContent = '';
+    if (K.id.startsWith('argon2')) params.append(num('m', 1, 1024, 'kdf.memory'), num('t', 1, 64, 'kdf.iterations'), num('p', 1, 16, 'kdf.parallelism'));
+    else if (K.id === 'scrypt') params.append(num('logN', 1, 22, 'kdf.cost'), num('r', 1, 32, 'kdf.blockSize'), num('p', 1, 16, 'kdf.parallelism'));
+    else if (K.id.startsWith('pbkdf2')) params.append(num('iterations', 1, 10000000, 'kdf.iterations', 1000));
+    else params.append(field('kdf.info', textInput(K.info, (v) => { K.info = v; })));
+    params.append(num('dkLen', 4, 1024, 'kdf.length'));
+  };
+  paint();
+  const saltIn = textInput(K.salt, (v) => { K.salt = v; }, { 'aria-label': t('kdf.salt'), spellcheck: 'false', autocomplete: 'off' });
+  const pw = textInput(K.password, (v) => { K.password = v; }, { type: 'password', autocomplete: 'off', 'aria-label': t('kdf.password') });
+  const reveal = h('button', { type: 'button', class: 'ed-iconbtn', title: t('cip.show'), 'aria-label': t('cip.show'), 'aria-pressed': 'false', onclick: () => { const on = pw.type === 'password'; pw.type = on ? 'text' : 'password'; reveal.setAttribute('aria-pressed', String(on)); reveal.firstChild.replaceWith(iconEl(on ? 'eyeOff' : 'eye')); } }, iconEl('eye'));
+  const out = h('div', { id: 'ct-kdf-out' });
+  const prog = h('div', { class: 'ap-progress', hidden: true }, h('i'));
+  const go = button('kdf.derive', 'key', async () => {
+    if (K.busy) return;
+    let salt;
+    try { salt = K.saltEnc === 'hex' ? hexToBytes(K.salt) : utf8ToBytes(K.salt); } catch { toast(t('kdf.badSalt'), 'error'); return; }
+    // Argon2 requires a salt of at least 8 bytes (RFC 9106).
+    if (K.id.startsWith('argon2') && salt.length < 8) { toast(t('kdf.shortSalt'), 'warn'); return; }
+    const o = { salt, dkLen: K.dkLen };
+    if (K.id.startsWith('argon2')) Object.assign(o, { m: K.m * 1024, t: K.t, p: K.p });
+    else if (K.id === 'scrypt') Object.assign(o, { N: 2 ** K.logN, r: K.r, p: K.p });
+    else if (K.id.startsWith('pbkdf2')) o.iterations = K.iterations;
+    else o.info = K.info;
+    K.busy = true; go.disabled = true; prog.hidden = false;
+    const t0 = performance.now();
+    try {
+      o.onProgress = (f) => { prog.firstChild.style.width = Math.round(f * 100) + '%'; go.lastChild.textContent = t('kdf.deriving', { p: Math.round(f * 100) }); };
+      K.out = await createHash(K.id, o).update(utf8ToBytes(K.password)).digest();
+      K.ms = performance.now() - t0;
+      paintKdfOut(out);
+    } catch (e) { toast(t('err.generic', { msg: e.message }), 'error'); }
+    K.busy = false; go.disabled = false; prog.hidden = true; go.lastChild.textContent = t('kdf.derive');
+  }, 'primary');
+  const algo = select(kdfDefs.map((d) => ({ v: d.id, l: '=' + d.label })), K.id, (v) => { K.id = v; paint(); });
+  const panel = h('div', { class: 'ct-panel' },
+    card('tab.kdf',
+      h('div', { class: 'ed-fields' },
+        field('kdf.algo', algo),
+        field('kdf.password', h('div', { class: 'ct-pw-row' }, pw, reveal)),
+        field('kdf.salt', h('div', { class: 'ct-key-row' }, saltIn,
+          seg([{ v: 'hex', l: 'enc.hex' }, { v: 'text', l: 'enc.text' }], K.saltEnc, (v) => { K.saltEnc = v; }),
+          h('button', { type: 'button', class: 'ed-iconbtn', title: t('kdf.random'), 'aria-label': t('kdf.random'), onclick: () => { K.saltEnc = 'hex'; K.salt = bytesToHex(randomBytes(16)); render(); } }, iconEl('refresh'))), 'kdf.saltHint'),
+        params,
+        h('div', { class: 'ap-actions' }, go),
+        prog)),
+    card('kdf.result', out));
+  paintKdfOut(out);
+  return panel;
+}
+
+function paintKdfOut(box) {
+  const K = S.kdf;
+  box.textContent = '';
+  if (!K.out) { box.append(h('div', { class: 'ap-empty' }, t('kdf.none'))); return; }
+  const text = formatDigest(K.out, S.format);
+  box.append(h('div', { class: 'ct-gen-out' }, h('output', {}, text),
+    h('button', { type: 'button', class: 'ed-btn', onclick: () => copyText(text) }, iconEl('copy'), t('ap.copy'))),
+  h('div', { class: 'ed-hint' }, t('kdf.time', { s: (K.ms / 1000).toFixed(2) })));
+}
+
+// --- page --------------------------------------------------------------------------------------------
+
+function refreshCompare() {
+  const box = document.getElementById('ct-compare');
+  if (!box) return;
+  box.textContent = '';
+  const line = compareLine([textResults, ...S.files.filter((f) => f.status === 'done').map((f) => f.results)]);
+  if (line) box.append(line);
+}
+
+function refreshResults() {
+  const tr = document.getElementById('ct-text-results');
+  if (tr) {
+    hashText();
+    tr.textContent = '';
+    tr.append(selectedDefs().length ? resultTable(textResults) : h('div', { class: 'ap-empty' }, t('hash.pickAlgo')));
+    const len = document.getElementById('ct-text-len');
+    if (len) len.textContent = t('u.bytes', { n: utf8ToBytes(S.text).length });
+  }
+  for (const f of S.files) if (f.status === 'done' && f.el) paintFile(f, true);
+  const ko = document.getElementById('ct-kdf-out');
+  if (ko) paintKdfOut(ko);
+  refreshCompare();
+}
+
+function render() {
+  main.textContent = '';
+  const tabs = seg([{ v: 'text', l: 'tab.text' }, { v: 'files', l: 'tab.files' }, { v: 'list', l: 'tab.list' }, { v: 'kdf', l: 'tab.kdf' }], S.tab,
+    (v) => { S.tab = v; save(); stage.replaceWith(stage = panel()); refreshResults(); paintList(); }, 'hash.tabs');
+  tabs.classList.add('ct-tabs');
+  const panel = () => (S.tab === 'files' ? filesPanel() : S.tab === 'list' ? listPanel() : S.tab === 'kdf' ? kdfPanel() : textPanel());
+  let stage = panel();
+  main.append(h('div', { class: 'ap-work ct-stage-first' },
+    h('aside', { class: 'ap-side', 'aria-label': t('ap.settings') }, algoCard(), outputCard(), compareCard()),
+    h('div', { class: 'ap-stage' }, tabs, stage)));
+  refreshResults();
+  paintList();
+}
+
+startShell('hashing', render);
+render();

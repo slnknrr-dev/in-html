@@ -1,0 +1,317 @@
+// language-studio/rhyme-tools.js - the rhyme and meter workshop of the English, Russian and Georgian courses (on
+// prosody/): lines of verse with their words taken apart into syllables (click one to move the stress, remembered in
+// the progress document), grey blocks of the syllables the meter needs under every line, coloured blocks of the rhyme
+// sounds that catch the target line, the catch score of each line and its words in green / yellow / red, the ending of
+// the active line's last word in editable squares with suggested endings, word modifiers and rhyme words ranked by
+// distance and meter fit, morphemes, and public-domain examples (Shakespeare, Rustaveli, Dante in translation).
+//
+//   RHYME_TOOLS: { rhyme: { title, render(C, arg) } }     arg: an example id of prosody/quotes.js (#ru/tools/rhyme/dante-min)
+import './strings-rhyme.js';
+import { h } from '../ui/dom.js';
+import { t } from '../ui/i18n.js';
+import { select, toggle, toast } from '../ui/app.js';
+import { analyzePoem } from '../prosody/poem.js';
+import { METERS, metersFor } from '../prosody/meter.js';
+import { CLAUSULA, compareRhyme, rhymeUnit } from '../prosody/rhyme.js';
+import { modifiers, rhymeWords, endings, needOf } from '../prosody/suggest.js';
+import { morphemes } from '../prosody/morph.js';
+import { QUOTES, quoteById } from '../prosody/quotes.js';
+import { partsEl, speakBtn } from './views.js';
+
+const SCHEME_IDS = ['auto', 'cross', 'couplet', 'enclosing', 'mono', 'rubai', 'terza', 'sonnet', 'onegin', 'free', 'custom'];
+const pct = (x) => Math.round((x || 0) * 100);
+const verdictClass = (v) => (v ? 'rh-' + v : '');
+
+// --- the user's stress marks: prefs chunks rhyme.s.<lang>.<k> of "word=syllable|…" (prefs values are short strings)
+function loadMarks(C, lang) {
+  const m = new Map();
+  for (let k = 0; k < 10; k++) {
+    const v = C.doc.prefs[`rhyme.s.${lang}.${k}`];
+    if (typeof v !== 'string') continue;
+    for (const pair of v.split('|')) { const i = pair.lastIndexOf('='); if (i > 0) m.set(pair.slice(0, i), Number(pair.slice(i + 1)) || 0); }
+  }
+  return m;
+}
+// Why the chunking: progress.js accepts only scalar prefs and truncates strings to 200 characters (a size guard for
+// a document the server stores). So the marks are packed into at most 10 strings of <= 190 characters, keeping only
+// the 120 most recent words; the tail beyond 10 chunks is dropped silently. Living in prefs, the marks sync with the
+// account like everything else. The unsent draft text, by contrast, stays in localStorage: per device, never synced.
+function saveMarks(C, lang, marks) {
+  for (let k = 0; k < 10; k++) delete C.doc.prefs[`rhyme.s.${lang}.${k}`];
+  const pairs = [...marks].slice(-120).map(([w, i]) => `${w}=${i}`);
+  let k = 0, cur = '';
+  for (const p of pairs) {
+    if ((cur + '|' + p).length > 190) { C.doc.prefs[`rhyme.s.${lang}.${k++}`] = cur; cur = ''; if (k >= 10) break; }
+    cur = cur ? cur + '|' + p : p;
+  }
+  if (cur && k < 10) C.doc.prefs[`rhyme.s.${lang}.${k}`] = cur;
+  C.doc.prefs.t = Date.now();
+  C.save();
+}
+
+const draftKey = (lang) => 'language-studio.rhyme.' + lang;
+const loadDraft = (lang) => { try { return localStorage.getItem(draftKey(lang)); } catch { return null; } };
+const saveDraft = (lang, s) => { try { localStorage.setItem(draftKey(lang), s); } catch { /* storage unavailable */ } };
+
+const DEFAULT = {
+  en: 'Shall I compare thee to a summer\'s day?\nThou art more lovely and more temperate:\nRough winds do shake the darling buds of May,\nAnd summer\'s lease hath all too short a time',
+  ru: 'Сравню ли я тебя с весенним днем?\nНет, ты милее длительной красою:\nЗлой вихрь играет нежным лепестком,\nВесна проходит краткой полосой.',
+  ka: 'რომელმან შექმნა სამყარო ძალითა მით ძლიერითა,\nზეგარდმო არსნი სულითა ყვნა ზეცით მონაბერითა,\nჩვენ, კაცთა, მოგვცა ქვეყანა, გვაქვს უთვალავი ფერითა,\nმისგან არს ყოვლი ხელმწიფე სახითა მის მიერის.',
+};
+
+const meterName = (id, P, L) => (id === 'syllabic' ? t('rh.m.syllabic') + ' · ' + t('rh.syllables', { n: (L && L.scan && L.scan.L) || 0 }) : t('rh.m.' + id));
+const workTitle = (q) => q.work[document.documentElement.lang] || q.work.en;
+
+function rhymeTool(C, arg) {
+  const lang = C.course.id;
+  const marks = loadMarks(C, lang);
+  const quotes = QUOTES.filter((q) => q.lang === lang);
+  const fromRoute = arg && quoteById(arg) && quoteById(arg).lang === lang ? quoteById(arg) : null;
+  const st = {
+    text: fromRoute ? fromRoute.lines.join('\n') : loadDraft(lang) || DEFAULT[lang] || '',
+    example: fromRoute ? fromRoute.id : '', scheme: 'auto', pattern: '', meter: 'auto', internal: false, active: -1, P: null, focusSq: null,
+  };
+
+  const ta = h('textarea', { class: 'ed-input ed-textarea rh-text', lang, spellcheck: 'false', autocomplete: 'off', 'aria-label': t('rh.text'), rows: '6' });
+  ta.value = st.text;
+  const meta = h('div', { class: 'rh-meta' });
+  const summary = h('p', { class: 'rh-summary', 'aria-live': 'polite' });
+  const linesBox = h('div', { class: 'rh-lines' });
+  const active = h('div', { class: 'rh-active' });
+  const pattern = h('input', { class: 'ed-input rh-pattern', placeholder: t('rh.patternPh'), hidden: true, 'aria-label': t('rh.pattern'), maxlength: '40' });
+
+  const exampleSel = select([{ v: '', l: 'rh.own' }, ...quotes.map((q) => ({ v: q.id, l: '=' + workTitle(q) + ' — ' + (q.translator || q.author) }))], st.example, (v) => {
+    st.example = v;
+    const q = quoteById(v);
+    st.text = q ? q.lines.join('\n') : loadDraft(lang) || DEFAULT[lang];
+    ta.value = st.text;
+    st.active = -1;
+    update();
+  });
+  const schemeSel = select(SCHEME_IDS.map((id) => ({ v: id, l: 'rh.s.' + id })), st.scheme, (v) => { st.scheme = v; pattern.hidden = v !== 'custom'; update(); });
+  const meterSel = select([{ v: 'auto', l: 'rh.auto' }, ...metersFor(lang).map((id) => ({ v: id, l: 'rh.m.' + id }))], st.meter, (v) => { st.meter = v; update(); });
+  pattern.addEventListener('input', () => { st.pattern = pattern.value; update(); });
+  const internal = toggle(false, (v) => { st.internal = v; render(); });
+  const resetBtn = h('button', { type: 'button', class: 'ed-btn rh-reset', onclick: () => { marks.clear(); saveMarks(C, lang, marks); toast(t('rh.stressReset'), 'ok'); update(); } }, t('rh.resetStress'));
+
+  let timer = 0;
+  ta.addEventListener('input', () => {
+    st.text = ta.value;
+    if (!st.example) saveDraft(lang, st.text);
+    clearTimeout(timer);
+    timer = setTimeout(update, 120);
+  });
+  // the caret's line becomes the active one
+  const caretLine = () => { const i = ta.value.slice(0, ta.selectionStart).split('\n').length - 1; if (i !== st.active) { st.active = i; renderActive(); markActive(); } };
+  ta.addEventListener('click', caretLine);
+  ta.addEventListener('keyup', (e) => { if (/Arrow|Home|End|Page|Enter/.test(e.key)) caretLine(); });
+
+  function update() {
+    const scheme = st.scheme === 'custom' ? (st.pattern.trim() || 'auto') : st.scheme;
+    st.P = analyzePoem(st.text, { lang, scheme, meter: st.meter, overrides: marks });
+    if (st.active < 0 || st.active >= st.P.lines.length || !st.P.lines[st.active].words.length) {
+      // the last line with words is active by default
+      let k = st.P.lines.length - 1;
+      while (k > 0 && !st.P.lines[k].words.length) k--;
+      st.active = k;
+    }
+    ta.rows = String(Math.max(4, Math.min(18, st.P.lines.length + 1)));
+    render();
+  }
+
+  function render() {
+    renderMeta();
+    renderSummary();
+    linesBox.replaceChildren(...st.P.lines.map((L, i) => (L.words.length ? lineEl(L, i) : h('div', { class: 'rh-gapline' }))));
+    renderActive();
+  }
+
+  function renderMeta() {
+    const q = quoteById(st.example);
+    if (!q) { meta.replaceChildren(); return; }
+    const others = QUOTES.filter((x) => x.id !== q.id && x.group === q.group);
+    meta.replaceChildren(
+      h('p', null, h('b', null, workTitle(q)), ' — ', q.author, ', ', q.translator ? t('rh.translator', { t: q.translator, y: q.translatorDied }) : t('rh.original'), q.published ? ` · ${q.published}` : ''),
+      h('p', { class: 'ed-hint' }, t('rh.want', { s: q.scheme.replace(/-/g, '–'), m: t('rh.m.' + q.meter) }), ' · ', t('rh.source', { s: q.source })),
+      q.note ? h('p', { class: 'ed-hint' }, ['ru', 'uk'].includes(document.documentElement.lang) ? q.note.ru : q.note.en) : null,
+      others.length ? h('p', { class: 'rh-others' }, others.map((o) => h('a', { class: 'ed-chip', href: `#${o.lang}/tools/rhyme/${o.id}` }, t('ls.lang.' + o.lang) + ': ' + (o.translator || o.author)))) : null);
+  }
+
+  function renderSummary() {
+    const P = st.P;
+    const filled = P.lines.filter((L) => L.words.length);
+    if (!filled.length) { summary.textContent = ''; return; }
+    if (P.meter === 'prose') { summary.textContent = t('rh.prose'); return; }
+    const avg = filled.reduce((a, L) => a + (L.catch || 0), 0) / filled.length;
+    const letters = filled.map((L) => L.letter).join('');
+    summary.replaceChildren(h('span', null, t('rh.summary', { meter: meterName(P.meter, P, filled[0]), feet: METERS[P.meter] && METERS[P.meter].kind === 'accentual' ? t('rh.feet', { n: P.feet }) : t('rh.syllables', { n: filled[0].scan ? filled[0].scan.L : 0 }), scheme: letters.replace(/-/g, '–') + (P.scheme.id && P.scheme.id !== 'detected' && SCHEME_IDS.includes(P.scheme.id) ? ` (${t('rh.s.' + P.scheme.id)})` : ''), n: pct(avg) })),
+      h('small', { class: 'rh-legend' }, t('rh.legend')));
+  }
+
+  function markActive() { for (const el of linesBox.querySelectorAll('.rh-line')) el.classList.toggle('rh-on', Number(el.dataset.i) === st.active); }
+
+  // internal rhymes: words of one line whose rhyming parts catch each other
+  function innerPairs(L) {
+    if (!st.internal) return new Map();
+    const ws = L.words.map((w, k) => ({ k, W: w.W })).filter((x) => !x.W.fn && x.W.syl.some((s) => s.v >= 0));
+    const out = new Map();
+    let colour = 0;
+    for (let a = 0; a < ws.length; a++) for (let b = a + 1; b < ws.length; b++) {
+      const r = compareRhyme(rhymeUnit(ws[a].W), rhymeUnit(ws[b].W));
+      if (r.score >= 0.85 && r.kind !== 'identical') { const c = out.get(ws[a].k) ?? out.get(ws[b].k) ?? colour++; out.set(ws[a].k, c); out.set(ws[b].k, c); }
+    }
+    return out;
+  }
+
+  function wordEl(L, i, w, k, inner) {
+    const W = w.W;
+    const mark = L.marks[k];
+    const pos = L.scan ? L.scan.pos.filter((p) => p.w === k) : [];
+    return h('span', { class: `rh-w ${verdictClass(mark)}${inner.has(k) ? ' rh-inner rh-inner' + (inner.get(k) % 4) : ''}${k === L.endIndex ? ' rh-end' : ''}`, lang, dataset: { w: String(k) }, title: t('rh.stress') + ': ' + t('rh.src.' + W.src) },
+      W.syl.map((s, j) => {
+        const p = pos.find((x) => x.s === j);
+        const cls = 'rh-syl' + (s.st === 1 ? ' rh-st' : s.st === 2 ? ' rh-st2' : '') + (p && p.elided ? ' rh-elided' : '') + (p && p.issue && !p.elided ? ' rh-i-' + p.issue : '');
+        if (s.v < 0) return h('span', { class: 'rh-syl rh-cons' }, s.t);
+        return h('button', {
+          type: 'button', class: cls, title: t('rh.clickStress') + (p && p.issue ? ' · ' + t('rh.i.' + p.issue) : ''),
+          onclick: (e) => {
+            e.stopPropagation();
+            // a click on the stressed syllable forgets the mark; another one marks it
+            if (W.src === 'user' && s.st === 1) marks.delete(W.norm); else marks.set(W.norm, j);
+            saveMarks(C, lang, marks);
+            st.active = i;
+            update();
+          },
+        }, s.t || '·');
+      }));
+  }
+
+  function slotsEl(L) {
+    const exp = L.expected || [];
+    const read = L.scan ? L.scan.pos.filter((p) => !p.elided) : [];
+    const n = Math.max(exp.length, read.length);
+    const kids = [];
+    for (let k = 0; k < n; k++) {
+      const e = exp[k], p = read[k];
+      const W = p ? L.words[p.w].W : null;
+      const txt = p ? W.syl[p.s].t : '';
+      let cls = 'rh-slot' + (e && e.strong ? ' rh-strong' : '');
+      if (!e) cls += ' rh-extra';
+      else if (!p) cls += ' rh-missing';
+      else if (p.issue) cls += ' rh-i-' + p.issue;
+      const title = !e ? t('rh.i.extra') : !p ? t('rh.i.missing') : p.issue ? t('rh.i.' + p.issue) : null;
+      if (k > 0 && e && exp[k - 1] && e.group !== undefined && e.group !== exp[k - 1].group) kids.push(h('span', { class: 'rh-caesura', 'aria-hidden': 'true' }));
+      kids.push(h('span', { class: cls, title, lang }, txt));
+    }
+    return h('div', { class: 'rh-slots', 'aria-label': t('rh.slots') }, kids);
+  }
+
+  function soundsEl(L) {
+    if (!L.unit) return null;
+    const T = L.target >= 0 ? st.P.lines[L.target] : null;
+    const segs = L.rhyme ? L.rhyme.segs : [...L.unit.support.map((p) => ({ p, m: 'none', role: 'support' })), { p: L.unit.vowel, m: 'none', role: 'vowel' }, ...L.unit.post.map((p) => ({ p, m: 'none', role: 'post' }))];
+    return h('div', { class: 'rh-sounds', 'aria-label': t('rh.sounds') },
+      segs.map((s) => h('span', { class: `rh-seg rh-${s.m}${s.role === 'support' ? ' rh-sup' : ''}${s.role === 'vowel' ? ' rh-sv' : ''}` }, s.p)),
+      T && T.unit ? h('span', { class: 'rh-arrow' }, '→ ' + T.unit.text + ' ') : null,
+      L.rhyme ? h('span', { class: 'ed-tag rh-kind' }, t('rh.k.' + L.rhyme.kind) + ' · ' + t('rh.cl.' + CLAUSULA[L.rhyme.clausula[0]])) : h('span', { class: 'ed-hint' }, t('rh.cl.' + CLAUSULA[L.unit.clausula])));
+  }
+
+  function lineEl(L, i) {
+    const inner = innerPairs(L);
+    return h('div', { class: 'rh-line' + (i === st.active ? ' rh-on' : ''), dataset: { i: String(i) }, onclick: () => { st.active = i; renderActive(); markActive(); } },
+      h('div', { class: 'rh-head' },
+        h('span', { class: 'rh-letter', title: t('rh.scheme') }, L.letter === '-' ? '–' : L.letter),
+        h('small', null, t('rh.line', { n: i + 1 })),
+        L.catch !== null ? h('span', { class: 'rh-pill ' + verdictClass(L.verdict), title: t('rh.catch') }, `${t('rh.catch')} ${pct(L.catch)} % · ${t('rh.v.' + L.verdict)}`) : null,
+        h('small', { class: 'rh-target' }, L.target >= 0 ? t('rh.rhymesWith', { n: L.target + 1 }) : t('rh.noTarget')),
+        speakBtn(C, L.text)),
+      h('div', { class: 'rh-words' }, L.words.map((w, k) => wordEl(L, i, w, k, inner))),
+      st.P.meter !== 'prose' ? slotsEl(L) : null,
+      soundsEl(L));
+  }
+
+  // --- the active line: ending squares, modifiers, rhyme words, the word taken apart ---------------------------------------
+  function replaceEnd(i, word) {
+    const L = st.P.lines[i];
+    const w = L.words[L.endIndex];
+    if (!w) return;
+    const orig = w.text;
+    const out = orig[0] && orig[0] !== orig[0].toLowerCase() ? word[0].toUpperCase() + word.slice(1) : word;
+    const lines = st.text.split(/\r?\n/);
+    lines[i] = L.text.slice(0, w.start) + out + L.text.slice(w.end);
+    st.text = lines.join('\n');
+    ta.value = st.text;
+    if (!st.example) saveDraft(lang, st.text);
+    update();
+  }
+
+  function renderActive() {
+    const L = st.P && st.P.lines[st.active];
+    if (!L || !L.words.length || L.endIndex === undefined) { active.replaceChildren(h('p', { class: 'ed-hint' }, t('rh.pickLine'))); return; }
+    const i = st.active;
+    const T = L.target >= 0 ? st.P.lines[L.target] : null;
+    const target = T && T.unit ? T.unit : null;
+    const need = needOf(L);
+    const end = L.words[L.endIndex];
+    const W = end.W;
+    const E = endings(end.text, lang, { target, need });
+    // squares: one per letter of the ending, editable; the score recomputes on every letter
+    const squares = h('span', { class: 'rh-squares' });
+    const letters = [...E.ending];
+    const commit = () => { const val = [...squares.querySelectorAll('input')].map((x) => x.value).join(''); replaceEnd(i, E.stem + val); };
+    letters.concat(['']).forEach((ch, k) => {
+      const inp = h('input', { class: 'rh-sq' + (k === letters.length ? ' rh-sq-new' : ''), value: ch, maxlength: '1', lang, 'aria-label': t('rh.endings') + ' ' + (k + 1), title: k === letters.length ? t('rh.addSquare') : null, size: '1' });
+      inp.addEventListener('input', () => { inp.value = inp.value.slice(-1); st.focusSq = inp.value ? k + 1 : k; commit(); });
+      inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Backspace' && !inp.value && k > 0) { e.preventDefault(); const prev = squares.querySelectorAll('input')[k - 1]; prev.value = ''; st.focusSq = k - 1; commit(); }
+      });
+      squares.append(inp);
+    });
+    const opts = h('div', { class: 'rh-end-opts' }, E.options.length ? E.options.map((o) => h('button', {
+      type: 'button', class: 'ed-chip rh-end-opt ' + verdictClass(o.score === null ? null : o.score >= 0.75 ? 'good' : o.score >= 0.5 ? 'fair' : 'poor'), dataset: { word: o.word },
+      title: t('rh.mk.' + o.kind) + (o.attested ? '' : ' · ' + t('rh.byRule')), onclick: () => replaceEnd(i, o.word),
+    }, h('b', null, o.ending || '∅'), o.score !== null ? h('small', null, pct(o.score) + ' %') : null)) : h('span', { class: 'ed-hint' }, t('rh.nothing')));
+    const mods = modifiers(end.text, lang, { target, need, limit: 10 });
+    const words = target ? rhymeWords(target, lang, { need, exclude: [end.text], limit: 18 }) : [];
+    const m = morphemes(end.text, lang);
+    const row = (s) => h('button', { type: 'button', class: 'rh-cand ' + verdictClass(s.score === null ? null : s.score >= 0.75 ? 'good' : s.score >= 0.5 ? 'fair' : 'poor'), dataset: { word: s.word }, title: t('rh.apply'), onclick: () => replaceEnd(i, s.word) },
+      h('b', { lang }, s.word),
+      h('small', null, (s.kind !== 'word' ? t('rh.mk.' + s.kind) + ' · ' : '') + (s.rhyme ? t('rh.k.' + s.rhyme.kind) + ' ' + pct(s.score) + ' %' : '') + ' · ' + t('rh.fit') + ' ' + pct(s.fit) + ' %' + (s.attested ? '' : ' · ' + t('rh.byRule'))),
+      h('span', { class: 'rh-bar' }, h('span', { style: { width: pct(s.score === null ? s.fit : s.score) + '%' } })));
+    active.replaceChildren(
+      h('h4', null, t('rh.active', { n: i + 1 }), target ? h('span', { class: 'ed-tag' }, t('rh.target', { w: T.words[T.endIndex] ? T.words[T.endIndex].text : T.unit.text })) : null),
+      h('div', { class: 'rh-endbox' }, h('span', { class: 'rh-stem', lang, title: t('rh.stem') }, E.stem), squares,
+        L.rhyme ? h('span', { class: 'rh-pill ' + verdictClass(L.verdict) }, `${t('rh.catch')} ${pct(L.catch)} %`) : null),
+      h('div', { class: 'rh-field' }, h('span', { class: 'ed-label' }, t('rh.endings')), opts),
+      h('div', { class: 'rh-cols' },
+        h('div', { class: 'rh-col' }, h('h5', null, t('rh.mods')), mods.length ? h('div', { class: 'rh-cands' }, mods.map(row)) : h('p', { class: 'ed-hint' }, t('rh.nothing'))),
+        target ? h('div', { class: 'rh-col' }, h('h5', null, t('rh.words')), words.length ? h('div', { class: 'rh-cands' }, words.map(row)) : h('p', { class: 'ed-hint' }, t('rh.nothing'))) : null),
+      h('div', { class: 'rh-word' },
+        h('h5', null, t('rh.word'), ': ', h('span', { lang }, end.text)),
+        m ? h('div', { class: 'rh-field' }, h('span', { class: 'ed-label' }, t('rh.morph')), partsEl(C, m.parts)) : null,
+        h('p', null, h('span', { class: 'ed-label' }, t('rh.syl') + ': '), h('span', { lang }, W.syl.map((s) => (s.st === 1 ? s.t.toUpperCase() : s.t)).join('-')), ' · ',
+          h('span', { class: 'ed-label' }, t('rh.phon') + ': '), h('span', { class: 'rh-ipa' }, '[' + W.syl.map((s) => s.ph.join('')).join('.') + ']'), ' · ',
+          h('span', { class: 'ed-label' }, t('rh.stress') + ': '), t('rh.src.' + W.src))));
+    if (st.focusSq !== null) {
+      const ins = squares.querySelectorAll('input');
+      const f = ins[Math.min(ins.length - 1, Math.max(0, st.focusSq))];
+      st.focusSq = null;
+      if (f) { f.focus(); f.select(); }
+    }
+  }
+
+  update();
+  return h('div', { class: 'ls-tool rh-tool' },
+    h('p', { class: 'ed-hint' }, t('rh.hint')),
+    h('div', { class: 'ls-ctl rh-ctl' },
+      quotes.length ? h('label', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('rh.example')), exampleSel) : null,
+      h('label', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('rh.scheme')), schemeSel, pattern),
+      h('label', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('rh.meter')), meterSel),
+      h('label', { class: 'ed-field ed-field-check' }, internal, h('span', { class: 'ed-label' }, t('rh.internal'))),
+      resetBtn),
+    meta,
+    h('label', { class: 'ed-field rh-textfield' }, h('span', { class: 'ed-label' }, t('rh.text')), ta),
+    summary, linesBox, active);
+}
+
+export const RHYME_TOOLS = { rhyme: { title: 'rh.t.rhyme', render: rhymeTool } };

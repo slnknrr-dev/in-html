@@ -1,0 +1,8 @@
+const $=(sel,root=document)=>root.querySelector(sel);const $$=(sel,root=document)=>Array.from(root.querySelectorAll(sel));function h(tag,attrs,...kids){const el=document.createElement(tag);let value;if(attrs){for(const[k,v]of Object.entries(attrs)){if(v==null||v===false)continue;if(k==='class')el.className=v;else if(k==='text')el.textContent=v;else if(k==='html')el.innerHTML=v;else if(k==='value')value=v;else if(k==='style'&&typeof v==='object'){for(const[p,x]of Object.entries(v))if(p.startsWith('--'))el.style.setProperty(p,x);else el.style[p]=x;}
+else if(k==='dataset')Object.assign(el.dataset,v);else if(k.startsWith('on')&&typeof v==='function')el.addEventListener(k.slice(2),v);else if(k==='checked'||k==='selected'||k==='disabled'||k==='hidden'||k==='multiple')el[k]=!!v;else if(v===true)el.setAttribute(k,'');else el.setAttribute(k,String(v));}}
+appendKids(el,kids);if(value!==undefined)el.value=value;return el;}
+function appendKids(el,kids){for(const k of kids){if(k==null||k===false)continue;if(Array.isArray(k))appendKids(el,k);else el.append(k instanceof Node?k:document.createTextNode(String(k)));}}
+function debounce(fn,ms){let tm=null;const d=(...a)=>{clearTimeout(tm);tm=setTimeout(()=>{tm=null;fn(...a);},ms);};d.cancel=()=>{clearTimeout(tm);tm=null;};d.pending=()=>tm!==null;return d;}
+function lsGet(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v);}catch{return d;}}
+function lsSet(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
+export{lsGet,$$,h,$,lsSet,debounce};

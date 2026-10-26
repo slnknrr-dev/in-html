@@ -1,0 +1,779 @@
+/* sudoku-game/app.css - Sudoku Variants: skins (modern flat, newspaper, wood, pastel, neon, high contrast; light and dark
+   where the look allows), the board (sd-* shapes of sudoku/svg.js and the dynamic sg-* layers of view.js), the play
+   screen (phone first: board, modes, number pad; two columns on wide screens), the home screen and the dialogs. */
+
+/* CONTRACT
+   - Namespaces: `sg-` = this app's HTML and dynamic SVG layers (view.js); `sd-` = static board shapes emitted by the
+     shared renderer sudoku/svg.js (also used for thumbnails, print and export). The renderer emits classes only, no
+     colours: every skin restyles the same SVG, and an exported SVG can be re-themed by swapping this stylesheet.
+   - Two token layers: page tokens (--ed-*, from ui/base.css, overridden per skin) and board tokens (--b-*). Board
+     tokens are separate because the board must keep its own look (paper, wood) independent of the shell theme.
+   - Skin selection = attributes on <body> set by main.js: data-skin="<name>" and data-dark (presence). Specificity:
+     body (0,0,1) < body[data-dark] / body[data-skin=x] (0,1,1) < body[data-skin=x][data-dark] (0,2,1).
+     Consequence: body[data-dark] and body[data-skin=x] tie, so a skin's light block (later in source) overrides the
+     generic dark tokens. Every skin that supports dark therefore needs its own [data-dark] block; a skin without
+     one (neon is always dark) simply stays as it is.
+   - Tokens set on <body>, not :root: custom properties inherit, and declaring them on body shadows the :root values
+     of ui/base.css for the whole page without fighting its theme blocks on specificity.
+   - SVG presentation via CSS properties (fill, stroke, stroke-width, font) works because CSS beats SVG presentation
+     attributes. svg.js writes geometry plus content-defined paint only (fill="none", the colours of colour-symbol
+     alphabets); every themeable colour comes from here.
+   - !important: four uses, each commented (conflict and wrong digit colour, landscape info panel, print), plus
+     .sg-err for error text that must win over any muted / accent colour class it is combined with.
+   ========================================================================== */
+/* ==========================================================================
+   Skins: page tokens (ui/base.css --ed-*) and board tokens (--b-*)
+   body[data-skin] picks the look, body[data-dark] the dark variant (main.js).
+   ========================================================================== */
+/* Defaults = the "flat" skin. --b-thin-w / --b-thick-w are unitless because SVG stroke-width accepts user units: the
+   board's viewBox scales them with the board, so line weight stays proportional at every zoom. */
+body {
+  --sg-page: var(--ed-bg);
+  --sg-page-img: none;
+  --sg-title-font: var(--ed-font);
+  --b-font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Noto Sans Georgian", sans-serif;
+  --b-frame: var(--b-cell);
+  --b-frame-img: none;
+  --b-radius: 10px;
+  --b-shadow: 0 10px 30px rgba(16, 24, 40, .12), 0 2px 6px rgba(16, 24, 40, .08);
+  --b-cell: #ffffff;
+  --b-tint1: #eef3fb; --b-tint2: #fbf1e6; --b-tint3: #eef8ef;
+  --b-house: rgba(80, 110, 180, .14);
+  --b-thin: #a9b1bf; --b-thin-w: 2;
+  --b-thick: #1d2433; --b-thick-w: 5.5;
+  --b-given: #1d2433; --b-given-w: 650;
+  --b-value: #2f6fdb; --b-value-w: 500;
+  --b-note: #5f6878;
+  --b-sel: rgba(47, 111, 219, .22);
+  --b-selline: #2f6fdb;
+  --b-peer: rgba(47, 111, 219, .07);
+  --b-same: rgba(47, 111, 219, .16);
+  --b-conflict: #d6336c;
+  --b-conflict-bg: rgba(214, 51, 108, .14);
+  --b-wrong: #e03131;
+  --b-hint: rgba(250, 176, 5, .2);
+  --b-hint-cell: #f59f00;
+  --b-clue: #1d2433;
+  --b-clue-bg: #ffffff;
+  --b-line-o: .7;
+  --b-thermo: #c3c9d4; --b-renban: #d0a4f5; --b-whisper: #6cd38a; --b-dutch: #f4b860; --b-palin: #aab3c2;
+  --b-parity: #f39a9a; --b-between: #9fb8e3; --b-zipper: #bcaef2; --b-entropic: #ecd06c; --b-modular: #6dd3cb;
+  --b-arrow: #9aa3b2;
+  --b-cage: #44506a;
+  --b-shade: #dde2ea;
+  --sg-c1: #ffa8a8; --sg-c2: #ffc078; --sg-c3: #ffe066; --sg-c4: #8ce99a; --sg-c5: #74c0fc; --sg-c6: #b197fc; --sg-c7: #faa2c1; --sg-c8: #ced4da; --sg-c9: #63e6be;
+  --sg-col-o: .55;
+}
+/* Generic dark variant (flat skin). Only board tokens: the page tokens come from ui/base.css's own dark theme. */
+body[data-dark] {
+  --b-shadow: 0 10px 30px rgba(0, 0, 0, .5);
+  --b-cell: #1d222b;
+  --b-tint1: #1f2734; --b-tint2: #2a2420; --b-tint3: #1f2a23;
+  --b-house: rgba(120, 150, 230, .16);
+  --b-thin: #485164; --b-thick: #c9d1df;
+  --b-given: #e8ecf3; --b-value: #7fb0ff; --b-note: #9aa5b8;
+  --b-sel: rgba(110, 160, 255, .28); --b-selline: #7fb0ff;
+  --b-peer: rgba(110, 160, 255, .08); --b-same: rgba(110, 160, 255, .2);
+  --b-conflict: #ff6b9a; --b-conflict-bg: rgba(255, 107, 154, .18); --b-wrong: #ff6b6b;
+  --b-hint: rgba(250, 176, 5, .18);
+  --b-clue: #e8ecf3; --b-clue-bg: #1d222b;
+  --b-thermo: #4b5466; --b-arrow: #7d879a; --b-cage: #aab4c6; --b-shade: #343b48;
+  --b-line-o: .6;
+  --sg-col-o: .38;
+}
+
+/* Newspaper: cream paper, black ink, serif type. Dark: the night edition. */
+/* Skin blocks redefine page tokens too (--ed-*), so the whole shell (header, dialogs) adopts the look. */
+body[data-skin="paper"] {
+  --ed-bg: #f3efe6; --ed-panel: #fbf9f3; --ed-panel-2: #f6f2e8; --ed-hover: #ece6d8; --ed-border: #ddd5c3; --ed-border-strong: #c9bfa8;
+  --ed-text: #1c1a16; --ed-muted: #6c655a; --ed-faint: #a39a8a; --ed-accent: #8a2f1c; --ed-accent-hover: #6f2414; --ed-accent-weak: #f1e1d6; --ed-accent-text: #fff;
+  --ed-focus: 0 0 0 3px rgba(138, 47, 28, .3);
+  --sg-title-font: Georgia, "Times New Roman", "Noto Serif", serif;
+  --b-font: Georgia, "Times New Roman", "Noto Serif", "Noto Serif Georgian", serif;
+  --b-radius: 2px;
+  --b-shadow: 0 1px 0 rgba(0, 0, 0, .06), 0 6px 16px rgba(60, 40, 10, .12);
+  --b-cell: #fdfbf5; --b-tint1: #f1ece0; --b-tint2: #f7efe0; --b-tint3: #eef0e4; --b-house: rgba(90, 70, 40, .12);
+  --b-thin: #8e877b; --b-thin-w: 1.6; --b-thick: #111; --b-thick-w: 6;
+  --b-given: #111; --b-given-w: 700; --b-value: #1f3b73; --b-value-w: 400; --b-note: #5c564c;
+  --b-sel: rgba(138, 47, 28, .15); --b-selline: #8a2f1c; --b-peer: rgba(60, 40, 10, .05); --b-same: rgba(60, 40, 10, .12);
+  --b-clue: #111; --b-clue-bg: #fdfbf5; --b-cage: #222; --b-line-o: .55; --b-shade: #e3dccb;
+  --b-thermo: #b9b2a5; --b-arrow: #6f685c;
+}
+body[data-skin="paper"][data-dark] {
+  --ed-bg: #171512; --ed-panel: #201d18; --ed-panel-2: #24211c; --ed-hover: #2c2822; --ed-border: #37322a; --ed-border-strong: #4a4337;
+  --ed-text: #ece5d3; --ed-muted: #a69d8b; --ed-faint: #776f61; --ed-accent: #e2875f; --ed-accent-hover: #f0a07c; --ed-accent-weak: #3a271d; --ed-accent-text: #1a120c;
+  --b-cell: #22201b; --b-tint1: #2a2620; --b-tint2: #2d2721; --b-tint3: #262a21; --b-house: rgba(230, 200, 150, .1);
+  --b-thin: #5d574c; --b-thick: #e9e1cd; --b-given: #f1ead8; --b-value: #9cc0ff; --b-note: #b2a993;
+  --b-sel: rgba(226, 135, 95, .22); --b-selline: #e2875f; --b-peer: rgba(255, 230, 190, .05); --b-same: rgba(255, 230, 190, .12);
+  --b-clue: #f1ead8; --b-clue-bg: #22201b; --b-cage: #d8cfb9; --b-shade: #3a352c; --b-thermo: #575146; --b-arrow: #a39a86;
+}
+
+/* Wood: a carved board on a wooden table. */
+body[data-skin="wood"] {
+  --ed-bg: #efe4d2; --ed-panel: #fbf5ea; --ed-panel-2: #f6eddd; --ed-hover: #efe2cc; --ed-border: #e1d0b4; --ed-border-strong: #ceb48d;
+  --ed-text: #2e1f12; --ed-muted: #7a6249; --ed-faint: #a98e70; --ed-accent: #a8541a; --ed-accent-hover: #8c4413; --ed-accent-weak: #f6e2cc; --ed-accent-text: #fff;
+  --ed-focus: 0 0 0 3px rgba(168, 84, 26, .3);
+  --sg-page-img: radial-gradient(ellipse at 20% 0%, rgba(255, 255, 255, .55), transparent 60%);
+  --sg-title-font: "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --b-font: "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --b-frame: #7a4a24;
+  --b-frame-img: repeating-linear-gradient(97deg, rgba(255, 255, 255, .07) 0 2px, transparent 2px 9px), repeating-linear-gradient(83deg, rgba(0, 0, 0, .08) 0 1px, transparent 1px 13px), linear-gradient(135deg, #8b5a2f, #6b3e1c 55%, #8a5630);
+  --b-radius: 12px;
+  --b-shadow: 0 14px 30px rgba(70, 35, 10, .35), inset 0 1px 0 rgba(255, 255, 255, .2);
+  --b-cell: #f4e2c1; --b-tint1: #ecd6ae; --b-tint2: #f1d9b9; --b-tint3: #e6d8b0; --b-house: rgba(120, 70, 20, .14);
+  --b-thin: #b48a5a; --b-thin-w: 1.8; --b-thick: #4a2a12; --b-thick-w: 6;
+  --b-given: #3a210d; --b-given-w: 700; --b-value: #1d6b4f; --b-note: #7a5a3a;
+  --b-sel: rgba(168, 84, 26, .25); --b-selline: #a8541a; --b-peer: rgba(120, 70, 20, .07); --b-same: rgba(29, 107, 79, .18);
+  --b-clue: #3a210d; --b-clue-bg: #f4e2c1; --b-cage: #5a3618; --b-shade: #dcc396;
+  --b-thermo: #c9ab80; --b-arrow: #8a6440;
+}
+/* Outside clues sit on the dark wooden frame, so they need light ink instead of the dark --b-clue. Raw colour: no
+   token describes "text on the frame" and only this skin has a dark frame. */
+body[data-skin="wood"] .sd-out { fill: #fbefd8; }
+body[data-skin="wood"] .sd-little-arrow { stroke: #fbefd8; }
+body[data-skin="wood"][data-dark] {
+  --ed-bg: #1b130d; --ed-panel: #241911; --ed-panel-2: #2a1e15; --ed-hover: #32241a; --ed-border: #3d2c1f; --ed-border-strong: #57402c;
+  --ed-text: #f1e2cc; --ed-muted: #b89d80; --ed-faint: #85694f; --ed-accent: #e39a52; --ed-accent-hover: #f0b06f; --ed-accent-weak: #3d2817; --ed-accent-text: #1d1209;
+  --sg-page-img: none;
+  --b-frame: #2a170a;
+  --b-frame-img: repeating-linear-gradient(97deg, rgba(255, 255, 255, .04) 0 2px, transparent 2px 9px), linear-gradient(135deg, #3d2412, #24130a 60%, #3a2210);
+  --b-cell: #3b2a1c; --b-tint1: #43301f; --b-tint2: #46301f; --b-tint3: #3c3220; --b-house: rgba(240, 190, 120, .1);
+  --b-thin: #6b4f35; --b-thick: #e7c48d; --b-given: #f6e3c4; --b-value: #8fe0b8; --b-note: #c8a982;
+  --b-sel: rgba(227, 154, 82, .28); --b-selline: #e39a52; --b-same: rgba(143, 224, 184, .16);
+  --b-clue: #f6e3c4; --b-clue-bg: #3b2a1c; --b-cage: #e2c595; --b-shade: #59412b; --b-thermo: #6e5539; --b-arrow: #c8a982;
+}
+
+/* Pastel: soft candy colours and round shapes. */
+body[data-skin="pastel"] {
+  --ed-bg: #f7f1fb; --ed-panel: #fffcff; --ed-panel-2: #fbf6fd; --ed-hover: #f3e9f8; --ed-border: #eadff1; --ed-border-strong: #dccbe8;
+  --ed-text: #43365a; --ed-muted: #8b7c9f; --ed-faint: #b5a8c4; --ed-accent: #9b6ee0; --ed-accent-hover: #8657d1; --ed-accent-weak: #efe5fc; --ed-accent-text: #fff;
+  --ed-focus: 0 0 0 3px rgba(155, 110, 224, .3);
+  --ed-radius: 12px; --ed-radius-sm: 10px;
+  --sg-page-img: radial-gradient(circle at 10% 10%, #ffe3f1 0, transparent 40%), radial-gradient(circle at 90% 20%, #e0f2ff 0, transparent 40%), radial-gradient(circle at 50% 100%, #e7ffe9 0, transparent 45%);
+  --sg-title-font: "Trebuchet MS", "Segoe UI Rounded", "Arial Rounded MT Bold", system-ui, sans-serif;
+  --b-font: "Trebuchet MS", "Segoe UI Rounded", "Arial Rounded MT Bold", system-ui, sans-serif;
+  --b-radius: 22px;
+  --b-shadow: 0 14px 34px rgba(155, 110, 224, .2);
+  --b-cell: #fffcff; --b-tint1: #fdeef6; --b-tint2: #eef6ff; --b-tint3: #effcef; --b-house: rgba(155, 110, 224, .12);
+  --b-thin: #e3d4ee; --b-thin-w: 2.4; --b-thick: #a88ad6; --b-thick-w: 5;
+  --b-given: #5a4878; --b-given-w: 700; --b-value: #e0609b; --b-note: #9b8cb3;
+  --b-sel: rgba(255, 158, 205, .32); --b-selline: #e0609b; --b-peer: rgba(155, 110, 224, .07); --b-same: rgba(224, 96, 155, .16);
+  --b-clue: #5a4878; --b-clue-bg: #fffcff; --b-cage: #a88ad6; --b-shade: #f1e6f7;
+  --b-thermo: #dcd2ea; --b-arrow: #b9a7d6;
+}
+body[data-skin="pastel"][data-dark] {
+  --ed-bg: #1e1826; --ed-panel: #271f31; --ed-panel-2: #2c2337; --ed-hover: #33293f; --ed-border: #3b3048; --ed-border-strong: #50425f;
+  --ed-text: #efe6f8; --ed-muted: #b2a3c6; --ed-faint: #7f7091; --ed-accent: #c6a3ff; --ed-accent-hover: #d6bbff; --ed-accent-weak: #3a2c4f; --ed-accent-text: #1d1328;
+  --sg-page-img: radial-gradient(circle at 10% 10%, rgba(255, 120, 190, .12) 0, transparent 40%), radial-gradient(circle at 90% 20%, rgba(120, 190, 255, .1) 0, transparent 40%);
+  --b-cell: #2a2234; --b-tint1: #33263a; --b-tint2: #26293b; --b-tint3: #253229; --b-house: rgba(198, 163, 255, .14);
+  --b-thin: #4a3d59; --b-thick: #c6a3ff; --b-given: #f3e9ff; --b-value: #ff8cc0; --b-note: #b6a6cc;
+  --b-sel: rgba(255, 140, 192, .26); --b-selline: #ff8cc0; --b-same: rgba(255, 140, 192, .16);
+  --b-clue: #f3e9ff; --b-clue-bg: #2a2234; --b-cage: #c6a3ff; --b-shade: #3d3149; --b-thermo: #4f4261; --b-arrow: #a593c0;
+}
+
+/* Neon: always dark, glowing lines. */
+/* color-scheme:dark inside the block makes native controls (scrollbars, selects) dark even when the OS is light. */
+body[data-skin="neon"] {
+  --ed-bg: #06060d; --ed-panel: #0e0f1d; --ed-panel-2: #121428; --ed-hover: #181a33; --ed-border: #22254a; --ed-border-strong: #333769;
+  --ed-text: #e9ecff; --ed-muted: #9097c8; --ed-faint: #5d6394; --ed-accent: #ff2bd6; --ed-accent-hover: #ff5ee0; --ed-accent-weak: #3a0f36; --ed-accent-text: #10020e;
+  --ed-ok: #39ff88; --ed-warn: #ffd23f; --ed-danger: #ff5577; --ed-danger-weak: #3b1020; --ed-danger-solid: #c4153e;
+  --ed-focus: 0 0 0 3px rgba(255, 43, 214, .45);
+  --ed-shadow-sm: 0 1px 2px rgba(0, 0, 0, .5); --ed-shadow-lg: 0 24px 64px rgba(0, 0, 0, .8), 0 0 0 1px #22254a;
+  color-scheme: dark;
+  --sg-page-img: radial-gradient(ellipse at 50% -10%, rgba(255, 43, 214, .18), transparent 55%), radial-gradient(ellipse at 100% 100%, rgba(29, 233, 246, .14), transparent 50%);
+  --sg-title-font: "Segoe UI", "Avenir Next", system-ui, sans-serif;
+  --b-font: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+  --b-radius: 6px;
+  --b-shadow: 0 0 0 1px rgba(29, 233, 246, .35), 0 0 34px rgba(29, 233, 246, .25), 0 0 80px rgba(255, 43, 214, .12);
+  --b-cell: #0b0c1a; --b-tint1: #11132b; --b-tint2: #1a0f26; --b-tint3: #0c1d22; --b-house: rgba(255, 43, 214, .12);
+  --b-thin: #1f4a66; --b-thin-w: 1.8; --b-thick: #1de9f6; --b-thick-w: 4.5;
+  --b-given: #f2f6ff; --b-given-w: 600; --b-value: #39ff88; --b-note: #7fa2c8;
+  --b-sel: rgba(255, 43, 214, .28); --b-selline: #ff2bd6; --b-peer: rgba(29, 233, 246, .07); --b-same: rgba(57, 255, 136, .14);
+  --b-conflict: #ff3d6e; --b-conflict-bg: rgba(255, 61, 110, .2); --b-wrong: #ff3d6e;
+  --b-hint: rgba(255, 210, 63, .14); --b-hint-cell: #ffd23f;
+  --b-clue: #e9ecff; --b-clue-bg: #0b0c1a; --b-cage: #ff9df0; --b-shade: #1a1d3a; --b-line-o: .75;
+  --b-thermo: #2d3566; --b-renban: #b35cff; --b-whisper: #39ff88; --b-dutch: #ff9f1c; --b-palin: #6c7aa8; --b-parity: #ff5577;
+  --b-between: #4dabff; --b-zipper: #9b8cff; --b-entropic: #ffd23f; --b-modular: #1de9f6; --b-arrow: #8b93c9;
+  --sg-col-o: .42;
+}
+/* Glow via drop-shadow filter: follows the stroke shape (box-shadow would draw a rectangle around the SVG element). */
+body[data-skin="neon"] .sd-thick { filter: drop-shadow(0 0 3px #1de9f6); }
+body[data-skin="neon"] .sd-value { filter: drop-shadow(0 0 4px rgba(57, 255, 136, .7)); }
+body[data-skin="neon"] .sg-selline { filter: drop-shadow(0 0 4px #ff2bd6); }
+body[data-skin="neon"] .ap-top { background: rgba(14, 15, 29, .85); }
+
+/* High contrast: black and white, thick lines, yellow selection, bold symbols. */
+/* High contrast: focus ring doubled (black + yellow) so it is visible on any background; selection yellow at .85
+   opacity, which survives low-quality screens and colour-blindness. */
+body[data-skin="contrast"] {
+  --ed-bg: #ffffff; --ed-panel: #ffffff; --ed-panel-2: #ffffff; --ed-hover: #eaeaea; --ed-border: #000; --ed-border-strong: #000;
+  --ed-text: #000; --ed-muted: #222; --ed-faint: #444; --ed-accent: #0033cc; --ed-accent-hover: #00229a; --ed-accent-weak: #ffe600; --ed-accent-text: #fff;
+  --ed-focus: 0 0 0 3px #000, 0 0 0 6px #ffe600;
+  --b-radius: 0; --b-shadow: none;
+  --b-cell: #fff; --b-tint1: #e4e4e4; --b-tint2: #cfcfcf; --b-tint3: #f2f2f2; --b-house: rgba(0, 0, 0, .14);
+  --b-thin: #000; --b-thin-w: 2.4; --b-thick: #000; --b-thick-w: 8;
+  --b-given: #000; --b-given-w: 800; --b-value: #0033cc; --b-value-w: 700; --b-note: #000;
+  --b-sel: rgba(255, 230, 0, .85); --b-selline: #000; --b-peer: rgba(0, 0, 0, .06); --b-same: rgba(0, 200, 255, .35);
+  --b-conflict: #c00000; --b-conflict-bg: rgba(255, 0, 0, .28); --b-wrong: #c00000;
+  --b-hint: rgba(0, 200, 0, .25); --b-hint-cell: #007a00;
+  --b-clue: #000; --b-clue-bg: #fff; --b-cage: #000; --b-shade: #bdbdbd; --b-line-o: .9;
+  --b-thermo: #9a9a9a; --b-renban: #b000ff; --b-whisper: #00a000; --b-dutch: #e07000; --b-palin: #555; --b-parity: #e00000;
+  --b-between: #0050ff; --b-zipper: #6a00ff; --b-entropic: #c09000; --b-modular: #008a8a; --b-arrow: #000;
+}
+body[data-skin="contrast"][data-dark] {
+  --ed-bg: #000; --ed-panel: #000; --ed-panel-2: #000; --ed-hover: #222; --ed-border: #fff; --ed-border-strong: #fff;
+  --ed-text: #fff; --ed-muted: #eee; --ed-faint: #ccc; --ed-accent: #ffe600; --ed-accent-hover: #fff27a; --ed-accent-weak: #333; --ed-accent-text: #000;
+  --ed-focus: 0 0 0 3px #fff, 0 0 0 6px #ffe600;
+  --b-cell: #000; --b-tint1: #262626; --b-tint2: #3a3a3a; --b-tint3: #141414; --b-house: rgba(255, 255, 255, .16);
+  --b-thin: #fff; --b-thick: #fff; --b-given: #fff; --b-value: #7cf2ff; --b-note: #fff;
+  --b-sel: rgba(255, 230, 0, .55); --b-selline: #ffe600; --b-peer: rgba(255, 255, 255, .08); --b-same: rgba(0, 200, 255, .35);
+  --b-conflict: #ff5c5c; --b-conflict-bg: rgba(255, 60, 60, .35); --b-wrong: #ff5c5c;
+  --b-clue: #fff; --b-clue-bg: #000; --b-cage: #fff; --b-shade: #555; --b-thermo: #777; --b-arrow: #fff;
+}
+body[data-skin="contrast"] .sd-note { font-weight: 700; }
+
+/* Page backdrop: background-image layered over the colour token; fixed attachment keeps gradients still while the
+   page scrolls (on iOS fixed backgrounds are ignored, the gradient then just scrolls). */
+body { background: var(--ed-bg); background-image: var(--sg-page-img); background-attachment: fixed; }
+body[data-skin="neon"], body[data-skin="contrast"][data-dark] { color-scheme: dark; }
+
+/* ==========================================================================
+   The board: sudoku/svg.js shapes in the skin's colours
+   ========================================================================== */
+/* Board shapes. stroke-linecap:square on thick lines closes the corners where box borders meet. */
+.sd-cell { fill: var(--b-cell); }
+.sd-tint-0 { fill: var(--b-cell); } .sd-tint-1 { fill: var(--b-tint1); } .sd-tint-2 { fill: var(--b-tint2); } .sd-tint-3 { fill: var(--b-tint3); }
+.sd-house { fill: var(--b-house); }
+.sd-diag { stroke: var(--b-thin); stroke-width: 3; fill: none; stroke-dasharray: 2 7; stroke-linecap: round; }
+.sd-thin { stroke: var(--b-thin); stroke-width: var(--b-thin-w); fill: none; }
+.sd-thick { stroke: var(--b-thick); stroke-width: var(--b-thick-w); fill: none; stroke-linecap: square; }
+.sd-odd { fill: var(--b-shade); } .sd-even { fill: var(--b-shade); }
+/* Line constraints (thermo, renban, whispers, ...): thick translucent strokes under the digits; opacity per skin
+   (--b-line-o) keeps digits legible on top. */
+.sd-line { stroke-linecap: round; stroke-linejoin: round; fill: none; stroke-width: 20; opacity: var(--b-line-o); }
+.sd-thermo { stroke: var(--b-thermo); stroke-width: 24; opacity: 1; } .sd-thermo-bulb { fill: var(--b-thermo); }
+.sd-renban { stroke: var(--b-renban); } .sd-whisper { stroke: var(--b-whisper); } .sd-dutch { stroke: var(--b-dutch); }
+.sd-palin { stroke: var(--b-palin); } .sd-parity { stroke: var(--b-parity); } .sd-zipper { stroke: var(--b-zipper); }
+.sd-entropic { stroke: var(--b-entropic); } .sd-modular { stroke: var(--b-modular); }
+.sd-between { stroke: var(--b-between); stroke-width: 12; } .sd-between-end { fill: var(--b-cell); stroke: var(--b-between); stroke-width: 5; }
+.sd-arrow { stroke: var(--b-arrow); stroke-width: 5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.sd-arrow-circle { fill: var(--b-cell); stroke: var(--b-arrow); stroke-width: 5; fill-opacity: .6; }
+.sd-cage { stroke: var(--b-cage); stroke-width: 2.6; stroke-dasharray: 7 6; fill: none; }
+.sd-cage-bg { fill: var(--b-clue-bg); fill-opacity: .9; }
+.sd-cage-sum { font: 650 22px var(--b-font); fill: var(--b-clue); }
+/* Kropki dots keep raw white / black fills in every skin: their colour is the rule itself (white = consecutive,
+   black = ratio 2), so theming them would change the puzzle's meaning. */
+.sd-dot { stroke-width: 3; } .sd-dot-white { fill: #fff; stroke: #20242c; } .sd-dot-black { fill: #15181e; stroke: var(--b-clue); }
+.sd-bar { fill: var(--b-clue-bg); stroke: var(--b-clue); stroke-width: 3; }
+.sd-xv-bg { fill: var(--b-clue-bg); } .sd-xv { font: 700 26px var(--b-font); fill: var(--b-clue); text-anchor: middle; }
+.sd-gt { stroke: var(--b-clue); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.sd-quad { fill: var(--b-clue-bg); stroke: var(--b-clue); stroke-width: 3; } .sd-quad-d { font: 650 17px var(--b-font); text-anchor: middle; fill: var(--b-clue); }
+.sd-quad-sw { stroke: var(--b-clue); stroke-width: 1.5; }
+.sd-out { font: 650 38px var(--b-font); text-anchor: middle; fill: var(--b-clue); } .sd-little { font-size: 30px; }
+.sd-little-arrow { stroke: var(--b-clue); stroke-width: 3; fill: none; }
+/* Givens vs entered values differ by colour AND weight (two channels), so they stay distinguishable in grayscale
+   print and for colour-blind players. */
+.sd-given { font-family: var(--b-font); font-weight: var(--b-given-w); text-anchor: middle; fill: var(--b-given); }
+.sd-value { font-family: var(--b-font); font-weight: var(--b-value-w); text-anchor: middle; fill: var(--b-value); }
+.sd-swatch { stroke: rgba(0, 0, 0, .35); stroke-width: 2; }
+.sd-given.sd-swatch { stroke: var(--b-given); stroke-width: 5; }
+.sd-note { font-family: var(--b-font); text-anchor: middle; fill: var(--b-note); }
+.sd-note-sw { stroke: rgba(0, 0, 0, .25); stroke-width: 1; }
+
+/* dynamic layers of view.js */
+/* Cell colouring (colour mode): nine fixed hues, lower opacity in dark skins so digits stay readable over them. */
+.sg-col { opacity: var(--sg-col-o); }
+.sg-col-1 { fill: var(--sg-c1); } .sg-col-2 { fill: var(--sg-c2); } .sg-col-3 { fill: var(--sg-c3); } .sg-col-4 { fill: var(--sg-c4); } .sg-col-5 { fill: var(--sg-c5); }
+.sg-col-6 { fill: var(--sg-c6); } .sg-col-7 { fill: var(--sg-c7); } .sg-col-8 { fill: var(--sg-c8); } .sg-col-9 { fill: var(--sg-c9); }
+.sg-peer { fill: var(--b-peer); }
+.sg-same { fill: var(--b-same); }
+.sg-selfill { fill: var(--b-sel); }
+.sg-conflict-bg { fill: var(--b-conflict-bg); }
+.sg-hint-area { fill: var(--b-hint); }
+.sg-hint-cell { fill: none; stroke: var(--b-hint-cell); stroke-width: 4; stroke-dasharray: 8 6; }
+/* rx as a CSS property (SVG 2 geometry property): rounds the rect without touching the markup; engines that do not
+   support it draw square corners, which is harmless. */
+.sg-hint-target { fill: none; stroke: var(--b-hint-cell); stroke-width: 7; rx: 8px; }
+.sg-hint-ghost { fill: var(--b-hint-cell); opacity: .75; font-family: var(--b-font); font-weight: 700; text-anchor: middle; animation: sg-blink 1.2s ease-in-out infinite; }
+.sg-elim { fill: var(--b-wrong); font-family: var(--b-font); text-anchor: middle; opacity: .9; }
+.sg-elim-sw { opacity: .7; }
+.sg-elim-x { stroke: var(--b-wrong); stroke-width: 3; stroke-linecap: round; }
+.sg-selline { fill: none; stroke: var(--b-selline); stroke-width: 6; stroke-linejoin: round; stroke-linecap: round; }
+.sg-cursor { fill: none; stroke-width: 5; stroke-dasharray: 10 6; }
+.sg-cursor-tag { font: 700 22px var(--ed-font); text-anchor: end; }
+/* !important: digit fills come from several classes of equal specificity (.sd-value, .sd-given, .sg-note-hl, the
+   neon filter rules); a conflict or wrong digit must be red whatever the order or combination. */
+.sg-conflict { fill: var(--b-conflict) !important; }
+.sd-swatch.sg-conflict { stroke: var(--b-conflict); stroke-width: 6; fill-opacity: 1; }
+.sg-wrong { fill: var(--b-wrong) !important; text-decoration: line-through; }
+.sd-swatch.sg-wrong { stroke: var(--b-wrong); stroke-width: 6; }
+.sg-note-hl { fill: var(--b-value); font-weight: 800; }
+.sg-note-hlbg { fill: var(--b-same); }
+/* SVG transforms default to the user-space origin; transform-box:fill-box + origin center scale each digit around its
+   own centre instead of the board's top-left corner. */
+.sg-pop { animation: sg-pop .22s ease-out; transform-box: fill-box; transform-origin: center; }
+/* Win wave: --d (set per cell by view.js) staggers the delay so the animation sweeps across the board. */
+.sg-won .sg-wave { animation: sg-wave .7s ease-in-out both; animation-delay: var(--d, 0ms); transform-box: fill-box; transform-origin: center; }
+@keyframes sg-pop { from { transform: scale(.55); opacity: .3; } to { transform: scale(1); opacity: 1; } }
+@keyframes sg-wave { 0% { transform: scale(1); } 40% { transform: scale(1.35); } 100% { transform: scale(1); } }
+@keyframes sg-blink { 50% { opacity: .35; } }
+
+/* the viewport of the board */
+/* Board viewport chain: flex children with min-height/min-width 0 so the board can shrink to the space left by the
+   bar and the pad instead of forcing the page to scroll. */
+.sg-stage { position: relative; flex: 1 1 auto; min-height: 0; min-width: 0; display: flex; }
+/* Pan / zoom surface. touch-action:none hands every touch gesture to the app's pointer handlers (pinch, drag);
+   otherwise the browser would scroll or zoom the page. user-select none: drags must not select digits. */
+.sg-vp {
+  position: relative; flex: 1 1 auto; overflow: hidden; touch-action: none; outline: none; user-select: none; -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent; border-radius: var(--b-radius);
+}
+/* The viewport is focusable for keyboard play; the ring is drawn on the board SVG instead (outline + offset follows
+   the board, while a ring on the viewport would hug the empty letterbox area). */
+.sg-vp:focus-visible { box-shadow: none; }
+.sg-vp:focus-visible .sg-svg { outline: 3px solid var(--ed-accent); outline-offset: 3px; }
+/* Pan/zoom by transform on an absolutely positioned layer (origin 0 0, translate + scale in view.js): composited, no
+   layout per frame. */
+.sg-canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+/* The board's frame (wood texture, shadow) is the SVG element's own background and box-shadow; overflow:visible so
+   outside clues and glows are not clipped by the SVG viewport. */
+.sg-svg {
+  display: block; border-radius: var(--b-radius); box-shadow: var(--b-shadow);
+  background: var(--b-frame); background-image: var(--b-frame-img); padding: 0; overflow: visible;
+}
+.sg-vp.sg-zoomed { cursor: grab; }
+.sg-vp.sg-readonly { cursor: default; }
+.sg-zoombar { position: absolute; right: 4px; bottom: 4px; display: none; flex-direction: row; gap: 4px; z-index: 2; }
+.sg-zoom-side .sg-zoombar { flex-direction: column; }
+/* Irregular boards (samurai, wide grids) have empty regions: no rectangular frame, the shadow goes on the shaded
+   cell layer instead (drop-shadow follows the actual cell shapes). */
+.sg-svg.sg-holes { background: none; box-shadow: none; }
+.sg-svg.sg-holes .sg-l-shade { filter: drop-shadow(0 6px 14px rgba(0, 0, 0, .18)); }
+.sg-vp.sg-zoomable .sg-zoombar { display: flex; }
+.sg-zbtn {
+  width: 34px; height: 34px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border-radius: 10px;
+  border: 1px solid var(--ed-border); background: color-mix(in srgb, var(--ed-panel) 88%, transparent); color: var(--ed-text); box-shadow: var(--ed-shadow-sm);
+  backdrop-filter: blur(6px);
+}
+.sg-zbtn:hover { background: var(--ed-hover); }
+
+/* ==========================================================================
+   Play screen
+   ========================================================================== */
+/* Play mode: the page becomes an app screen. Footer hidden and <main> padding removed so the board gets every pixel. */
+body.sg-in-play .ap-foot { display: none; }
+body.sg-in-play .sg-main { padding: 0; max-width: none; }
+.sg-main { max-width: 1240px; }
+/* Full-height column: 100vh fallback, then 100dvh (excludes the mobile URL bar) minus the shell header when it is
+   shown (--sg-top). Bottom padding adds the iPhone home-indicator inset (env(), with viewport-fit=cover in index.html). */
+.sg-play {
+  position: relative; display: flex; flex-direction: column; gap: 8px;
+  height: calc(100vh - var(--sg-top, 0px)); height: calc(100dvh - var(--sg-top, 0px));
+  padding: 6px 10px calc(10px + env(safe-area-inset-bottom)); max-width: 640px; margin: 0 auto;
+}
+/* Small or short screens: the shell header is hidden during play; the play bar carries the needed controls. */
+@media (max-width: 899px), (max-height: 699px) {
+  body.sg-in-play .ap-top { display: none; }
+}
+/* 57px = .ap-top min-height 56px + 1px border (ui/app.css). */
+@media (min-width: 900px) and (min-height: 700px) {
+  body.sg-in-play { --sg-top: 57px; }
+}
+.sg-bar { display: flex; align-items: center; gap: 4px; min-height: 44px; flex: none; }
+.sg-bar-title { flex: 1 1 auto; min-width: 0; font: 650 15px/1.2 var(--sg-title-font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 4px; }
+.sg-timer { font: 600 15px var(--ed-mono); font-variant-numeric: tabular-nums; color: var(--ed-muted); padding: 0 6px; }
+.sg-conn { font-size: 12px; color: var(--ed-warn); padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.sg-iconbtn {
+  display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; flex: none; padding: 0;
+  border: 0; border-radius: 12px; background: transparent; color: var(--ed-text);
+}
+.sg-iconbtn:hover { background: var(--ed-hover); }
+.sg-iconbtn .ed-ic, .sg-iconbtn svg { width: 22px; height: 22px; }
+.sg-iconbtn.sg-sm { width: 28px; height: 28px; border-radius: 8px; color: var(--ed-muted); }
+.sg-iconbtn.sg-sm svg, .sg-iconbtn.sg-sm .ed-ic { width: 16px; height: 16px; }
+.sg-boardwrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+/* Paused: the board is blurred so the pause cannot be used to study the grid while the timer stands still. */
+.sg-is-paused .sg-stage { filter: blur(14px) saturate(.5); pointer-events: none; }
+.sg-pausecover {
+  position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+  background: color-mix(in srgb, var(--ed-bg) 55%, transparent);
+}
+.sg-pause-t { font: 700 28px var(--sg-title-font); letter-spacing: .02em; }
+/* Compound (0,2,0) to outrank .ed-btn's own height and padding regardless of order. */
+.ed-btn.sg-big { height: 44px; padding: 0 18px; font-size: 15px; border-radius: 12px; }
+.ed-btn.sg-big .ed-ic, .ed-btn.sg-big svg { width: 20px; height: 20px; }
+.sg-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; justify-content: center; font-size: 12.5px; color: var(--ed-muted); flex: none; }
+.sg-legend-t { font-weight: 600; }
+.sg-sym { font-weight: 700; color: var(--ed-text); }
+.sg-sym-sw { display: inline-flex; align-items: center; gap: 3px; }
+/* Colour symbols: the swatch colour arrives as --c on the element (inline), the pseudo-element paints it. */
+.sg-sym-sw::before { content: ""; width: .9em; height: .9em; border-radius: 50%; background: var(--c); display: inline-block; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .3); }
+.sg-cellref { font-family: var(--ed-mono); font-weight: 600; font-size: .92em; }
+
+/* side: info, hint, modes, number pad, actions */
+.sg-side { display: flex; flex-direction: column; gap: 8px; flex: none; }
+.sg-info { display: none; }
+/* Input modes (value / corner / centre / colour) as a segmented control; four equal columns. */
+.sg-modes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 3px; border-radius: 14px; background: var(--ed-hover); }
+.sg-mode {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 36px; padding: 0 6px; border: 0; border-radius: 11px;
+  background: transparent; color: var(--ed-muted); font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden;
+}
+.sg-mode .ed-ic, .sg-mode svg { width: 17px; height: 17px; }
+.sg-mode > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sg-mode.sg-on { background: var(--ed-panel); color: var(--ed-accent); box-shadow: var(--ed-shadow-sm); }
+/* Number pad: column count from --cols (set inline by play.js for the alphabet size); minmax(0,1fr) so wide symbols
+   never break the grid. */
+.sg-pad { display: grid; grid-template-columns: repeat(var(--cols, 9), minmax(0, 1fr)); gap: 5px; }
+/* touch-action:manipulation removes the 300ms double-tap-zoom delay on keys and keeps fast repeated taps as taps. */
+.sg-key {
+  position: relative; display: flex; align-items: center; justify-content: center; min-height: 48px; padding: 0; border-radius: 12px;
+  border: 1px solid var(--ed-border); background: var(--ed-panel); color: var(--b-value); box-shadow: var(--ed-shadow-sm);
+  font: 600 22px var(--b-font); touch-action: manipulation; transition: transform .06s, background .12s;
+}
+.sg-key:hover { background: var(--ed-hover); }
+.sg-key:active { transform: scale(.94); }
+.sg-key-s { line-height: 1; }
+.sg-key-n { position: absolute; right: 5px; top: 3px; font: 600 10px var(--ed-font); color: var(--ed-faint); }
+.sg-key.sg-done { opacity: .35; }
+.sg-key.sg-key-hl { border-color: var(--ed-accent); box-shadow: 0 0 0 2px var(--ed-accent-weak); }
+.sg-key.sg-key-note .sg-key-s { font-size: 15px; color: var(--b-note); }
+.sg-key-sw { width: 24px; height: 24px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .3); }
+.sg-key-col .sg-swatch-k { width: 26px; height: 26px; border-radius: 8px; background: currentColor; opacity: .85; }
+.sg-key.sg-col-1 { color: var(--sg-c1); } .sg-key.sg-col-2 { color: var(--sg-c2); } .sg-key.sg-col-3 { color: var(--sg-c3); } .sg-key.sg-col-4 { color: var(--sg-c4); }
+.sg-key.sg-col-5 { color: var(--sg-c5); } .sg-key.sg-col-6 { color: var(--sg-c6); } .sg-key.sg-col-7 { color: var(--sg-c7); } .sg-key.sg-col-8 { color: var(--sg-c8); } .sg-key.sg-col-9 { color: var(--sg-c9); }
+/* Attribute substring match on the inline style written by setProperty. Fragile by design: it relies on the
+   browser's serialisation "--cols: 9". Mismatch only costs the 20px size tweak, never function. */
+.sg-pad[style*="--cols: 9"] .sg-key, .sg-pad[style*="--cols: 10"] .sg-key { font-size: 20px; }
+/* alphabets above 25 symbols (grids up to 64 × 64): small keys in a pad that scrolls */
+.sg-pad.sg-pad-many { gap: 4px; max-height: min(42vh, 330px); overflow-y: auto; overscroll-behavior: contain; padding: 2px; scrollbar-width: thin; }
+.sg-pad.sg-pad-many .sg-key { min-height: 36px; font-size: 16px; border-radius: 9px; }
+.sg-pad.sg-pad-many .sg-key-n { right: 3px; top: 1px; font-size: 8.5px; }
+@media (max-width: 899px) { .sg-pad.sg-pad-many { max-height: 26vh; } }
+.sg-actions { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+.sg-act {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 46px; padding: 2px; border: 0; border-radius: 12px;
+  background: transparent; color: var(--ed-text); font-size: 11px; font-weight: 600; touch-action: manipulation;
+}
+.sg-act span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.sg-act:hover:not(:disabled) { background: var(--ed-hover); }
+.sg-act .ed-ic, .sg-act svg { width: 22px; height: 22px; }
+.sg-act-hint { color: var(--ed-accent); }
+.sg-hintbox {
+  border: 1px solid color-mix(in srgb, var(--b-hint-cell) 55%, var(--ed-border)); background: color-mix(in srgb, var(--b-hint-cell) 8%, var(--ed-panel));
+  border-radius: 14px; padding: 8px 10px; font-size: 13.5px; max-height: 34vh; overflow: auto; animation: ed-in .18s ease-out;
+}
+.sg-hint-head { display: flex; align-items: center; gap: 6px; }
+.sg-hint-head > .ed-ic { color: var(--b-hint-cell); }
+.sg-hint-head b { flex: 1 1 auto; }
+.sg-hint-lvl { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px; background: var(--ed-hover); color: var(--ed-muted); }
+.sg-hint-body p { margin: 6px 0; line-height: 1.45; }
+.sg-tech { font-weight: 700; color: var(--ed-accent); }
+.sg-hint-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+/* Visually hidden but announced by screen readers (live region for moves and hints). clip, not display:none:
+   display:none would remove it from the accessibility tree too. */
+.sg-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* players of a room */
+.sg-players { display: flex; gap: 6px; flex-wrap: wrap; flex: none; }
+.sg-pl {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; border-radius: 999px; font-size: 12.5px;
+  background: var(--ed-panel); border: 1px solid var(--ed-border); color: var(--ed-text); min-width: 0; max-width: 100%;
+}
+/* Player chips: each player's colour arrives as --c (inline), reused by the border, the dot and the progress bar. */
+.sg-pl.sg-me { border-color: var(--c); }
+.sg-pl.sg-on { box-shadow: 0 0 0 2px var(--c); }
+.sg-pl.sg-away { opacity: .55; }
+.sg-pl.sg-free { opacity: .6; border-style: dashed; }
+.sg-pl-dot { width: 24px; height: 24px; border-radius: 50%; background: var(--c); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; flex: none; }
+.sg-pl-dot .ed-ic, .sg-pl-dot svg { width: 15px; height: 15px; }
+.sg-pl-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+.sg-pl-bar { width: 56px; height: 6px; border-radius: 999px; background: var(--ed-hover); overflow: hidden; }
+.sg-pl-bar i { display: block; height: 100%; background: var(--c); transition: width .3s; }
+.sg-pl-pct { font-variant-numeric: tabular-nums; color: var(--ed-muted); font-size: 11.5px; }
+
+/* results */
+.sg-result-wrap { position: absolute; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: color-mix(in srgb, var(--ed-bg) 40%, transparent); animation: ed-in .25s ease-out; }
+.sg-result {
+  position: relative; width: min(380px, 100%); padding: 24px 22px 18px; border-radius: 22px; text-align: center;
+  background: var(--ed-panel); border: 1px solid var(--ed-border); box-shadow: var(--ed-shadow-lg); overflow: hidden;
+}
+.sg-result-t { font: 750 26px/1.15 var(--sg-title-font); margin: 6px 0 4px; }
+.sg-result-sub { margin: 0 0 10px; color: var(--ed-muted); font-size: 15px; }
+.sg-result-rows { margin: 8px 0 14px; display: grid; gap: 4px; text-align: left; }
+.sg-result-rows > div { display: flex; justify-content: space-between; gap: 10px; padding: 6px 10px; border-radius: 10px; background: var(--ed-panel-2); }
+.sg-result-rows dt { display: flex; align-items: center; gap: 6px; color: var(--ed-muted); }
+.sg-result-rows dd { margin: 0; font-weight: 700; font-variant-numeric: tabular-nums; }
+.sg-result-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+.sg-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.sg-result-burst { position: absolute; left: 50%; top: 22px; width: 0; height: 0; pointer-events: none; }
+/* Confetti from pure CSS: --i (0..13) per piece spreads hue (x26) and angle (x25.7deg ~ 360/14) and staggers the
+   delay. calc() inside rotate() and hsl() keeps the whole effect declarative. */
+.sg-result-burst i {
+  position: absolute; width: 8px; height: 14px; border-radius: 3px; left: -4px; top: -7px;
+  background: hsl(calc(var(--i) * 26), 85%, 60%); transform: rotate(calc(var(--i) * 25.7deg)) translateY(-10px); opacity: 0;
+  animation: sg-burst 1.1s cubic-bezier(.2, .7, .3, 1) forwards; animation-delay: calc(var(--i) * 18ms);
+}
+@keyframes sg-burst { 0% { opacity: 1; transform: rotate(calc(var(--i) * 25.7deg)) translateY(-6px); } 100% { opacity: 0; transform: rotate(calc(var(--i) * 25.7deg)) translateY(-120px) rotate(200deg); } }
+
+/* tablets in portrait: a bigger board and keys */
+@media (min-width: 700px) and (max-width: 899px) and (min-height: 900px) {
+  .sg-play { max-width: 780px; }
+  .sg-key { min-height: 58px; font-size: 26px; }
+  .sg-mode { height: 42px; font-size: 14px; }
+  .sg-act { min-height: 54px; font-size: 12.5px; }
+}
+
+/* wide screens and landscape phones: board left, controls right */
+/* Two columns: board left, controls right (clamped 260..360px). The comma is an OR between two media queries. */
+@media (min-width: 900px), (orientation: landscape) and (min-width: 600px) and (max-height: 560px) {
+  .sg-play {
+    display: grid; grid-template-columns: minmax(0, 1fr) clamp(260px, 30vw, 360px); grid-template-rows: auto minmax(0, 1fr);
+    column-gap: 18px; max-width: 1280px; padding: 8px 18px 16px;
+  }
+  .sg-bar { grid-column: 1 / -1; }
+  .sg-side { overflow: auto; min-height: 0; padding: 2px 2px 8px; }
+  .sg-info { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 16px; background: var(--ed-panel); border: 1px solid var(--ed-border); box-shadow: var(--ed-shadow-sm); }
+  .sg-pad .sg-key { min-height: 54px; font-size: 26px; }
+  .sg-hintbox { max-height: none; }
+  .sg-actions { grid-template-columns: repeat(5, 1fr); }
+}
+/* Landscape phones: compact keys, icon-only actions. !important on .sg-info: the two-column block above shows it
+   with the same specificity and comes earlier, but this rule must hide it whatever the source order becomes. */
+@media (orientation: landscape) and (max-height: 560px) {
+  .sg-play { grid-template-columns: minmax(0, 1fr) minmax(250px, 40vw); padding: 4px 10px 6px; gap: 4px 12px; }
+  .sg-pad .sg-key { min-height: 40px; font-size: 18px; }
+  .sg-act { min-height: 38px; }
+  .sg-act span:last-child { display: none; }
+  .sg-info { display: none !important; }
+}
+.sg-info-title { display: flex; align-items: baseline; gap: 10px; font: 700 18px var(--sg-title-font); }
+.sg-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.sg-tag { font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px; background: var(--ed-accent-weak); color: var(--ed-accent); }
+.sg-seedrow { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sg-seed { font-family: var(--ed-mono); font-size: 12.5px; padding: 1px 6px; border-radius: 6px; background: var(--ed-hover); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.sg-muted { color: var(--ed-muted); }
+.sg-ok { color: var(--ed-ok); display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
+.sg-err { color: var(--ed-danger) !important; }
+.sg-link { border: 0; background: none; padding: 0; color: var(--ed-accent); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+.sg-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.sg-row > .ed-input { flex: 1 1 140px; }
+
+/* ==========================================================================
+   Home
+   ========================================================================== */
+.sg-home { display: flex; flex-direction: column; gap: 16px; padding-bottom: 24px; }
+.sg-hero { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 6px 2px; }
+/* color-mix derives a translucent glow from the accent token: one token, any skin. */
+.sg-hero-logo svg { width: 64px; height: 64px; display: block; filter: drop-shadow(0 6px 14px color-mix(in srgb, var(--ed-accent) 35%, transparent)); }
+.sg-logo-bg { fill: var(--ed-accent); }
+.sg-logo-l { stroke: var(--ed-accent-text); stroke-opacity: .45; stroke-width: 1.6; fill: none; }
+.sg-logo-d { font: 700 10px var(--b-font); fill: var(--ed-accent-text); text-anchor: middle; }
+.sg-logo-a { font-size: 11px; }
+.sg-logo-c { fill: none; stroke: var(--ed-accent-text); stroke-width: 2; }
+.sg-hero-text { flex: 1 1 220px; min-width: 0; }
+.sg-hero-t { margin: 0; font: 800 clamp(26px, 5vw, 38px)/1.05 var(--sg-title-font); letter-spacing: -.02em; }
+.sg-hero-sub { margin: 4px 0 0; color: var(--ed-muted); font-size: 15px; max-width: 60ch; }
+.sg-skins { display: flex; gap: 6px; flex-wrap: wrap; }
+.sg-skin {
+  display: inline-flex; flex-direction: column; align-items: center; gap: 4px; padding: 4px; border-radius: 12px; border: 2px solid transparent; background: transparent;
+}
+.sg-skin.sg-on { border-color: var(--ed-accent); }
+.sg-skin-sw { display: grid; grid-template-columns: repeat(3, 10px); gap: 0; border-radius: 8px; overflow: hidden; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .15), var(--ed-shadow-sm); }
+.sg-skin-sw i { width: 10px; height: 30px; display: block; }
+.sg-skins-big .sg-skin-sw { grid-template-columns: repeat(3, 16px); }
+.sg-skins-big .sg-skin-sw i { width: 16px; height: 40px; }
+.sg-skin-name { font-size: 11.5px; font-weight: 600; color: var(--ed-muted); }
+/* Skin swatches use raw colours on purpose: each previews another skin, so it must not follow the current one. */
+.sg-skin-flat i:nth-child(1) { background: #ffffff; } .sg-skin-flat i:nth-child(2) { background: #2f6fdb; } .sg-skin-flat i:nth-child(3) { background: #1d2433; }
+.sg-skin-paper i:nth-child(1) { background: #fbf8f1; } .sg-skin-paper i:nth-child(2) { background: #111; } .sg-skin-paper i:nth-child(3) { background: #8a2f1c; }
+.sg-skin-wood i:nth-child(1) { background: #f4e2c1; } .sg-skin-wood i:nth-child(2) { background: #8b5a2f; } .sg-skin-wood i:nth-child(3) { background: #1d6b4f; }
+.sg-skin-pastel i:nth-child(1) { background: #fde3f1; } .sg-skin-pastel i:nth-child(2) { background: #c6a3ff; } .sg-skin-pastel i:nth-child(3) { background: #bfe6ff; }
+.sg-skin-neon i:nth-child(1) { background: #0b0c1a; } .sg-skin-neon i:nth-child(2) { background: #1de9f6; } .sg-skin-neon i:nth-child(3) { background: #ff2bd6; }
+.sg-skin-contrast i:nth-child(1) { background: #fff; } .sg-skin-contrast i:nth-child(2) { background: #000; } .sg-skin-contrast i:nth-child(3) { background: #ffe600; }
+
+.sg-card {
+  display: flex; align-items: center; gap: 14px; padding: 14px; border-radius: 18px; background: var(--ed-panel); border: 1px solid var(--ed-border); box-shadow: var(--ed-shadow-sm);
+}
+.sg-card-kicker { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em; color: var(--ed-accent); }
+.sg-card-t { font: 700 17px/1.25 var(--sg-title-font); margin: 2px 0; }
+.sg-cont-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.sg-cont-pic { width: 92px; flex: none; }
+.sg-cont-pic svg, .sg-vpic svg { width: 100%; height: auto; display: block; border-radius: 6px; }
+.sg-daily-ic { width: 52px; height: 52px; flex: none; border-radius: 14px; display: grid; place-items: center; background: var(--ed-accent-weak); color: var(--ed-accent); }
+.sg-daily-ic .ed-ic, .sg-daily-ic svg { width: 26px; height: 26px; }
+/* KNOWN DEFECT: .sg-continue:only-of-type compares element TYPE, not class. The continue card is a <section> and
+   its siblings are sections too, so it is never the only one of its type and never spans both columns.
+   Fix: give the card a class from home.js when it is alone (e.g. sg-wide), or use
+   .sg-home:not(:has(.sg-daily)) .sg-continue. */
+@media (min-width: 760px) {
+  .sg-home { display: grid; grid-template-columns: 1fr 1fr; }
+  .sg-hero, .sg-new, .sg-homefoot, .sg-online-card { grid-column: 1 / -1; }
+  .sg-continue:only-of-type { grid-column: 1 / -1; }
+}
+.sg-sec-head { display: flex; align-items: baseline; gap: 10px; justify-content: space-between; }
+.sg-h2 { font: 750 22px var(--sg-title-font); margin: 0; }
+.sg-h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--ed-muted); margin: 14px 0 8px; }
+.sg-new { display: flex; flex-direction: column; gap: 10px; }
+/* Horizontally scrolling chip row on phones: scrollbar hidden (scrollbar-width:none), content still swipeable. */
+.sg-chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 2px; }
+.sg-chips-sm { flex-wrap: wrap; overflow: visible; }
+.sg-chip {
+  flex: none; height: 34px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--ed-border-strong); background: var(--ed-panel);
+  color: var(--ed-muted); font-weight: 600; font-size: 13px;
+}
+.sg-chips-sm .sg-chip { height: 30px; padding: 0 11px; font-size: 12.5px; }
+.sg-chip:hover { color: var(--ed-text); }
+.sg-chip.sg-on { background: var(--ed-accent); border-color: var(--ed-accent); color: var(--ed-accent-text); }
+.sg-new-body { display: flex; flex-direction: column; gap: 14px; }
+@media (min-width: 1000px) {
+  .sg-new-body { display: grid; grid-template-columns: minmax(0, 1fr) 380px; align-items: start; }
+  /* The options panel stays in view while the variant grid scrolls (72px = header + gap). */
+  .sg-options { position: sticky; top: 72px; max-height: calc(100vh - 88px); overflow: auto; }
+}
+/* Variant cards: auto-fill grid; three fixed columns on phones (max-width:560px block at the end). */
+.sg-variants { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 10px; }
+.sg-vcard { position: relative; border-radius: 16px; background: var(--ed-panel); border: 1px solid var(--ed-border); box-shadow: var(--ed-shadow-sm); transition: transform .12s, box-shadow .12s, border-color .12s; }
+.sg-vcard:hover { transform: translateY(-2px); box-shadow: var(--ed-shadow); }
+.sg-vcard.sg-on { border-color: var(--ed-accent); box-shadow: 0 0 0 2px var(--ed-accent), var(--ed-shadow); }
+.sg-vcard-main { display: flex; flex-direction: column; gap: 6px; width: 100%; padding: 10px 10px 9px; border: 0; background: transparent; color: inherit; text-align: left; border-radius: 16px; }
+.sg-vpic { display: block; aspect-ratio: 1; border-radius: 8px; overflow: hidden; background: var(--b-cell); }
+/* Shimmer placeholder while thumbnails are generated lazily (pictures.js): the gradient is 200% wide and its
+   position animates, so no element moves. */
+.sg-vpic-ph { display: block; width: 100%; height: 100%; background: linear-gradient(90deg, var(--ed-hover), var(--ed-panel-2), var(--ed-hover)); background-size: 200% 100%; animation: sg-shimmer 1.4s linear infinite; }
+@keyframes sg-shimmer { to { background-position: -200% 0; } }
+.sg-vpic svg { width: 100%; height: 100%; }
+.sg-vname { font-weight: 650; font-size: 13.5px; line-height: 1.2; min-height: 2.4em; }
+.sg-vinfo { position: absolute; top: 6px; right: 6px; width: 28px; height: 28px; border-radius: 50%; border: 0; display: grid; place-items: center; background: color-mix(in srgb, var(--ed-panel) 85%, transparent); color: var(--ed-muted); box-shadow: var(--ed-shadow-sm); }
+.sg-vinfo:hover { color: var(--ed-accent); }
+.sg-vinfo .ed-ic, .sg-vinfo svg { width: 16px; height: 16px; }
+.sg-options { display: flex; flex-direction: column; gap: 12px; border-radius: 18px; }
+.sg-opt-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.sg-opt-t { font: 750 20px var(--sg-title-font); }
+.sg-opt-sum { margin: 0; color: var(--ed-muted); line-height: 1.45; }
+.sg-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.sg-field-l { font-size: 12px; font-weight: 700; color: var(--ed-muted); text-transform: uppercase; letter-spacing: .05em; }
+.sg-field-h { font-size: 12.5px; color: var(--ed-muted); line-height: 1.4; }
+.sg-seg { display: flex; flex-wrap: wrap; gap: 3px; padding: 3px; border-radius: 12px; background: var(--ed-hover); }
+.sg-seg-b { flex: 1 1 auto; min-height: 34px; padding: 0 10px; border: 0; border-radius: 9px; background: transparent; color: var(--ed-muted); font-weight: 600; font-size: 13px; white-space: nowrap; }
+.sg-seg-b:hover { color: var(--ed-text); }
+.sg-seg-b.sg-on { background: var(--ed-panel); color: var(--ed-accent); box-shadow: var(--ed-shadow-sm); }
+.sg-more { border-top: 1px solid var(--ed-border); padding-top: 8px; }
+/* Custom <details> toggle: list-style:none removes the marker in Firefox / standard engines, the
+   ::-webkit-details-marker rule in WebKit. */
+.sg-more > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 650; color: var(--ed-muted); padding: 4px 0; list-style: none; }
+.sg-more > summary::-webkit-details-marker { display: none; }
+.sg-more[open] > summary { margin-bottom: 8px; }
+.sg-more > .sg-field + .sg-field { margin-top: 12px; }
+.sg-seed-in { font-family: var(--ed-mono); }
+.sg-abc { display: flex; flex-direction: column; gap: 6px; }
+.sg-size { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.sg-size-row { flex-wrap: nowrap; }
+.sg-size-in { flex: 1 1 auto; min-width: 0; }
+.sg-abc-prev { display: flex; flex-wrap: wrap; gap: 4px; }
+.sg-abc-s { min-width: 24px; height: 24px; padding: 0 4px; display: inline-grid; place-items: center; border-radius: 6px; background: var(--ed-hover); font: 600 13px var(--b-font); }
+.sg-abc-sw { width: 20px; height: 20px; border-radius: 50%; display: inline-block; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .25); }
+/* Start button row sticks to the bottom of the options card on small screens; the gradient fades the content
+   scrolling under it. */
+.sg-play-row { display: flex; gap: 8px; flex-wrap: wrap; position: sticky; bottom: 8px; z-index: 3; padding-top: 4px; }
+.sg-grow { flex: 1 1 160px; }
+@media (max-width: 999px) {
+  .sg-play-row { background: linear-gradient(transparent, var(--ed-panel) 30%); margin: 0 -16px -14px; padding: 14px 16px 14px; border-radius: 0 0 18px 18px; }
+}
+.sg-homefoot { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+.sg-flink { display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--ed-border); background: var(--ed-panel); color: var(--ed-text); font-weight: 600; }
+.sg-flink:hover { border-color: var(--ed-accent); color: var(--ed-accent); }
+
+/* ==========================================================================
+   Dialogs
+   ========================================================================== */
+.sg-dlg .ed-dlg-title { font-family: var(--sg-title-font); }
+.sg-rules { display: grid; gap: 16px; }
+@media (min-width: 720px) { .sg-rules { grid-template-columns: minmax(0, 1fr) minmax(220px, 340px); align-items: start; } }
+.sg-rules-text p { margin: 0 0 10px; line-height: 1.55; }
+.sg-rules-lead { font-weight: 600; }
+.sg-rules-fig { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.sg-rules-pic { display: grid; place-items: center; min-height: 200px; }
+.sg-pic-rules { width: 100%; height: auto; border-radius: 8px; box-shadow: var(--b-shadow); }
+.sg-rules-fig figcaption { justify-content: space-between; }
+.sg-settings .sg-set-row, .sg-form .sg-set-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--ed-border); }
+.sg-set-l { flex: 1 1 auto; display: flex; flex-direction: column; gap: 1px; cursor: pointer; }
+.sg-set-l small { color: var(--ed-muted); }
+.sg-set-abc { display: flex; flex-direction: column; gap: 6px; }
+.sg-skins-big { gap: 8px; }
+.sg-help-sec { margin-bottom: 8px; }
+.sg-keys { display: grid; gap: 4px; margin: 0; }
+.sg-keys > div { display: grid; grid-template-columns: minmax(120px, 34%) 1fr; gap: 10px; align-items: baseline; padding: 4px 0; border-bottom: 1px dashed var(--ed-border); }
+.sg-keys dt { display: flex; flex-wrap: wrap; gap: 3px; }
+.sg-keys kbd { font: 600 11.5px var(--ed-mono); color: var(--ed-text); padding: 1px 6px; border-radius: 5px; border: 1px solid var(--ed-border-strong); border-bottom-width: 2px; background: var(--ed-panel-2); }
+.sg-keys dd { margin: 0; }
+.sg-stat-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.sg-tile { display: flex; flex-direction: column; align-items: center; padding: 12px 8px; border-radius: 14px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.sg-tile b { font: 800 26px var(--sg-title-font); }
+.sg-tile span { font-size: 12px; color: var(--ed-muted); text-align: center; }
+.sg-export { display: flex; flex-direction: column; gap: 12px; align-items: stretch; }
+.sg-export-prev { display: grid; place-items: center; max-height: 56vh; overflow: auto; background: var(--ed-panel-2); border-radius: 12px; padding: 12px; }
+.sg-export-prev svg { max-width: 100%; height: auto; max-height: 52vh; }
+.sg-code-in { font-family: var(--ed-mono); font-size: 12px; }
+.sg-busy { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 8px 0 4px; text-align: center; }
+.sg-busy .ap-progress { width: 100%; }
+.sg-busy-anim { display: grid; grid-template-columns: repeat(3, 18px); gap: 4px; }
+.sg-busy-anim i { width: 18px; height: 18px; border-radius: 5px; background: var(--ed-accent); opacity: .2; animation: sg-cellpulse 1.2s ease-in-out infinite; animation-delay: calc(var(--i) * 110ms); }
+@keyframes sg-cellpulse { 40% { opacity: .95; transform: scale(1.08); } }
+.sg-form { display: flex; flex-direction: column; gap: 14px; }
+.sg-tabpane { display: flex; flex-direction: column; gap: 14px; }
+.sg-rooms { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow: auto; }
+.sg-room { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.sg-room-n { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.sg-row-head { align-items: center; }
+.sg-lobby { display: flex; flex-direction: column; gap: 10px; }
+.sg-lobby-players { display: flex; flex-wrap: wrap; gap: 6px; }
+.sg-invite { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+/* QR codes need a light quiet zone to scan: raw white background in every skin, dark skins included. */
+.sg-qr { width: 132px; flex: none; background: #fff; border-radius: 10px; padding: 4px; }
+.sg-qr svg { width: 100%; height: auto; display: block; }
+.sg-invite-body { flex: 1 1 220px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.sg-mono { font-family: var(--ed-mono); font-size: 12px; }
+.sg-chat { display: flex; flex-direction: column; gap: 8px; }
+.sg-chat-log { height: 260px; overflow: auto; display: flex; flex-direction: column; gap: 4px; padding: 8px; border-radius: 12px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.sg-chat-line b { color: var(--c); }
+
+/* print: only the puzzle (dialogs.js #sg-print) */
+/* Print: dialogs.js fills #sg-print with the puzzle and calls print(); everything else is hidden. Id (1,0,0) for a
+   singleton element; !important beats any display set by shell styles or inline JS. */
+#sg-print { display: none; }
+@media print {
+  body > *:not(#sg-print) { display: none !important; }
+  #sg-print { display: block; color: #000; font-family: Georgia, serif; }
+  #sg-print h1 { font-size: 20pt; margin: 0 0 12pt; }
+  .sg-print-board svg { width: 100%; height: auto; max-height: 80vh; }
+  .sg-print-rules { font-size: 10pt; }
+}
+
+/* Motion off: ui/base.css already kills every animation and transition with !important, so these lines matter for
+   the hover lift only (a static transform, not an animation); the ghost rule is a redundant safety net. */
+@media (prefers-reduced-motion: reduce) {
+  .sg-vcard:hover { transform: none; }
+  .sg-hint-ghost { animation: none; }
+}
+
+/* phones: three cards in a row, the quick bar of the chosen variant */
+/* Phones: a sticky bar with the chosen variant and the Play button, so starting needs no scroll to the options. */
+.sg-quickbar { display: none; }
+@media (max-width: 999px) {
+  .sg-quickbar {
+    display: flex; align-items: center; gap: 10px; position: sticky; bottom: calc(10px + env(safe-area-inset-bottom)); z-index: 6;
+    padding: 8px 8px 8px 14px; border-radius: 18px; background: color-mix(in srgb, var(--ed-panel) 92%, transparent); border: 1px solid var(--ed-border);
+    box-shadow: var(--ed-shadow-lg); backdrop-filter: blur(10px); transition: opacity .2s, transform .2s;
+  }
+  .sg-quickbar.sg-hide { opacity: 0; transform: translateY(12px); pointer-events: none; }
+  .sg-quick-info { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; border: 0; background: none; padding: 0; color: inherit; text-align: left; }
+  .sg-quick-info b, .sg-quick-info span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+}
+@media (max-width: 560px) {
+  .sg-variants { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .sg-vcard-main { padding: 7px 7px 6px; gap: 5px; }
+  .sg-vname { font-size: 12px; min-height: 2.5em; }
+  .sg-vinfo { width: 24px; height: 24px; top: 4px; right: 4px; }
+  .sg-hero-logo svg { width: 52px; height: 52px; }
+}

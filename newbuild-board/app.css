@@ -1,0 +1,253 @@
+/* newbuild-board/app.css - Newbuild Board: board page (filters, bulk change, tiles, the chessboard of every building
+   coloured by status or by a price-per-m² heat scale, the unit card, statistics), import page (source, column
+   mapping, preview), mortgage page (loan, affordability, comparison, schedule) and complex page (buildings, price
+   list, data), plus the print sheets. Loaded third, after ui/base.css + ui/app.css.
+
+   CONTRACT
+   - Namespace nb- (this app); ed- primitives and ap- shell come from the shared sheets. Layout containers reuse the
+     shell grid (.ap-work) and only override its columns here (.nb-work, .nb-im-work), so gaps and alignment stay
+     consistent with every other app.
+   - Specificity budget: one class, two for state (.nb-cell.nb-s-sold). !important only where a shared rule of
+     higher specificity must lose: `.ap-table th, td { text-align: left }` (0,1,1) vs .nb-r (0,1,0);
+     `.ap-card .ed-field + .ed-field` (0,3,0) vs toolbar fields; print isolation. Each use is noted.
+   - Status colours are app tokens (--nb-free/res/sold/closed), defined for light, OS-dark and forced-dark exactly like
+     ui/base.css does for --ed-*. Components read one local variable --c set per status class, so a new status needs
+     one rule, not a copy of every cell property.
+   - Status is never colour-only: reserved = dashed border, sold = struck-through price, closed = hatched fill; the
+     board stays readable for colour-blind users and in greyscale print. */
+
+/* Status palette (traffic-light semantics: free green, reserved amber, sold red, closed slate) + heat scale ends. */
+:root {
+  --nb-free: #16a34a; --nb-res: #d97706; --nb-sold: #dc2626; --nb-closed: #64748b;
+  --nb-heat-lo: #dbeafe; --nb-heat-hi: #1d4ed8;
+}
+/* Dark variants: lighter, more saturated tones keep contrast on dark panels. Selector mirrors ui/base.css (0,2,0). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --nb-free: #22c55e; --nb-res: #f59e0b; --nb-sold: #f87171; --nb-closed: #94a3b8; --nb-heat-lo: #1e293b; --nb-heat-hi: #60a5fa; }
+}
+:root[data-theme="dark"] { --nb-free: #22c55e; --nb-res: #f59e0b; --nb-sold: #f87171; --nb-closed: #94a3b8; --nb-heat-lo: #1e293b; --nb-heat-hi: #60a5fa; }
+
+/* Wider than most apps: the chessboard of several buildings side by side needs the room. */
+.nb-board, .nb-import, .nb-loan, .nb-info { max-width: 1480px; }
+.nb-mono { font-family: var(--ed-mono); }
+.nb-num { font-variant-numeric: tabular-nums; }
+/* !important: .ap-table th/td set text-align:left at (0,1,1); a numeric column must align right regardless. */
+.nb-r { text-align: end !important; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.nb-mt { margin-top: 12px; }
+.nb-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.nb-sub { margin: 16px 0 8px; font-size: 13px; font-weight: 650; }
+.nb-sub:first-child { margin-top: 0; }
+/* <a> styled as .ed-btn: .ed-btn targets buttons and sets no link colour or underline (0,1,1 beats 0,1,0). */
+a.ed-btn { color: inherit; text-decoration: none; }
+.nb-kv dd { overflow-wrap: anywhere; }
+
+/* ---------------------------------------------------------------- board layout */
+/* Only the columns change; display:grid, gap and align-items come from .ap-work (ui/app.css). */
+.nb-work { grid-template-columns: minmax(270px, 310px) minmax(0, 1fr); }
+@media (max-width: 860px) { .nb-work { grid-template-columns: minmax(0, 1fr); } }
+/* auto-fit (not auto-fill): with few tiles they stretch to fill the row instead of leaving empty tracks. */
+.nb-tiles { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.nb-tile { background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: 12px; padding: 10px 12px; min-width: 0; box-shadow: var(--ed-shadow-sm); }
+.nb-tile-l { font-size: 11.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-muted); }
+.nb-tile-v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; overflow-wrap: anywhere; }
+.nb-tile-s { font-size: 12px; color: var(--ed-muted); margin-top: 2px; }
+.nb-tile-acc .nb-tile-v { color: var(--ed-accent); }
+
+.nb-cx { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 10px; }
+.nb-cx-name { margin: 0; font-size: 18px; font-weight: 700; }
+.nb-cx-meta { color: var(--ed-muted); font-size: 13px; }
+.nb-toolbar { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: flex-end; margin-bottom: 10px; }
+/* !important: inside a card `.ap-card .ed-field + .ed-field` (0,3,0) adds a top margin that would misalign the
+   toolbar's flex row; this rule is only (0,2,0). */
+.nb-toolbar .ed-field { margin: 0 !important; }
+.nb-toolbar .ed-select { min-width: 150px; }
+
+.nb-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 12.5px; color: var(--ed-muted); margin-bottom: 10px; min-height: 20px; }
+.nb-lg { display: inline-flex; align-items: center; gap: 6px; }
+.nb-lg b { color: var(--ed-text); font-variant-numeric: tabular-nums; }
+/* Swatch border colour comes from the status rule below (border: 1.5px solid with no colour = currentColor until
+   then). */
+.nb-sw { display: inline-block; width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid; }
+.nb-sw-dim { border-color: var(--ed-border-strong); background: var(--ed-panel-2); opacity: .45; }
+.nb-lg-l { font-weight: 600; color: var(--ed-text); }
+/* Same gradient as the heat fill of the cells, so the legend is the exact scale. */
+.nb-heatbar { display: inline-block; width: 160px; max-width: 40vw; height: 12px; border-radius: 999px; background: linear-gradient(90deg, var(--nb-heat-lo), var(--nb-heat-hi)); border: 1px solid var(--ed-border); }
+
+/* The board scrolls horizontally inside its card (phones, many sections); the page itself never does. */
+.nb-scroll { overflow-x: auto; overscroll-behavior-x: contain; margin: 0 -4px; padding: 2px 4px 6px; border-radius: 10px; }
+.nb-scroll:focus-visible { outline: 2px solid var(--ed-focus, var(--ed-accent)); outline-offset: 2px; }
+/* width:max-content: the flex row of buildings keeps its natural width and scrolls inside .nb-scroll instead of
+   squeezing cells; min-width:100% fills the card when it is narrower than the card. */
+.nb-boards { display: flex; gap: 22px; align-items: flex-start; width: max-content; min-width: 100%; }
+.nb-building { flex: none; }
+.nb-bhead { display: flex; flex-direction: column; gap: 2px; margin: 0 0 8px; }
+.nb-bhead h3 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 14.5px; font-weight: 700; }
+.nb-bhead h3 svg { width: 17px; height: 17px; color: var(--ed-accent); }
+.nb-bmeta { font-size: 12px; color: var(--ed-muted); }
+
+/* Table for the chessboard: rows = floors, columns = sections / risers. A real <table> gives row/column semantics
+   (screen readers announce floor and position). border-spacing (separate model) spaces the tiles. */
+.nb-grid { border-collapse: separate; border-spacing: 3px; }
+.nb-grid th { font-size: 11px; font-weight: 650; color: var(--ed-muted); padding: 0 4px; white-space: nowrap; }
+.nb-grid thead th { text-align: center; padding-bottom: 2px; }
+/* Floor labels stick to the left edge while the board scrolls horizontally; background hides cells passing below. */
+.nb-grid th.nb-fl { text-align: end; min-width: 28px; font-variant-numeric: tabular-nums; position: sticky; left: 0; z-index: 1; background: var(--ed-panel); }
+.nb-grid td { padding: 0; }
+/* A wider gap before the first cell of each section (nb-s0) visually separates entrances. */
+.nb-grid td.nb-s0 { padding-inline-start: 9px; }
+/* An empty slot (no unit at that floor/riser) draws a dashed placeholder of cell size, so the grid keeps its shape. */
+.nb-grid td:empty::before { content: ''; display: block; width: 66px; height: 48px; border-radius: 7px; border: 1px dashed var(--ed-border); opacity: .5; }
+
+/* The cell: --c = status colour, default free. Fill = 17% of the colour over the panel (color-mix keeps it theme
+   aware); border = full colour. Fixed 66x48px so every floor aligns into a regular grid. */
+.nb-cell {
+  --c: var(--nb-free);
+  display: flex; flex-direction: column; justify-content: space-between; width: 66px; height: 48px; padding: 3px 5px;
+  border-radius: 7px; border: 1.5px solid var(--c); background: color-mix(in srgb, var(--c) 17%, var(--ed-panel));
+  color: var(--ed-text); font-size: 10.5px; line-height: 1.15; text-align: start; cursor: pointer; font-variant-numeric: tabular-nums;
+  transition: transform .1s, box-shadow .1s, opacity .15s;
+}
+.nb-cell:hover { transform: translateY(-1px); box-shadow: var(--ed-shadow-sm); }
+/* position:relative + z-index lift the focus ring above neighbouring cells (border-spacing is only 3px). */
+.nb-cell:focus-visible { outline: 2px solid var(--ed-text); outline-offset: 1px; z-index: 2; position: relative; }
+.nb-c-top { display: flex; justify-content: space-between; gap: 2px; }
+.nb-c-top b { font-size: 11px; }
+.nb-c-r { color: var(--ed-muted); font-weight: 600; }
+.nb-c-a { color: var(--ed-muted); }
+/* The price may be long ("1 250 000 ₾"); ellipsis rather than overflowing the fixed cell. */
+.nb-c-p { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nb-cell.nb-s-reserved, .nb-sw.nb-s-reserved { --c: var(--nb-res); }
+.nb-cell.nb-s-reserved { border-style: dashed; }
+.nb-cell.nb-s-sold, .nb-sw.nb-s-sold { --c: var(--nb-sold); }
+.nb-cell.nb-s-closed, .nb-sw.nb-s-closed { --c: var(--nb-closed); }
+.nb-cell.nb-s-closed { background-image: repeating-linear-gradient(135deg, color-mix(in srgb, var(--c) 22%, transparent) 0 3px, transparent 3px 7px); }
+.nb-sw.nb-s-free { --c: var(--nb-free); }
+/* Legend swatches share the status tokens through the same --c mechanism. */
+.nb-sw[class*="nb-s-"] { border-color: var(--c); background: color-mix(in srgb, var(--c) 17%, var(--ed-panel)); }
+.nb-cell.nb-s-sold .nb-c-p { text-decoration: line-through; text-decoration-thickness: 1px; opacity: .8; }
+/* Heat: the fill follows the price per m²; the status stays visible as the border colour. */
+/* --p (0-100%) is set inline per cell from its price per m². oklab mixing gives perceptually even steps; srgb would
+   make mid tones muddy. */
+.nb-cell.nb-heat { background: color-mix(in oklab, var(--nb-heat-hi) var(--p), var(--nb-heat-lo)); border-width: 2px; }
+/* Dark end of the scale: white text keeps contrast (raw colours: the heat scale fill is not a theme token). */
+.nb-cell.nb-heat.nb-hot { color: #fff; }
+.nb-cell.nb-heat.nb-hot .nb-c-r, .nb-cell.nb-heat.nb-hot .nb-c-a { color: rgba(255, 255, 255, .82); }
+/* Cells outside the current filter fade instead of disappearing: the building's shape stays recognisable. */
+.nb-cell.nb-dim { opacity: .22; filter: saturate(.4); }
+.nb-cell.nb-dim:hover, .nb-cell.nb-dim:focus-visible { opacity: .6; }
+/* No movement for users who asked for reduced motion. */
+@media (prefers-reduced-motion: reduce) { .nb-cell { transition: none; } .nb-cell:hover { transform: none; } }
+
+/* ---------------------------------------------------------------- filters, bulk */
+.nb-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.nb-chip {
+  min-height: 30px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--ed-border); background: var(--ed-panel-2);
+  color: var(--ed-muted); font-size: 12.5px; font-weight: 600;
+}
+.nb-chip:hover { color: var(--ed-text); border-color: var(--ed-border-strong); }
+/* Inset shadow doubles the border without changing the box size (no layout shift on toggle). */
+.nb-chip.nb-on { color: var(--ed-accent); border-color: var(--ed-accent); background: var(--ed-accent-weak); box-shadow: inset 0 0 0 1px var(--ed-accent); }
+.nb-f-foot { align-items: center; }
+.nb-count { font-size: 12.5px; font-weight: 600; }
+.nb-bulk-info { font-size: 13px; padding: 7px 10px; border-radius: 9px; background: var(--ed-accent-weak); color: var(--ed-text); margin-bottom: 10px; }
+
+/* ---------------------------------------------------------------- unit card */
+.nb-unit { display: grid; gap: 18px; grid-template-columns: minmax(0, 1.15fr) minmax(220px, .85fr); align-items: start; }
+@media (max-width: 720px) { .nb-unit { grid-template-columns: minmax(0, 1fr); } }
+.nb-unit-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.nb-unit-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.nb-status-seg { flex-wrap: wrap; height: auto; }
+/* The floor-plan sketch is drawn for white paper (dark strokes), so its figure keeps a white background in dark mode. */
+.nb-sketch { margin: 0; padding: 10px; border-radius: 12px; background: #fff; border: 1px solid var(--ed-border); }
+.nb-sketch-svg svg { display: block; width: 100%; height: auto; max-height: 300px; }
+.nb-sketch figcaption { font-size: 11.5px; color: #4b5563; margin-top: 6px; }
+.nb-est { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--ed-border); background: var(--ed-panel-2); }
+.nb-est-v { font-size: 17px; font-weight: 700; }
+.nb-hist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; max-height: 180px; overflow: auto; font-size: 12.5px; }
+.nb-hist li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 4px 0; border-bottom: 1px solid var(--ed-border); }
+.nb-hist-d { font-family: var(--ed-mono); color: var(--ed-muted); font-size: 11.5px; }
+
+/* ---------------------------------------------------------------- tables */
+.nb-twrap { max-height: none; }
+.nb-table th[scope="row"] { font-weight: 600; white-space: nowrap; }
+.nb-table td, .nb-table th { white-space: nowrap; }
+
+/* ---------------------------------------------------------------- import */
+.nb-im-work { grid-template-columns: minmax(300px, 420px) minmax(0, 1fr); }
+@media (max-width: 960px) { .nb-im-work { grid-template-columns: minmax(0, 1fr); } }
+.nb-im-work .ed-textarea { min-height: 170px; font-size: 12.5px; }
+.nb-mapping .ed-select { min-width: 150px; }
+.nb-ignored th, .nb-ignored .nb-samples { opacity: .6; }
+.nb-samples { color: var(--ed-muted); font-size: 12px; max-width: 280px; overflow: hidden; text-overflow: ellipsis; }
+.nb-im-sum { font-size: 13.5px; margin-bottom: 10px; }
+.nb-problems { margin: 0 0 12px; border: 1px solid color-mix(in srgb, var(--ed-warn) 40%, var(--ed-border)); border-radius: 10px; padding: 8px 12px; background: var(--ed-panel-2); font-size: 12.5px; }
+.nb-problems summary { cursor: pointer; font-weight: 600; }
+.nb-problems ul { margin: 8px 0 0; padding-inline-start: 18px; max-height: 200px; overflow: auto; }
+.nb-tagk { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px; background: var(--ed-hover); }
+.nb-tagk-new { color: var(--nb-free); background: color-mix(in srgb, var(--nb-free) 14%, transparent); }
+.nb-tagk-update { color: var(--nb-res); background: color-mix(in srgb, var(--nb-res) 16%, transparent); }
+
+/* ---------------------------------------------------------------- mortgage */
+.nb-ln-unit-card { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.nb-ln-unit-card span { color: var(--ed-muted); }
+.nb-ln-tools { margin-bottom: 10px; }
+.nb-sched-wrap { max-height: 520px; }
+/* Totals row sticks to the bottom of the scrolling schedule, so sums stay visible. */
+.nb-sched tfoot td, .nb-sched tfoot th { font-weight: 700; border-top: 2px solid var(--ed-border-strong); position: sticky; bottom: 0; background: var(--ed-panel-2); }
+.nb-afford { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.nb-verdict { font-weight: 650; padding: 8px 10px; border-radius: 9px; font-size: 13px; }
+.nb-verdict.nb-ok { color: var(--nb-free); background: color-mix(in srgb, var(--nb-free) 13%, transparent); }
+.nb-verdict.nb-no { color: var(--nb-sold); background: color-mix(in srgb, var(--nb-sold) 13%, transparent); }
+.nb-disclaimer { margin: 0; }
+
+/* ---------------------------------------------------------------- complex */
+.nb-info-grid { display: grid; gap: 18px; align-items: start; grid-template-columns: minmax(300px, 440px) minmax(0, 1fr); }
+@media (max-width: 960px) { .nb-info-grid { grid-template-columns: minmax(0, 1fr); } }
+.nb-blist { display: flex; flex-direction: column; gap: 10px; }
+.nb-bitem { border: 1px solid var(--ed-border); border-radius: 12px; padding: 10px 12px; background: var(--ed-panel-2); display: flex; flex-direction: column; gap: 10px; }
+.nb-bitem .ed-field + .ed-field { margin-top: 0; }
+.nb-bitem-h { display: flex; gap: 10px; align-items: flex-end; }
+.nb-bitem-h .ed-field { flex: 1; margin: 0; }
+.nb-bid { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 34px; height: 34px; padding: 0 6px; border-radius: 9px; background: var(--ed-accent); color: var(--ed-accent-text); font-weight: 700; }
+.nb-bitem-f { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; font-size: 12.5px; }
+.nb-ready { font-weight: 650; }
+.nb-pricelist { margin-top: 12px; overflow-x: auto; }
+.nb-sheet { min-width: 0; }
+.nb-pl-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 20px; margin-bottom: 10px; font-size: 12.5px; }
+.nb-pl-head h2 { margin: 0; font-size: 17px; }
+.nb-pl-b { font-weight: 650; font-size: 14px; }
+.nb-pl-meta { text-align: end; color: var(--ed-muted); }
+.nb-pl-table tr.nb-pl-fl td, .nb-pl-table tr.nb-pl-fl th { border-top: 1.5px solid var(--ed-border-strong); }
+.nb-pl-foot { margin-top: 8px; font-size: 11.5px; color: var(--ed-muted); }
+
+/* ---------------------------------------------------------------- phones */
+@media (max-width: 560px) {
+  .nb-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nb-tile-v { font-size: 17px; }
+  .nb-toolbar { gap: 8px 12px; }
+  .nb-pl-meta { text-align: start; }
+}
+
+/* ---------------------------------------------------------------- print */
+/* Print container (id nb-print, class nb-print) created by common.js printElement(); hidden on screen. */
+.nb-print { display: none; }
+@media print {
+  /* While printing, body.nb-printing hides every other body child; !important beats their own display rules. */
+  @page { size: A4; margin: 12mm; }
+  body.nb-printing { display: block; background: #fff; color: #111; min-height: 0; margin: 0; }
+  body.nb-printing > :not(#nb-print) { display: none !important; }
+  body.nb-printing .nb-print { display: block !important; font: 9.5pt/1.35 var(--ed-font); color: #111; }
+  .nb-print .ap-table { font-size: 8.5pt; width: 100%; }
+  /* Sticky headers and hover backgrounds of .ap-table make no sense on paper; position:static avoids repeated
+     overlaps in some print engines. */
+  .nb-print .ap-table th, .nb-print .ap-table td { padding: 2px 6px; border-bottom: 0.2mm solid #d1d5db; color: #111; background: none !important; position: static !important; }
+  /* table-header-group repeats the header on every printed page. */
+  .nb-print thead { display: table-header-group; }
+  .nb-print tr { break-inside: avoid; }
+  .nb-print-head { margin-bottom: 4mm; }
+  .nb-print-head h1 { font-size: 14pt; margin: 0 0 1mm; }
+  .nb-print-note, .nb-pl-foot, .nb-pl-meta { color: #4b5563; }
+}
+/* (0,4,0) cancels the shell's stacked-field margin (0,3,0) for fields placed side by side in a two-column grid. */
+.ap-card .ed-grid2 > .ed-field + .ed-field { margin-top: 0; }
+.nb-lg-k { margin-inline-start: auto; font-size: 12px; }

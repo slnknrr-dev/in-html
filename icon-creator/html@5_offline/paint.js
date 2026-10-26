@@ -1,0 +1,24 @@
+import{wandMask}from"./raster/wand.js";const blank=(n)=>({width:n,height:n,data:new Uint8ClampedArray(n*n*4)});const copyImage=(img)=>({width:img.width,height:img.height,data:new Uint8ClampedArray(img.data)});function rgba(hex,a=255){const v=/^#?([0-9a-f]{6})$/i.exec(hex||'');const n=v?parseInt(v[1],16):0;return[(n>>16)&255,(n>>8)&255,n&255,Math.max(0,Math.min(255,Math.round(a)))];}
+const hexOf=(r,g,b)=>'#'+[r,g,b].map((v)=>v.toString(16).padStart(2,'0')).join('');function plot(img,x,y,c,mode='over',mask=null){const{width:W,height:H,data}=img;if(x<0||y<0||x>=W||y>=H)return;const i=y*W+x;const m=mask?mask[i]/255:1;if(!m)return;const p=i*4;if(mode==='replace'&&m===1){data[p]=c[0];data[p+1]=c[1];data[p+2]=c[2];data[p+3]=c[3];return;}
+const sa=(mode==='replace'?1:c[3]/255)*m;if(mode==='replace'){for(let k=0;k<4;k++)data[p+k]=Math.round(data[p+k]+(c[k]-data[p+k])*sa);return;}
+const da=data[p+3]/255;const oa=sa+da*(1-sa);if(oa<=0)return;for(let k=0;k<3;k++)data[p+k]=Math.round((c[k]*sa+data[p+k]*da*(1-sa))/oa);data[p+3]=Math.round(oa*255);}
+function dab(img,x,y,size,c,mode,mask,mirror=null){const r0=-Math.floor((size-1)/2);const pts=[[x,y]];if(mirror==='x'||mirror==='xy')pts.push([img.width-1-x,y]);if(mirror==='y'||mirror==='xy')pts.push([x,img.height-1-y]);if(mirror==='xy')pts.push([img.width-1-x,img.height-1-y]);const seen=new Set();for(const[px,py]of pts){for(let dy=0;dy<size;dy++){for(let dx=0;dx<size;dx++){const X=px+r0+dx,Y=py+r0+dy;const k=Y*img.width+X;if(seen.has(k))continue;seen.add(k);plot(img,X,Y,c,mode,mask);}}}}
+function linePoints(x0,y0,x1,y1){const out=[];const dx=Math.abs(x1-x0),dy=-Math.abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1;let err=dx+dy;for(;;){out.push([x0,y0]);if(x0===x1&&y0===y1)break;const e2=2*err;if(e2>=dy){err+=dy;x0+=sx;}
+if(e2<=dx){err+=dx;y0+=sy;}}
+return out;}
+function rectPoints(x0,y0,x1,y1,filled){const out=[];const ax=Math.min(x0,x1),bx=Math.max(x0,x1),ay=Math.min(y0,y1),by=Math.max(y0,y1);for(let y=ay;y<=by;y++){for(let x=ax;x<=bx;x++)if(filled||y===ay||y===by||x===ax||x===bx)out.push([x,y]);}
+return out;}
+function ellipsePoints(x0,y0,x1,y1,filled){const ax=Math.min(x0,x1),bx=Math.max(x0,x1),ay=Math.min(y0,y1),by=Math.max(y0,y1);const cx=(ax+bx+1)/2,cy=(ay+by+1)/2,rx=(bx-ax+1)/2,ry=(by-ay+1)/2;const inside=(x,y)=>{const u=(x+0.5-cx)/rx,v=(y+0.5-cy)/ry;return u*u+v*v<=1;};const out=[];for(let y=ay;y<=by;y++){for(let x=ax;x<=bx;x++){if(!inside(x,y))continue;if(filled||!inside(x-1,y)||!inside(x+1,y)||!inside(x,y-1)||!inside(x,y+1))out.push([x,y]);}}
+return out;}
+function fill(img,x,y,c,{tolerance=0,contiguous=true,diagonal=false,mode='replace',clip=null}={}){const r=wandMask(img,x,y,{tolerance,contiguous,diagonal});if(!r)return false;const m=r.mask;if(clip)for(let i=0;i<m.length;i++)m[i]=Math.round((m[i]*clip[i])/255);for(let yy=r.y0;yy<=r.y1;yy++)for(let xx=r.x0;xx<=r.x1;xx++)if(m[yy*img.width+xx])plot(img,xx,yy,c,mode,m);return true;}
+function combineMask(a,b,mode){if(mode==='replace'||!a)return mode==='subtract'?null:b;const out=new Uint8Array(a.length);for(let i=0;i<a.length;i++){out[i]=mode==='add'?Math.max(a[i],b[i]):mode==='subtract'?Math.max(0,a[i]-b[i]):Math.min(a[i],b[i]);}
+return out.some((v)=>v)?out:null;}
+function rectMask(n,x0,y0,x1,y1){const m=new Uint8Array(n*n);for(const[x,y]of rectPoints(Math.max(0,Math.min(x0,x1)),Math.max(0,Math.min(y0,y1)),Math.min(n-1,Math.max(x0,x1)),Math.min(n-1,Math.max(y0,y1)),true))m[y*n+x]=255;return m;}
+function invertMask(m,n){if(!m)return null;const out=new Uint8Array(n*n);for(let i=0;i<out.length;i++)out[i]=255-m[i];return out.some((v)=>v)?out:null;}
+function clearSelected(img,mask){const d=img.data;for(let i=0;i<mask.length;i++)if(mask[i])d[i*4+3]=Math.round((d[i*4+3]*(255-mask[i]))/255);}
+function shift(img,dx,dy){const{width:W,height:H}=img;const out=new Uint8ClampedArray(W*H*4);for(let y=0;y<H;y++){const sy=y-dy;if(sy<0||sy>=H)continue;for(let x=0;x<W;x++){const sx=x-dx;if(sx>=0&&sx<W)out.set(img.data.subarray((sy*W+sx)*4,(sy*W+sx)*4+4),(y*W+x)*4);}}
+img.data.set(out);}
+function flipImage(img,horizontal){const{width:W,height:H,data}=img;const src=new Uint8ClampedArray(data);for(let y=0;y<H;y++){for(let x=0;x<W;x++){const sx=horizontal?W-1-x:x,sy=horizontal?y:H-1-y;data.set(src.subarray((sy*W+sx)*4,(sy*W+sx)*4+4),(y*W+x)*4);}}}
+function outline(img,c,diagonal=false){const{width:W,height:H,data}=img;const solid=(x,y)=>x>=0&&y>=0&&x<W&&y<H&&data[(y*W+x)*4+3]>=128;const add=[];for(let y=0;y<H;y++){for(let x=0;x<W;x++){if(solid(x,y))continue;if(solid(x-1,y)||solid(x+1,y)||solid(x,y-1)||solid(x,y+1)||(diagonal&&(solid(x-1,y-1)||solid(x+1,y-1)||solid(x-1,y+1)||solid(x+1,y+1))))add.push([x,y]);}}
+for(const[x,y]of add)plot(img,x,y,c,'over');return add.length;}
+export{blank,copyImage,rgba,dab,linePoints,rectPoints,ellipsePoints,plot,hexOf,combineMask,fill,shift,rectMask,clearSelected,invertMask,outline,flipImage};

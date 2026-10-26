@@ -1,0 +1,5 @@
+import{formatYearMonth}from"../i18n/dates.js";import{UI_STATE}from"./i18n.js";import{langName}from"../i18n/lang.js";const intlHas=(lang)=>{try{return Intl.DateTimeFormat.supportedLocalesOf([lang]).length>0;}catch{return false;}};const pad2=(n)=>String(n).padStart(2,'0');function fmtDate(iso){const d=new Date(iso);if(Number.isNaN(d.getTime()))return String(iso||'');if(!intlHas(UI_STATE.lang)){return`${d.getDate()} ${formatYearMonth(d.getFullYear(),d.getMonth()+1,UI_STATE.lang,'month')}, ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;}
+try{return new Intl.DateTimeFormat(UI_STATE.lang,{dateStyle:'medium',timeStyle:'short'}).format(d);}catch{return String(iso||'');}}
+function canonLang(code){try{return Intl.getCanonicalLocales(String(code).trim().replace(/_/g,'-'))[0]||null;}catch{return null;}}
+function langLabel(code){try{return langName(code,'native')||code;}catch{return code;}}
+export{canonLang,langLabel,fmtDate};

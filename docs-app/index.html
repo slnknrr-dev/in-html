@@ -1,0 +1,78 @@
+<!doctype html>
+<!-- docs-app/index.html — Docs, the document editor. Unlike the other apps this page is not an empty shell: it
+     declares the editor's fixed regions (top bar, format toolbar, left / stage / right panes, status, overlays) as
+     landmarks with ids, and the shared studio/ editor (started by editor.js) fills each region. The skeleton is static
+     because the studio is shared by several products and expects these ids; the landmarks and labels exist before any
+     JS runs, so assistive technology sees a stable structure.
+     The build (singlefile.js) strips every comment of this file from the artifacts. -->
+<html lang="en" class="ed-is-loading">
+<!-- class="ed-is-loading": a state hook for studio/editor.css while the modules load; studio/boot.js removes it. -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: it must be inside the first 1024 bytes, before any non-ASCII text, or the parser re-decodes. -->
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Docs</title>
+<meta name="description" content="Offline document editor: Markdown import and export, code highlighting, tables, checklists and single-file HTML pages. Everything stays in your browser.">
+<!-- color-scheme + two media-scoped theme-color metas: the browser chrome and native controls match the OS theme
+     before any CSS loads (the colours equal the editor's light and dark panel backgrounds). -->
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#14171c" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='3' y='2' width='26' height='28' rx='5' fill='%232f5fb3'/%3E%3Cpath d='M9 9h14M9 13.5h14M9 18h14M9 22.5h9' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3C/svg%3E">
+<!-- Icon as a data: URI: zero requests, works from file:// and offline builds; '#' is written %23.
+     Cascade order (equal specificity: later wins): ui/base.css tokens and primitives, richtext/richtext.css (the
+     in-place text editing styles), studio/editor.css (the editor layout), then this page's own small rule below. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../richtext/richtext.css">
+<link rel="stylesheet" href="../studio/editor.css">
+<!-- A single page-specific rule, kept inline instead of a one-line stylesheet: one request fewer. studio/canvas.js
+     toggles .ed-noguides on the canvas. The id selector already outranks the theme rules on .dc-page (paper/themes.js);
+     !important additionally covers backgrounds the injected document CSS may set later or with !important, so the
+     toggle always wins. -->
+<style>
+/* Docs canvas: paper page guides follow the stage-bar toggle. */
+#ed-canvas.ed-noguides .dc-page { background-image: none !important; }
+</style>
+</head>
+<body class="ed-shell">
+<noscript><div class="ed-noscript"><p><strong>Docs needs JavaScript.</strong><br>Please enable JavaScript in your browser settings to use the editor. Exported documents are plain pages and open anywhere.</p></div></noscript>
+<!-- Landmarks with English aria-labels as the static default; data-i18n-aria names the dictionary key the studio
+     uses to translate the label after the UI language is known. -->
+<header id="ed-top" role="banner"></header>
+<div id="ed-format" role="toolbar" aria-label="Formatting" data-i18n-aria="aria.format"></div>
+<div id="ed-main">
+  <aside id="ed-left" aria-label="Blocks, outline and files" data-i18n-aria="aria.left"></aside>
+  <section id="ed-stage" aria-label="Page" data-i18n-aria="aria.stage">
+    <div id="ed-stagebar"></div>
+<!-- role=status + aria-live: banners (autosave, import results) are announced without moving focus. -->
+    <div id="ed-banner" role="status" aria-live="polite" hidden></div>
+    <div id="ed-scroll">
+      <div id="ed-canvas"></div>
+      <div id="ed-chrome" role="toolbar" aria-label="Block" data-i18n-aria="aria.chrome" hidden></div>
+      <div id="ed-drop" hidden></div>
+    </div>
+  </section>
+  <aside id="ed-right" aria-label="Properties" data-i18n-aria="aria.right"></aside>
+</div>
+<footer id="ed-status" role="status" aria-live="polite"></footer>
+<!-- Overlay root for dialogs, menus and toasts (ui/overlays.js): outside #ed-main so modal layers stack above it. -->
+<div id="ed-overlays"></div>
+<div id="ed-loading" role="status"><div class="ed-spinner" aria-hidden="true"></div><p data-i18n="app.loading">Loading editor…</p></div>
+<!-- Loading indicator plus a plain (non-module) watchdog script: if the module graph never runs (file:// blocks
+     module imports in most browsers, or the browser is too old for ES modules), window.__edReady is never set and
+     after 9 s the indicator turns into an explanation. Classic script on purpose: it must run exactly where modules
+     cannot. -->
+<script>
+  // Diagnose a module that never starts (e.g. opened via file:// or an old browser).
+  setTimeout(function () {
+    if (window.__edReady) return;
+    var box = document.getElementById('ed-loading');
+    if (!box || box.className.indexOf('ed-load-err') >= 0) return;
+    box.className = 'ed-load-err';
+    box.innerHTML = '<p><strong>The editor could not start.</strong></p><p>Open it through a web server (for example <code>node server.js</code>, then http://127.0.0.1:8080/) in a current Chrome, Edge, Firefox or Safari.</p>';
+  }, 9000);
+</script>
+<!-- type=module: deferred (runs after parsing, so every region exists), strict mode, ES imports of ../ libraries. -->
+<script type="module" src="./editor.js"></script>
+</body>
+</html>

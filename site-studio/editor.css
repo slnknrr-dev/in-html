@@ -1,0 +1,169 @@
+/* editor.css - landing editor: site settings panels that only this product has (configured requests, headers,
+   browser-local endpoint data, checkout field marks). Loaded after ../studio/editor.css. */
+
+/* CONTRACT
+   - Load order (index.html): ../ui/base.css, ../richtext/richtext.css, ../studio/editor.css, ../markdown/gfm.css, then
+     this file. Equal-specificity ties against the shared sheets are therefore won here by source order; nothing below
+     needs to out-specify them.
+   - Namespaces: .ed-* = editor chrome classes shared with the studio vocabulary (ed-on, ed-hint, ed-btn...), so these
+     panels look native; .ss-* = parts only Site Studio has (roles, remote bar, map, SEO, README). Never .lp-*: that is
+     the published page's namespace, styled by the viewer, and must not leak into editor chrome.
+   - Specificity budget: single class (0,1,0) or class + element / class + class (0,1,1 / 0,2,0). One id selector
+     (.ed-pagebar #ed-device) where the studio styles that element by id.
+   - Tokens only for colours that must follow the light / dark theme (--ed-border, --ed-panel, --ed-accent, --ed-ok,
+     --ed-danger... from ui/base.css). Literal colours appear only where the colour is semantic and theme-independent
+     (HTTP method badges, the "live" dot) and always sit on a background they were picked for.
+   - !important: one use (.ed-req-bad), commented there.
+   - Layout primitives: flex columns with gap for lists, CSS grid for aligned multi-column rows; min-width: 0 on flex /
+     grid children wherever text must ellipsize (the default min-width: auto would let long URLs widen the panel). */
+
+/* Site → Requests list (editor-requests.js): one bordered row per request, the main button fills the row. */
+.ed-req-list { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ed-req { display: flex; align-items: center; gap: 2px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel); padding-right: 4px; }
+/* Selected row: border colour plus a 1px inset shadow doubles the stroke without changing the box size (a 2px border
+   would shift the content by a pixel on selection). */
+.ed-req.ed-on { border-color: var(--ed-accent); box-shadow: 0 0 0 1px var(--ed-accent) inset; }
+.ed-req-main { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; padding: 7px 8px; border: 0; background: transparent; text-align: left; }
+.ed-req-info { display: flex; flex-direction: column; min-width: 0; }
+.ed-req-info strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-req-info small { font-family: var(--ed-mono); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* !important is defensive: today .ed-muted (base.css, 0,1,0) loses to this rule by source order anyway, but the flag
+   is set on elements that also carry .ed-muted and the error colour must survive any later, more specific muted rule. */
+.ed-req-bad { color: var(--ed-danger) !important; }
+/* HTTP method badge: fixed semantic colours (REST-tool convention: GET green, POST blue, PUT / PATCH amber, DELETE red),
+   white text on mid-dark fills keeps contrast in both themes. Unknown methods fall back to slate. */
+.ed-req-m { flex: none; min-width: 48px; padding: 2px 6px; border-radius: 4px; font: 600 10.5px/1.4 var(--ed-mono); text-align: center; color: #fff; background: #64748b; }
+.ed-req-m-get { background: #0f766e; }
+.ed-req-m-post { background: #2563eb; }
+.ed-req-m-put, .ed-req-m-patch { background: #b45309; }
+.ed-req-m-delete { background: #b91c1c; }
+.ed-req-ctl .ed-select { flex: 1 1 auto; }
+.ed-headers .ed-label, .ed-local-data .ed-label { display: flex; align-items: center; gap: 6px; }
+.ed-hdr-rows { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 8px; }
+/* Name / value / delete: minmax(0, ...) lets both inputs shrink below their intrinsic size; value gets more room. */
+.ed-hdr-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto; gap: 6px; align-items: center; }
+.ed-hdr-none { margin: 0; }
+.ed-req-test { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--ed-border); }
+.ed-req-test .ed-row { align-items: center; gap: 8px; }
+.ed-req-test .ed-hint { margin: 0; }
+/* :empty hides the result box until a test has run, without a JS-managed hidden attribute. */
+.ed-req-result:empty { display: none; }
+.ed-req-result { margin-top: 8px; padding: 8px 10px; border-radius: var(--ed-radius-sm); border: 1px solid var(--ed-border); background: var(--ed-panel-2); }
+/* color-mix tints the border towards the state colour while staying related to the theme border. */
+.ed-req-result.ed-req-ok { border-color: color-mix(in srgb, var(--ed-ok) 50%, var(--ed-border)); }
+.ed-req-result.ed-req-fail { border-color: color-mix(in srgb, var(--ed-danger) 50%, var(--ed-border)); }
+/* break-all: URLs have no spaces, normal wrapping would overflow the panel. */
+.ed-req-line { font-size: 11.5px; color: var(--ed-muted); word-break: break-all; margin-bottom: 4px; }
+.ed-req-status { display: flex; align-items: center; gap: 6px; margin: 4px 0; font-weight: 600; }
+.ed-req-status .ed-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ed-ok); }
+.ed-req-fail .ed-req-status .ed-dot { background: var(--ed-danger); }
+/* Response preview: capped height with its own scroll; pre-wrap keeps JSON indentation but wraps long lines. */
+.ed-req-body { margin: 4px 0 0; max-height: 220px; overflow: auto; padding: 8px; border-radius: 6px; background: var(--ed-panel); border: 1px solid var(--ed-border); font: 11.5px/1.45 var(--ed-mono); white-space: pre-wrap; word-break: break-all; }
+.ed-local-data { margin-top: 8px; }
+.ed-local-data .ed-btn { margin-top: 6px; }
+.ed-req-mark { color: var(--ed-danger); }
+
+/* Collection block inspector (editor-collection.js): attribute pairs, file rows, filter / range / sort keys. */
+.ed-cl-list { display: flex; flex-direction: column; gap: 6px; }
+.ed-cl-rows { display: flex; flex-direction: column; gap: 6px; }
+.ed-cl-row { display: grid; gap: 6px; align-items: center; }
+.ed-cl-kv { grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr) auto; }
+/* File row: number | attachment select | move buttons on the first line, label and kind placed on the second line by
+   explicit grid-column (the DOM order is n, select, acts, label, kind; auto-placement wraps them into row 2). */
+.ed-cl-file { grid-template-columns: auto minmax(0, 1fr) auto; padding: 6px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel-2); }
+.ed-cl-file .ed-cl-fl { grid-column: 2 / 3; }
+.ed-cl-file .ed-cl-kind { grid-column: 3 / 4; max-width: 9.5em; }
+.ed-cl-n { min-width: 1.4em; color: var(--ed-muted); font-size: 11.5px; text-align: center; font-variant-numeric: tabular-nums; }
+.ed-cl-acts { display: inline-flex; gap: 0; }
+.ed-cl-none { margin: 0; }
+.ed-cl-more { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+/* The suggestion area is emptied by JS when no labels are missing; :empty removes its gap from the flow. */
+.ed-cl-more:empty { display: none; }
+.ed-cl-more .ed-hint { margin: 0 4px 0 0; }
+.ed-cl-add { gap: 6px; flex-wrap: wrap; }
+.ed-cl-keys .ed-cl-gone { text-decoration: line-through; opacity: .7; }
+
+/* Export packages and the check before export (editor-export.js) */
+.ed-bx { display: flex; flex-direction: column; gap: 10px; }
+.ed-bx p { margin: 0; }
+.ed-bx-h { margin: 6px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-muted); }
+.ed-bx-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ed-bx-row { display: flex; align-items: flex-start; gap: 10px; padding: 9px 10px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel-2); }
+/* Warning colour in the "needs configuration" dialog, accent colour in the summary dialog (scoped override below). */
+.ed-bx-ic { flex: none; display: inline-flex; margin-top: 2px; color: var(--ed-warn); }
+.ed-dlg-bx-sum .ed-bx-ic { color: var(--ed-accent); }
+/* overflow-wrap: anywhere lets long endpoint URLs break and also lowers the min-content width of the flex item. */
+.ed-bx-txt { flex: 1; min-width: 0; line-height: 1.45; overflow-wrap: anywhere; }
+.ed-bx-row .ed-btn { flex: none; }
+.ed-bx-eps { width: 100%; border-collapse: collapse; font-size: 13px; }
+.ed-bx-eps td { padding: 4px 8px; border-bottom: 1px solid var(--ed-border); vertical-align: top; }
+.ed-bx-eps td:first-child { white-space: nowrap; color: var(--ed-accent); }
+.ed-bx-cols { margin: 0; padding-inline-start: 18px; font-size: 13px; }
+.ed-bx-info { display: flex; flex-direction: column; gap: 8px; }
+/* File layout report: max-content for paths (never wrapped), the description column takes the rest. */
+.ed-bx-files { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 0; font-size: 12px; }
+.ed-bx-files dt { white-space: nowrap; }
+.ed-bx-files dd { margin: 0; color: var(--ed-muted); }
+.ed-bx-eps-s { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+.ed-bx-eps-s code { font-family: var(--ed-mono); color: var(--ed-accent); }
+
+/* Pages (editor-pages.js): page switcher of the stage bar, Site → Pages list, the address field of a page */
+.ed-pagebar { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; }
+/* The device buttons stay in one row (the stage bar scrolls when narrow; the language tabs shrink first). */
+/* (1,1,0): the studio styles #ed-device by id (studio/editor.css), a class selector could not reach it. Its display:
+   none at <= 760px is untouched, only wrapping is prevented here. */
+.ed-pagebar #ed-device { flex: none; flex-wrap: nowrap; }
+/* Bounded width: page titles can be long, the stage bar must keep room for the device buttons. */
+.ed-page-sel { max-width: 200px; min-width: 110px; height: 30px; padding-block: 0; font-size: 12.5px; }
+@media (max-width: 760px) { .ed-page-sel { max-width: 150px; min-width: 96px; } }
+.ed-pg-list { list-style: none; margin: 4px 0 10px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.ed-pg { display: flex; align-items: center; gap: 2px; padding-right: 4px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel); }
+.ed-pg.ed-on { border-color: var(--ed-accent); box-shadow: 0 0 0 1px var(--ed-accent) inset; }
+.ed-pg-draft .ed-pg-t strong { opacity: .65; font-style: italic; }
+/* A real <button> reset to look like a row: font / colour inherit (buttons do not inherit them by default),
+   text-align: start respects RTL. Focus ring drawn inside (negative offset) because the row clips overflow. */
+.ed-pg-main { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; padding: 7px 8px; border: 0; background: transparent; color: inherit; font: inherit; text-align: start; cursor: pointer; border-radius: var(--ed-radius-sm); }
+.ed-pg-main:hover { background: var(--ed-hover); }
+.ed-pg-main:focus-visible { outline: 2px solid var(--ed-accent); outline-offset: -2px; }
+.ed-pg-main > .ed-ic { flex: none; color: var(--ed-muted); }
+.ed-pg-t { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.ed-pg-t strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-pg-t small { font-size: 11px; color: var(--ed-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Badges may take at most 45% of the row, so the page name always keeps space to ellipsize. */
+.ed-pg-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 3px; flex: none; max-width: 45%; }
+.ed-pg-badges .ed-tag { font-size: 10.5px; padding: 1px 6px; white-space: nowrap; }
+.ed-pg-acts { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.ed-slug { display: flex; align-items: center; gap: 2px; }
+.ed-slug .ed-input { flex: 1 1 auto; min-width: 0; }
+.ed-slug-pre { flex: none; color: var(--ed-muted); font-family: var(--ed-mono); }
+.ed-slug-box .ed-hint { margin-top: 4px; }
+
+/* Site Studio: Site → Accounts (roles table) and the constructor bar of a live site (editor-remote.js). */
+/* Compact (minified-style) rules below are Site Studio specific; same contract applies. */
+.ss-roles{display:grid;gap:6px;margin:0 0 8px}
+.ss-role{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.2fr) minmax(0,1fr) 32px;gap:6px;align-items:center}
+.ss-role-h{font-size:12px;color:var(--ed-muted)}
+/* Remote bar floats above the status bar (42px from the bottom); logical insets (inset-block-end / inline-end) put
+   it bottom-right in LTR and bottom-left in RTL. z-index 60 keeps it above the canvas but below overlays / dialogs of the studio. */
+.ss-rm{position:fixed;inset-block-end:42px;inset-inline-end:14px;z-index:60;display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--ed-border);border-radius:12px;background:var(--ed-panel);box-shadow:0 8px 28px rgba(0,0,0,.18);font-size:13px}
+/* Literal green: a "live / connected" signal, deliberately independent of the theme's accent. */
+.ss-rm-dot{width:9px;height:9px;border-radius:50%;background:#16a34a;box-shadow:0 0 0 3px color-mix(in srgb,#16a34a 25%,transparent)}
+.ss-rm-t{font-weight:600}
+/* Site → Map, Site → SEO (editor-sitemap.js) */
+.ss-map-pic{margin:10px 0;padding:10px;border:1px solid var(--ed-border);border-radius:10px;background:var(--ed-stage);overflow:auto;max-height:520px}
+/* SVG scaled down to the panel width, never up (max-width), centred; height: auto keeps the aspect ratio. */
+.ss-map-pic svg{display:block;max-width:100%;height:auto;margin-inline:auto}
+.ss-map-tools{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 8px}
+.ss-map-src{width:100%;font-size:12px}
+.ss-seo-f{margin:0 0 6px}.ss-seo-f summary{cursor:pointer}
+.ss-seo-pre{max-height:220px;overflow:auto;margin:6px 0;padding:8px;border-radius:8px;background:var(--ed-stage);font-size:11.5px;white-space:pre-wrap;overflow-wrap:anywhere}
+.ss-seo-issues{margin:0;padding-inline-start:18px;font-size:13px}
+/* Site → README (editor-readme.js) */
+/* README panes: one container, three modes by class (ss-rd-split / -preview / -source) set from JS; the inactive pane
+   is hidden by CSS so switching modes does not rebuild the DOM or lose the textarea's caret and scroll. */
+.ss-rd{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.ss-rd-preview{grid-template-columns:1fr}.ss-rd-preview .ss-rd-src{display:none}
+.ss-rd-source{grid-template-columns:1fr}.ss-rd-source .ss-rd-prev{display:none}
+.ss-rd-src{min-height:420px;font-size:12px;resize:vertical}
+.ss-rd-prev{max-height:640px;overflow:auto;padding:12px 16px;border:1px solid var(--ed-border);border-radius:10px;font-size:13px}
+@media (max-width:1100px){.ss-rd{grid-template-columns:1fr}}

@@ -1,0 +1,2 @@
+import{h}from"./dom.js";function downloadBlob(blob,name){const url=URL.createObjectURL(blob);const a=h('a',{href:url,download:name,style:{display:'none'}});document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000);}
+export{downloadBlob};

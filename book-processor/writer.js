@@ -1,0 +1,1100 @@
+// book-processor/writer.js - the writer: drafts kept in IndexedDB (autosaved), and the workspace of a draft:
+// the chapter tree (add, rename, nest, reorder by dragging, the keyboard or a menu, split, merge, duplicate,
+// delete; the same menu opens on right click / long press), the chapter editor (editor.js), the title page, the
+// book's details, the cover (an image or a generated design), images, notes, named styles, the check (book
+// validation plus structural checks of the EPUB and FB2 it writes), preview in the reader, export and saving to
+// the library. The model stays the book/ model throughout; FB2 / EPUB are written only on export.
+import { h, debounce, lsGet, lsSet } from '../ui/dom.js';
+import { t, toast, field, textInput } from '../ui/app.js';
+import { iconEl } from '../ui/icons.js';
+import { confirmDialog, promptDialog, openMenu, layers } from '../ui/overlays.js';
+import { contextMenu } from '../ui/contextmenu.js';
+import { pickFiles, fmtBytes } from '../ui/files.js';
+import { SUGGESTED_LANGS, langLabel, LANG_RE } from '../ui/lang.js';
+import { ED_I18N } from '../ui/i18n.js';
+import { ACCEPT, readBook, writeBook } from '../book/open.js';
+import { blockInlines, blockText, bookStats, collectIds, inlineText, linesText, mapInline, newBook, newSection, parsePersonName, personName, sectionTitle, sniffImage, slug, uuid, walkBlocks, walkSections } from '../book/model.js';
+import { sampleBook } from '../book/sample.js';
+import { FB2_GENRES } from '../book/fb2.js';
+import { COVER_DESIGNS, COVER_PALETTES } from '../book/cover.js';
+import { bookCSS, stylesCSS } from '../book/css.js';
+import { validateBook, checkEpub, checkFB2, checkText } from '../book/validate.js';
+import { uid } from '../util/id.js';
+import { S, authorsText, fmtWhen, genreLabel, isTouch, tLang } from './state.js';
+import { db } from './db.js';
+import { EXPORTS, autoDesign, coverSVGFor, exportBook, imageURLs, raster, saveToLibrary, svgURL } from './io.js';
+import { mountEditor } from './editor.js';
+import { noteDialog, stylesDialog, newBookDialog, eachInline } from './writer-dialogs.js';
+
+let W = null;               // the open writer session
+// SESSION MODEL: `W` is the one open draft (null when the writer is closed). Every async callback re-checks W (or
+// captures `const w = W` and compares later) because the user can leave the writer while a save or a dialog is in
+// flight; writing into a closed session would resurrect it or corrupt the next one.
+export const writer = () => W;
+const PREFS = 'bk-writer';
+const go = (...a) => S.hooks.go(...a);
+
+// --- drafts -------------------------------------------------------------------------------------------
+
+export async function newDraftFrom(book, { libraryId = '' } = {}) {
+  const id = 'd-' + uid();
+  await db.putDraft({ id, book, created: new Date().toISOString(), libraryId, sel: null });
+  return id;
+}
+
+// A new book from the "new book" dialog; chapter names are in the book's language.
+export function templateBook({ title = '', author = '', lang = 'en', template = 'novel' } = {}) {
+  const L = (k, v) => tLang(lang, k, v);
+  const p = () => ({ type: 'p', c: [] });
+  const persons = author ? [parsePersonName(author)] : [];
+  let sections;
+  if (template === 'blank') sections = [newSection('', [p()])];
+  else if (template === 'stories') sections = [1, 2, 3].map((n) => newSection(L('tpl.storyN', { n }), [p()]));
+  else if (template === 'poetry') {
+    sections = [1, 2].map((n) => newSection(L('tpl.poemN', { n }), [{ type: 'poem', title: null, epigraphs: [], stanzas: [{ title: null, subtitle: [], lines: [[], [], [], []] }], authors: [], date: '' }]));
+  } else {
+    const part = newSection(L('tpl.partN', { n: 1 }), []);
+    part.sections = [1, 2, 3].map((n) => newSection(L('tpl.chapterN', { n }), [p()]));
+    sections = [part];
+  }
+  return newBook({
+    meta: { title, lang, authors: persons, docAuthors: persons, genres: [template === 'poetry' ? 'poetry' : 'prose_contemporary'], program: 'in-html book processor' },
+    sections,
+  });
+}
+
+const draftURLs = [];
+let detachGrid = null;
+function draftCover(book) {
+  const im = book.meta.cover && book.images[book.meta.cover];
+  if (im) { const u = URL.createObjectURL(new Blob([im.data], { type: im.type })); draftURLs.push(u); return u; }
+  return svgURL(coverSVGFor(book));
+}
+
+async function renderDrafts(main) {
+  while (draftURLs.length) URL.revokeObjectURL(draftURLs.pop());
+  main.className = 'ap-main bk-main wr-drafts-main';
+  const drafts = (await db.drafts()).sort((a, b) => String(b.updated).localeCompare(String(a.updated)));
+  main.textContent = '';
+  const actions = h('div', { class: 'bk-lib-actions' },
+    h('button', { type: 'button', class: 'ed-btn ed-primary', onclick: createNew }, iconEl('feather'), t('wr.newBook')),
+    h('button', { type: 'button', class: 'ed-btn', onclick: openFileToEdit }, iconEl('upload'), t('wr.openFile')),
+    h('button', { type: 'button', class: 'ed-btn', onclick: startFromSample }, iconEl('sparkle'), t('wr.fromSample')));
+  main.append(h('div', { class: 'bk-lib-head' },
+    h('div', { class: 'bk-lib-title' }, h('h2', {}, t('wr.drafts')), drafts.length ? h('span', { class: 'ed-badge' }, String(drafts.length)) : null), actions));
+  if (!drafts.length) {
+    main.append(h('section', { class: 'bk-empty' },
+      h('div', { class: 'bk-empty-art', html: penArt() }),
+      h('h3', {}, t('wr.emptyTitle')),
+      h('p', { class: 'ap-lead' }, t('wr.emptyText')),
+      h('div', { class: 'ap-row bk-empty-acts' },
+        h('button', { type: 'button', class: 'ed-btn ed-primary', onclick: createNew }, iconEl('feather'), t('wr.newBook')),
+        h('button', { type: 'button', class: 'ed-btn', onclick: openFileToEdit }, iconEl('upload'), t('wr.openFile')))));
+    return;
+  }
+  const grid = h('div', { class: 'bk-list wr-draft-list', role: 'list' });
+  for (const d of drafts) {
+    const b = d.book, st = bookStats(b);
+    grid.append(h('div', { class: 'bk-card wr-draft', role: 'listitem', dataset: { id: d.id } },
+      h('button', { type: 'button', class: 'bk-card-open', 'aria-label': t('wr.openDraft', { title: b.meta.title || t('bk.untitled') }), onclick: () => go('write', d.id) },
+        h('img', { class: 'bk-cover', src: draftCover(b), alt: '', loading: 'lazy' })),
+      h('div', { class: 'bk-card-meta' },
+        h('strong', { class: 'bk-card-title' }, b.meta.title || t('bk.untitled')),
+        authorsText(b) ? h('span', { class: 'bk-card-author' }, authorsText(b)) : null,
+        h('span', { class: 'ed-muted' }, t('wr.draftLine', { words: st.words.toLocaleString(), n: st.sections, when: fmtWhen(d.updated) })),
+        d.libraryId ? h('span', { class: 'bk-fmt' }, t('wr.inLibrary')) : null),
+      h('button', { type: 'button', class: 'ed-iconbtn bk-card-more', title: t('lib.more'), 'aria-label': t('lib.moreFor', { title: b.meta.title }), onclick: (e) => { e.stopPropagation(); openMenu(e.currentTarget, draftItems(d)); } }, iconEl('dots'))));
+  }
+  detachGrid?.();
+  detachGrid = contextMenu(grid, (card) => { const d = drafts.find((x) => x.id === card.dataset.id); return d ? draftItems(d) : null; }, { selector: '.wr-draft' });
+  main.append(grid, h('p', { class: 'bk-storage' }, iconEl('shield'), h('span', {}, t('wr.draftsHint'))));
+}
+
+function draftItems(d) {
+  return [
+    { header: true, label: d.book.meta.title || t('bk.untitled') },
+    { label: t('wr.open'), icon: 'feather', action: () => go('write', d.id) },
+    { label: t('wr.preview'), icon: 'read', action: () => { S.previewBook = d.book; go('read', 'draft:' + d.id); } },
+    { label: t('wr.duplicate'), icon: 'copy', action: async () => { const id = await newDraftFrom(structuredClone(d.book)); toast(t('wr.duplicated'), 'ok'); go('write', id); } },
+    { sep: true },
+    { header: true, label: t('lib.export') },
+    ...EXPORTS.map(([f, label]) => ({ label, icon: 'download', action: () => exportBook(d.book, f).catch((e) => toast(t('err.generic', { msg: e.message }), 'error')) })),
+    { sep: true },
+    { label: t('wr.deleteDraft'), icon: 'trash', danger: true, action: () => deleteDraft(d) },
+  ];
+}
+
+async function deleteDraft(d) {
+  if (!await confirmDialog(t('wr.deleteDraftTitle'), t('wr.deleteDraftText', { title: d.book.meta.title || t('bk.untitled') }), t('dlg.delete'), true)) return false;
+  await db.delDraft(d.id);
+  if (S.lastDraft === d.id) S.lastDraft = '';
+  toast(t('wr.draftDeleted'), 'ok');
+  if (W && W.id === d.id) { W.deleted = true; go('write'); } else if (!W) renderDrafts(document.getElementById('bk-main'));
+  return true;
+}
+
+async function createNew() {
+  const o = await newBookDialog();
+  if (!o) return;
+  const id = await newDraftFrom(templateBook(o));
+  go('write', id);
+}
+
+async function openFileToEdit() {
+  const files = await pickFiles({ accept: ACCEPT });
+  if (!files.length) return;
+  try {
+    const { book } = await readBook(new Uint8Array(await files[0].arrayBuffer()), files[0].name);
+    const id = await newDraftFrom(book);
+    toast(t('wr.opened', { title: book.meta.title || files[0].name }), 'ok');
+    go('write', id);
+  } catch (e) { toast(t('lib.importFail', { name: files[0].name, msg: e.message }), 'error'); }
+}
+
+async function startFromSample() {
+  const id = await newDraftFrom(sampleBook());
+  go('write', id);
+}
+
+// --- open / close -------------------------------------------------------------------------------------
+
+export async function openWriter(main, id) {
+  if (!id) { document.body.classList.remove('bk-writing'); return renderDrafts(main); }
+  const rec = await db.getDraft(id);
+  if (!rec) { toast(t('wr.missing'), 'error'); S.lastDraft = ''; go('write'); return; }
+  W = {
+    id, rec, book: rec.book, imgs: imageURLs(rec.book), sel: null, ed: null, el: {}, off: [], dirty: false, saving: false,
+    side: lsGet(PREFS, {}).side !== false,
+  };
+  S.writer = W;
+  Object.assign(W, { changed, saveNow, addImage, addNote, refreshStyles, setCover, goToId });
+  document.body.classList.add('bk-writing');
+  build(main);
+  bind();
+  const want = S.writerSelect || rec.sel;
+  S.writerSelect = null;
+  show(want && (want.kind !== 'section' || locate(want.id)) ? want : firstText());
+}
+
+// Order matters: destroy the editor (flushes its pending read-back into the model), then save, then detach
+// listeners and revoke image URLs; revoking first would break images still referenced by the last render.
+export async function closeWriter() {
+  if (!W) return;
+  const w = W;
+  try { w.ed?.destroy(); } catch (e) { console.error(e); }
+  w.ed = null;
+  if (!w.deleted) await saveNow();
+  for (const off of w.off) off();
+  w.detachTree?.();
+  w.imgs.revoke();
+  document.body.classList.remove('bk-writing');
+  W = null;
+  S.writer = null;
+}
+
+// --- session API (used by editor.js and the dialogs) --------------------------------------------------
+
+// Autosave 1.2 s after the last change: frequent enough that a crash loses a sentence, rare enough that IndexedDB is
+// not rewritten (the whole book is one record) on every keystroke. Side-panel repaints are debounced separately
+// because word counts per chapter are cheap but not free.
+const saveSoon = debounce(() => saveNow(), 1200);
+const paintSideSoon = debounce(() => { if (W) paintSide(); }, 300);
+
+function changed(what = {}) {
+  if (!W) return;
+  W.dirty = true;
+  paintStatus();
+  saveSoon();
+  if (what.structure) paintSide();
+  else if (what.titles || what.meta || what.notes) paintSideSoon();
+  if (what.meta) paintBookTitle();
+}
+
+// dirty is cleared before the write and restored on failure: edits made during the await mark it dirty again and
+// trigger the next save, so nothing typed during a save is lost.
+async function saveNow(explicit = false) {
+  if (!W || W.deleted) return;
+  const w = W;
+  saveSoon.cancel();
+  w.ed?.flush();
+  saveSoon.cancel();
+  if (!w.dirty && !explicit) return;
+  w.book.meta.modified = new Date().toISOString();
+  w.dirty = false;
+  w.saving = true;
+  paintStatus();
+  try {
+    await db.putDraft({ id: w.id, book: w.book, created: w.rec.created, libraryId: w.rec.libraryId || '', sel: w.sel });
+    w.savedAt = Date.now();
+    if (explicit) toast(t('wr.savedToast'), 'ok');
+  } catch (e) {
+    w.dirty = true;
+    toast(t('wr.saveFail', { msg: e.message }), 'error');
+  } finally {
+    w.saving = false;
+    if (W === w) paintStatus();
+  }
+}
+
+// Image ids are readable slugs of the file name (they become file names inside EPUB / FB2 binaries), made unique
+// with -2, -3 suffixes.
+function addImage(data, type, name = 'image') {
+  const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'image/svg+xml': 'svg' }[type] || 'img';
+  const base = slug(String(name).replace(/\.[a-z0-9]+$/i, '')) || 'image';
+  let id = base + '.' + ext;
+  for (let i = 2; W.book.images[id]; i++) id = `${base}-${i}.${ext}`;
+  W.book.images[id] = { type, data, name: String(name) };
+  changed({});
+  return id;
+}
+
+function addNote() {
+  const taken = collectIds(W.book);
+  let n = W.book.notes.length + 1, id = 'n' + n;
+  while (taken.has(id)) id = 'n' + ++n;
+  const numeric = W.book.notes.filter((x) => /^\d+$/.test(inlineText(x.label))).map((x) => +inlineText(x.label));
+  const label = String(numeric.length ? Math.max(...numeric) + 1 : 1);
+  const note = { id, kind: 'note', label: [label], blocks: [{ type: 'p', c: [] }] };
+  W.book.notes.push(note);
+  changed({ notes: true });
+  return note;
+}
+
+function refreshStyles() {
+  if (!W) return;
+  W.el.style.textContent = bookCSS({ scope: '.bk-text' }) + stylesCSS(W.book.styles, { scope: '.bk-text' });
+  W.ed?.rerender();
+}
+
+function setCover(id) {
+  if (!W.book.images[id]) return;
+  W.book.meta.cover = id;
+  W.book.meta.coverDesign = null;
+  changed({ meta: true });
+  toast(t('wr.cover.set'), 'ok');
+}
+
+// Internal links: a section, a block inside a section, or a note.
+function goToId(id) {
+  if (locate(id)) return show({ kind: 'section', id });
+  if (W.book.notes.some((n) => n.id === id)) return show({ kind: 'notes', focus: id });
+  let owner = null;
+  walkBlocks(W.book, (b, o) => { if (!owner && b.id === id) owner = o; });
+  if (owner && owner.id && locate(owner.id)) show({ kind: 'section', id: owner.id });
+  else if (owner === 'front') show({ kind: 'front' });
+}
+
+// --- workspace ----------------------------------------------------------------------------------------
+
+function ibtn(icon, label, onclick, cls = '') {
+  return h('button', { type: 'button', class: 'ed-iconbtn wr-ibtn ' + cls, title: label, 'aria-label': label, onclick }, iconEl(icon));
+}
+function tbtn(icon, label, onclick, cls = '') {
+  return h('button', { type: 'button', class: 'ed-btn wr-tbtn ' + cls, title: label, onclick }, iconEl(icon), h('span', { class: 'wr-tbtn-l' }, label));
+}
+
+function build(main) {
+  const el = W.el;
+  main.className = 'bk-main wr-main';
+  main.textContent = '';
+  el.style = h('style', {}, bookCSS({ scope: '.bk-text' }) + stylesCSS(W.book.styles, { scope: '.bk-text' }));
+  el.title = h('strong', { class: 'wr-booktitle' });
+  el.status = h('span', { class: 'wr-status', role: 'status', 'aria-live': 'polite' });
+  el.side = h('aside', { class: 'wr-side', id: 'wr-side', 'aria-label': t('wr.side') });
+  el.body = h('section', { class: 'wr-body', 'aria-live': 'off' });
+  el.scrim = h('div', { class: 'wr-scrim', onclick: () => toggleSide(false) });
+  el.sideBtn = ibtn('panelLeft', t('wr.side'), () => toggleSide(), 'wr-side-btn');
+  el.sideBtn.setAttribute('aria-controls', 'wr-side');
+  el.bar = h('header', { class: 'wr-bar' },
+    ibtn('arrowLeft', t('wr.toDrafts'), () => go('write')),
+    el.sideBtn,
+    h('div', { class: 'wr-titles' }, el.title, el.status),
+    h('span', { class: 'ed-spacer' }),
+    tbtn('read', t('wr.preview'), preview),
+    tbtn('check', t('wr.check'), () => show({ kind: 'check' }), 'wr-wide-only'),
+    tbtn('download', t('wr.export'), (e) => openMenu(e.currentTarget, exportItems())),
+    tbtn('library', t('wr.toLibrary'), saveToLib, 'ed-primary wr-wide-only'),
+    ibtn('dots', t('wr.more'), (e) => openMenu(e.currentTarget, moreItems())));
+  el.root = h('div', { class: 'wr' + (W.side ? '' : ' wr-side-closed') }, el.style, el.bar, h('div', { class: 'wr-grid' }, el.side, el.body), el.scrim);
+  main.append(el.root);
+  paintBookTitle();
+  paintStatus();
+  paintSide();
+}
+
+function paintBookTitle() {
+  if (!W) return;
+  W.el.title.textContent = W.book.meta.title || t('bk.untitled');
+}
+
+function paintStatus() {
+  if (!W || !W.el.status) return;
+  const s = W.el.status;
+  s.textContent = W.saving ? t('wr.saving') : W.dirty ? t('wr.unsaved') : W.savedAt ? t('wr.saved') : t('wr.draft');
+  s.dataset.state = W.saving ? 'saving' : W.dirty ? 'dirty' : 'saved';
+}
+
+const narrow = () => window.innerWidth < 900;
+function toggleSide(open) {
+  const root = W.el.root;
+  if (narrow()) {
+    const v = open ?? !root.classList.contains('wr-side-open');
+    root.classList.toggle('wr-side-open', v);
+    W.el.sideBtn.setAttribute('aria-expanded', String(v));
+    if (v) requestAnimationFrame(() => W.el.side.querySelector('.ed-on, button')?.focus({ preventScroll: true }));
+    return;
+  }
+  W.side = open ?? root.classList.contains('wr-side-closed');
+  root.classList.toggle('wr-side-closed', !W.side);
+  W.el.sideBtn.setAttribute('aria-expanded', String(W.side));
+  lsSet(PREFS, { ...lsGet(PREFS, {}), side: W.side });
+}
+
+// --- side panel: book entries, the chapter tree, tools ------------------------------------------------
+
+function secWords(s) {
+  let n = 0;
+  for (const b of s.blocks) n += (blockText(b).match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) || []).length;
+  return n;
+}
+
+function navItem(sel, icon, label, extra = null) {
+  const on = W.sel && W.sel.kind === sel.kind && sel.kind !== 'section';
+  return h('button', { type: 'button', class: 'wr-navi' + (on ? ' ed-on' : ''), 'aria-current': on ? 'page' : null, onclick: () => show(sel) }, iconEl(icon), h('span', { class: 'wr-navi-l' }, label), extra);
+}
+
+function paintSide() {
+  if (!W) return;
+  const side = W.el.side;
+  const keepScroll = side.scrollTop;
+  const book = W.book;
+  side.textContent = '';
+  const st = bookStats(book);
+  const issues = W.issues || null;
+  side.append(
+    h('div', { class: 'wr-side-g' },
+      h('div', { class: 'wr-side-h' }, t('wr.bookGroup')),
+      navItem({ kind: 'meta' }, 'info', t('wr.meta')),
+      navItem({ kind: 'cover' }, 'image', t('wr.cover')),
+      navItem({ kind: 'front' }, 'book', t('wr.front'))),
+    h('div', { class: 'wr-side-g wr-side-tree' },
+      h('div', { class: 'wr-side-h' }, h('span', {}, t('wr.chapters')), h('span', { class: 'ed-spacer' }),
+        ibtn('plus', t('wr.addChapter'), () => addSection('end'), 'ed-sm')),
+      tree()),
+    h('div', { class: 'wr-side-g' },
+      h('div', { class: 'wr-side-h' }, t('wr.toolsGroup')),
+      navItem({ kind: 'notes' }, 'footnote', t('wr.notes'), book.notes.length ? h('span', { class: 'ed-badge' }, String(book.notes.length)) : null),
+      navItem({ kind: 'images' }, 'gallery', t('wr.images'), Object.keys(book.images).length ? h('span', { class: 'ed-badge' }, String(Object.keys(book.images).length)) : null),
+      h('button', { type: 'button', class: 'wr-navi', onclick: openStyles }, iconEl('palette'), h('span', { class: 'wr-navi-l' }, t('wr.styles')), book.styles.length ? h('span', { class: 'ed-badge' }, String(book.styles.length)) : null),
+      navItem({ kind: 'check' }, 'check', t('wr.check'), issues && issues.errors ? h('span', { class: 'ed-badge wr-badge-err' }, String(issues.errors)) : null)),
+    h('p', { class: 'wr-side-stats' }, t('wr.stats', { words: st.words.toLocaleString(), n: st.sections, min: st.minutes })));
+  side.scrollTop = keepScroll;
+}
+
+function tree() {
+  const list = h('div', { class: 'wr-tree', role: 'tree', 'aria-label': t('wr.chapters') });
+  const cur = W.sel && W.sel.kind === 'section' ? W.sel.id : null;
+  let any = false;
+  walkSections(W.book.sections, (s, depth) => {
+    any = true;
+    const title = sectionTitle(s);
+    const on = s.id === cur;
+    list.append(h('div', {
+      class: 'wr-node' + (on ? ' ed-on' : '') + (title ? '' : ' wr-untitled'), role: 'treeitem', tabindex: on || (!cur && !list.children.length) ? '0' : '-1',
+      'aria-level': String(depth + 1), 'aria-selected': String(on), dataset: { id: s.id }, draggable: isTouch() ? null : 'true', style: { '--d': depth },
+      onclick: (e) => { if (!e.target.closest('.wr-node-more')) show({ kind: 'section', id: s.id }); },
+    },
+    h('span', { class: 'wr-node-t' }, title || t('wr.untitled')),
+    h('span', { class: 'wr-node-n' }, compact(secWords(s))),
+    h('button', { type: 'button', class: 'ed-iconbtn wr-node-more', tabindex: '-1', 'aria-label': t('wr.chMenu', { title: title || t('wr.untitled') }), onclick: (e) => { e.stopPropagation(); openMenu(e.currentTarget, sectionItems(s.id)); } }, iconEl('dots'))));
+  });
+  if (!any) list.append(h('p', { class: 'ed-hint wr-tree-empty' }, t('wr.noChapters')));
+  list.append(h('button', { type: 'button', class: 'wr-add', onclick: () => addSection('end') }, iconEl('plus'), t('wr.addChapter')));
+  bindTree(list);
+  return list;
+}
+const compact = (n) => (n >= 10000 ? Math.round(n / 1000) + 'k' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(n));
+
+// The chapter tree follows the WAI-ARIA tree pattern: roving tabindex (one row tabbable, arrows move focus), Enter
+// opens, F2 renames, Delete removes, Alt+arrows reorder and re-nest, so the whole structure is editable without a
+// mouse; drag and drop is an alternative, not the only way.
+function bindTree(list) {
+  W.detachTree?.();
+  W.detachTree = contextMenu(list, (row) => sectionItems(row.dataset.id), { selector: '.wr-node' });
+  list.addEventListener('keydown', (e) => {
+    const row = e.target.closest && e.target.closest('.wr-node');
+    if (!row) return;
+    const rows = [...list.querySelectorAll('.wr-node')];
+    const i = rows.indexOf(row);
+    const id = row.dataset.id;
+    const focus = (r) => { if (!r) return; for (const x of rows) x.tabIndex = -1; r.tabIndex = 0; r.focus(); };
+    if (e.altKey && e.key === 'ArrowUp') { e.preventDefault(); moveSection(id, -1); }
+    else if (e.altKey && e.key === 'ArrowDown') { e.preventDefault(); moveSection(id, 1); }
+    else if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); indent(id); }
+    else if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); outdent(id); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); focus(rows[i + 1]); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); focus(rows[i - 1]); }
+    else if (e.key === 'Home') { e.preventDefault(); focus(rows[0]); }
+    else if (e.key === 'End') { e.preventDefault(); focus(rows[rows.length - 1]); }
+    else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show({ kind: 'section', id }); }
+    else if (e.key === 'F2') { e.preventDefault(); rename(id); }
+    else if (e.key === 'Delete') { e.preventDefault(); removeSection(id); }
+    else if (e.key === 'Insert') { e.preventDefault(); addSection('after', id); }
+  });
+  // Drag and drop: the upper quarter of a row drops before it, the lower quarter after it, the middle inside it.
+  let drag = null;
+  // Drop zones: top 28% before, bottom 28% after, the middle inside. A wide middle makes nesting easy to hit.
+  const zone = (row, e) => { const r = row.getBoundingClientRect(); const y = (e.clientY - r.top) / r.height; return y < 0.28 ? 'before' : y > 0.72 ? 'after' : 'inside'; };
+  const clear = () => { for (const x of list.querySelectorAll('.wr-drop-before, .wr-drop-after, .wr-drop-inside')) x.classList.remove('wr-drop-before', 'wr-drop-after', 'wr-drop-inside'); };
+  list.addEventListener('dragstart', (e) => {
+    const row = e.target.closest('.wr-node');
+    if (!row) return;
+    drag = row.dataset.id;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/x-book-section', drag);
+    row.classList.add('wr-dragging');
+  });
+  list.addEventListener('dragend', () => { drag = null; clear(); for (const x of list.querySelectorAll('.wr-dragging')) x.classList.remove('wr-dragging'); });
+  list.addEventListener('dragover', (e) => {
+    const row = e.target.closest('.wr-node');
+    if (!drag || !row) return;
+    const src = locate(drag);
+    // A section cannot be dropped into itself or its descendants (that would detach a cycle from the tree); not calling
+    // preventDefault makes the browser show the "no drop" cursor.
+    if (!src || containsId(src.sec, row.dataset.id)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    clear();
+    row.classList.add('wr-drop-' + zone(row, e));
+  });
+  list.addEventListener('dragleave', (e) => { if (!list.contains(e.relatedTarget)) clear(); });
+  list.addEventListener('drop', (e) => {
+    const row = e.target.closest('.wr-node');
+    if (!drag || !row) return;
+    e.preventDefault();
+    const z = zone(row, e);
+    const id = drag;
+    drag = null;
+    clear();
+    moveTo(id, row.dataset.id, z);
+  });
+}
+
+// --- tree operations ----------------------------------------------------------------------------------
+
+function locate(id, list = W.book.sections, parent = null, depth = 0) {
+  for (let i = 0; i < list.length; i++) {
+    const s = list[i];
+    if (s.id === id) return { sec: s, list, i, parent, depth };
+    const r = locate(id, s.sections, s, depth + 1);
+    if (r) return r;
+  }
+  return null;
+}
+// The first section with text of its own (a part that only holds chapters is skipped), else the details.
+function firstText() {
+  let f = null;
+  walkSections(W.book.sections, (s) => { if (!f && (s.blocks.length || !s.sections.length)) f = s; return !f; });
+  return f ? { kind: 'section', id: f.id } : { kind: 'meta' };
+}
+const containsId = (sec, id) => sec.id === id || sec.sections.some((x) => containsId(x, id));
+
+// Runs a structural change: the open editor is flushed first and re-rendered when its section changed.
+// Every tree operation runs through here: flush the editor first (its pending text belongs to the old structure),
+// apply, mark changed, and move the selection away if the open section no longer exists.
+function structural(fn, { reopen = false } = {}) {
+  W.ed?.flush();
+  const r = fn();
+  if (r === false) return;
+  changed({ structure: true });
+  if (W.sel && W.sel.kind === 'section' && !locate(W.sel.id)) show(firstText()); else if (reopen && W.ed) W.ed.rerender();
+  return r;
+}
+
+function sectionItems(id) {
+  const loc = locate(id);
+  if (!loc) return null;
+  const s = loc.sec;
+  const open = W.sel && W.sel.kind === 'section' && W.sel.id === id;
+  const next = loc.list[loc.i + 1];
+  return [
+    { header: true, label: sectionTitle(s) || t('wr.untitled') },
+    { label: t('wr.ch.open'), icon: 'edit', action: () => show({ kind: 'section', id }) },
+    { label: t('wr.ch.rename'), icon: 'type', kbd: 'F2', action: () => rename(id) },
+    { sep: true },
+    { label: t('wr.ch.addAfter'), icon: 'plus', kbd: 'Ins', action: () => addSection('after', id) },
+    { label: t('wr.ch.addChild'), icon: 'addChild', action: () => addSection('child', id) },
+    { label: t('wr.ch.duplicate'), icon: 'copy', action: () => duplicate(id) },
+    { sep: true },
+    { label: t('wr.ch.up'), icon: 'up', kbd: 'Alt+↑', disabled: loc.i === 0, action: () => moveSection(id, -1) },
+    { label: t('wr.ch.down'), icon: 'down', kbd: 'Alt+↓', disabled: loc.i === loc.list.length - 1, action: () => moveSection(id, 1) },
+    { label: t('wr.ch.indent'), icon: 'indent', kbd: 'Alt+→', disabled: loc.i === 0, action: () => indent(id) },
+    { label: t('wr.ch.outdent'), icon: 'outdent', kbd: 'Alt+←', disabled: !loc.parent, action: () => outdent(id) },
+    { sep: true },
+    { label: t('wr.ch.split'), icon: 'scissors', disabled: !(open && W.ed && W.ed.hasCaret()), action: () => splitSection(id) },
+    { label: t('wr.ch.merge'), icon: 'layers', disabled: !next || s.sections.length > 0, action: () => mergeNext(id) },
+    { sep: true },
+    { label: t('wr.ch.delete'), icon: 'trash', danger: true, kbd: 'Del', action: () => removeSection(id) },
+  ];
+}
+
+function addSection(mode, refId = null) {
+  const book = W.book;
+  const L = (k, v) => tLang(book.meta.lang, k, v);
+  const loc = refId ? locate(refId) : null;
+  let sec;
+  structural(() => {
+    if (mode === 'child' && loc) {
+      sec = newSection(L('tpl.sectionN', { n: loc.sec.sections.length + 1 }), [{ type: 'p', c: [] }]);
+      loc.sec.sections.push(sec);
+    } else {
+      const list = loc ? loc.list : book.sections;
+      const depth = loc ? loc.depth : 0;
+      const n = list.length + 1;
+      sec = newSection(depth === 0 && list.some((x) => x.sections.length) ? L('tpl.partN', { n }) : L('tpl.chapterN', { n }), [{ type: 'p', c: [] }]);
+      if (mode === 'after' && loc) list.splice(loc.i + 1, 0, sec); else list.push(sec);
+    }
+  });
+  show({ kind: 'section', id: sec.id }, { selectTitle: true });
+}
+
+async function rename(id) {
+  const loc = locate(id);
+  if (!loc) return;
+  const plain = loc.sec.title ? linesText(loc.sec.title, ' / ') : '';
+  const v = await promptDialog(t('wr.ch.rename'), t('wr.ch.title'), plain);
+  if (v == null || v === plain) return;
+  structural(() => { loc.sec.title = v ? v.split(/\s+\/\s+/).map((l) => [l]) : null; }, { reopen: true });
+}
+
+function moveSection(id, dir) {
+  const loc = locate(id);
+  if (!loc) return;
+  const j = loc.i + dir;
+  if (j < 0 || j >= loc.list.length) return;
+  structural(() => { const [s] = loc.list.splice(loc.i, 1); loc.list.splice(j, 0, s); });
+  focusRow(id);
+}
+
+function indent(id) {
+  const loc = locate(id);
+  if (!loc || loc.i === 0) return;
+  structural(() => { const [s] = loc.list.splice(loc.i, 1); loc.list[loc.i - 1].sections.push(s); });
+  focusRow(id);
+}
+
+function outdent(id) {
+  const loc = locate(id);
+  if (!loc || !loc.parent) return;
+  const ploc = locate(loc.parent.id);
+  structural(() => { const [s] = loc.list.splice(loc.i, 1); ploc.list.splice(ploc.i + 1, 0, s); });
+  focusRow(id);
+}
+
+function moveTo(id, targetId, where) {
+  if (id === targetId) return;
+  const src = locate(id);
+  if (!src || containsId(src.sec, targetId)) return;
+  structural(() => {
+    // The target is located again after removal: removing the source can shift the target's index in the same list.
+    const [s] = src.list.splice(src.i, 1);
+    const dst = locate(targetId);
+    if (where === 'inside') dst.sec.sections.push(s);
+    else dst.list.splice(dst.i + (where === 'after' ? 1 : 0), 0, s);
+  });
+  focusRow(id);
+}
+
+function focusRow(id) {
+  requestAnimationFrame(() => {
+    const row = W && W.el.side.querySelector(`.wr-node[data-id="${CSS.escape(id)}"]`);
+    if (!row) return;
+    for (const x of W.el.side.querySelectorAll('.wr-node')) x.tabIndex = -1;
+    row.tabIndex = 0;
+    row.focus({ preventScroll: false });
+  });
+}
+
+function duplicate(id) {
+  const loc = locate(id);
+  if (!loc) return;
+  const copy = structuredClone(loc.sec);
+  const fresh = (s) => {
+    s.id = 's-' + uid();
+    const strip = (b) => { delete b.id; for (const x of b.blocks || []) strip(x); for (const x of b.epigraphs || []) strip(x); for (const it of b.items || []) it.forEach(strip); };
+    s.blocks.forEach(strip);
+    s.sections.forEach(fresh);
+  };
+  fresh(copy);
+  if (copy.title) copy.title = [[...copy.title[0], ' ', t('wr.copySuffix')], ...copy.title.slice(1)];
+  structural(() => { loc.list.splice(loc.i + 1, 0, copy); });
+  show({ kind: 'section', id: copy.id });
+}
+
+async function removeSection(id) {
+  const loc = locate(id);
+  if (!loc) return;
+  const s = loc.sec;
+  let words = 0, subs = 0;
+  walkSections([s], (x) => { words += secWords(x); subs++; });
+  const title = sectionTitle(s) || t('wr.untitled');
+  if ((words > 0 || subs > 1) && !await confirmDialog(t('wr.ch.deleteTitle'), t(subs > 1 ? 'wr.ch.deleteTextSubs' : 'wr.ch.deleteText', { title, words: words.toLocaleString(), n: subs - 1 }), t('dlg.delete'), true)) return;
+  const at = { list: loc.list, i: loc.i };
+  structural(() => { loc.list.splice(loc.i, 1); });
+  toast(t('wr.ch.deleted', { title }), 'ok', { label: t('dlg.undo'), fn: () => { if (!W) return; structural(() => { at.list.splice(Math.min(at.i, at.list.length), 0, s); }); show({ kind: 'section', id: s.id }); } });
+}
+
+function splitSection(id) {
+  const loc = locate(id);
+  if (!loc || !W.ed) return;
+  const parts = W.ed.splitAtCaret();
+  if (!parts) { toast(t('wr.ch.splitHint'), 'info'); return; }
+  const s = loc.sec;
+  const L = (k, v) => tLang(W.book.meta.lang, k, v);
+  const ns = newSection(L('tpl.chapterN', { n: loc.list.length + 1 }), parts.after);
+  // The subsections follow the moved text so the reading order stays the same.
+  ns.sections = s.sections;
+  structural(() => { s.blocks = parts.before; s.sections = []; loc.list.splice(loc.i + 1, 0, ns); }, { reopen: true });
+  show({ kind: 'section', id: ns.id }, { selectTitle: true });
+  toast(t('wr.ch.splitDone'), 'ok');
+}
+
+function mergeNext(id) {
+  const loc = locate(id);
+  if (!loc) return;
+  const s = loc.sec, next = loc.list[loc.i + 1];
+  if (!next || s.sections.length) return;
+  structural(() => {
+    // The next section's title survives as a subtitle.
+    if (next.title) s.blocks.push({ type: 'subtitle', c: next.title.flatMap((l, i) => (i ? [{ t: 'br' }, ...l] : l)) });
+    s.blocks.push(...next.blocks);
+    s.sections = next.sections;
+    loc.list.splice(loc.i + 1, 1);
+  }, { reopen: true });
+  toast(t('wr.ch.merged'), 'ok');
+}
+
+// --- panes --------------------------------------------------------------------------------------------
+
+function show(sel, opts = {}) {
+  if (!W) return;
+  try { W.ed?.destroy(); } catch (e) { console.error(e); }
+  W.ed = null;
+  const body = W.el.body;
+  body.textContent = '';
+  body.scrollTop = 0;
+  if (sel.kind === 'section' && !locate(sel.id)) sel = { kind: 'meta' };
+  W.sel = sel;
+  body.dataset.pane = sel.kind;
+  if (sel.kind === 'section') {
+    const loc = locate(sel.id);
+    W.ed = mountEditor(body, W, { kind: 'section', sec: loc.sec });
+    body.querySelector('.wr-page')?.prepend(crumbs(loc));
+    if (opts.selectTitle) requestAnimationFrame(() => { if (!W || !W.ed) return; W.ed.focusTitle(); const r = document.createRange(); r.selectNodeContents(W.ed.el.titleEl); getSelection().removeAllRanges(); getSelection().addRange(r); });
+    else if (!isTouch()) requestAnimationFrame(() => W && W.ed && W.ed.focus());
+  } else if (sel.kind === 'front') W.ed = mountEditor(body, W, { kind: 'front' });
+  else if (sel.kind === 'meta') metaPane(body, sel.focus);
+  else if (sel.kind === 'cover') coverPane(body);
+  else if (sel.kind === 'notes') notesPane(body, sel.focus);
+  else if (sel.kind === 'images') imagesPane(body, sel.focus);
+  else if (sel.kind === 'check') checkPane(body);
+  paintSide();
+  if (narrow()) toggleSide(false);
+}
+
+function crumbs(loc) {
+  const path = [];
+  let p = loc.parent;
+  while (p) { path.unshift(p); const l = locate(p.id); p = l && l.parent; }
+  if (!path.length) return null;
+  return h('nav', { class: 'wr-crumbs', 'aria-label': t('wr.path') }, path.map((s) => h('button', { type: 'button', class: 'wr-crumb', onclick: () => show({ kind: 'section', id: s.id }) }, sectionTitle(s) || t('wr.untitled'))));
+}
+
+function pane(host, title, lead = '') {
+  const el = h('div', { class: 'wr-pane' });
+  el.append(h('div', { class: 'wr-pane-head' }, h('h2', {}, title), lead ? h('p', { class: 'ap-lead' }, lead) : null));
+  host.append(h('div', { class: 'wr-pane-scroll' }, el));
+  return el;
+}
+const card = (title, ...kids) => h('section', { class: 'ap-card wr-card' }, title ? h('h3', { class: 'ap-card-h' }, title) : null, ...kids);
+
+// Book details.
+function metaPane(host, focus) {
+  const m = W.book.meta;
+  const el = pane(host, t('wr.meta'), t('wr.meta.lead'));
+  const set = (k) => (v) => { m[k] = v; changed({ meta: true }); };
+  const text = (k, attrs = {}) => { const i = textInput(m[k], set(k), { spellcheck: 'true', ...attrs }); i.dataset.meta = k; return i; };
+  const persons = (k) => {
+    const wrap = h('div', { class: 'wr-persons', dataset: { meta: k } });
+    const paint = () => {
+      wrap.textContent = '';
+      m[k].forEach((p, i) => {
+        const inp = h('input', { type: 'text', class: 'ed-input', value: personName(p), placeholder: t('wr.meta.personPh'), autocomplete: 'off', 'aria-label': t('wr.meta.person', { n: i + 1 }) });
+        inp.addEventListener('input', () => { m[k][i] = parsePersonName(inp.value); changed({ meta: true }); });
+        wrap.append(h('div', { class: 'wr-person' }, inp, ibtn('close', t('wr.meta.removePerson'), () => { m[k].splice(i, 1); changed({ meta: true }); paint(); })));
+      });
+      wrap.append(h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => { m[k].push({ first: '', middle: '', last: '', nick: '' }); paint(); wrap.querySelector('.wr-person:last-of-type input')?.focus(); } }, iconEl('plus'), t(k === 'authors' ? 'wr.meta.addAuthor' : 'wr.meta.addTranslator')));
+    };
+    paint();
+    return wrap;
+  };
+  // Language with a live name, and a datalist of common languages.
+  const langHint = h('div', { class: 'ed-hint' });
+  const lang = text('lang', { spellcheck: 'false', list: 'wr-meta-langs', maxlength: 35, autocomplete: 'off' });
+  const paintLang = () => { const ok = LANG_RE.test(m.lang); langHint.textContent = ok ? langLabel(m.lang) : t('wr.meta.badLang'); langHint.classList.toggle('ed-hint-warn', !ok); };
+  lang.addEventListener('input', paintLang);
+  paintLang();
+  const langs = h('datalist', { id: 'wr-meta-langs' }, [...new Set([...SUGGESTED_LANGS, 'pl', 'it', 'pt', 'cs', 'be', 'kk', 'hy', 'tr', 'ja', 'zh'])].map((l) => h('option', { value: l }, langLabel(l))));
+  // Series.
+  const series = m.series[0] || { name: '', number: '' };
+  const sName = h('input', { type: 'text', class: 'ed-input', value: series.name, dataset: { meta: 'series' } });
+  const sNum = h('input', { type: 'text', class: 'ed-input ed-num', value: series.number, inputmode: 'numeric', maxlength: 10, 'aria-label': t('wr.meta.seriesNo') });
+  const setSeries = () => { const name = sName.value.trim(); m.series = name ? [{ name, number: sNum.value.trim() }, ...m.series.slice(1)] : m.series.slice(1); changed({ meta: true }); };
+  sName.addEventListener('input', setSeries);
+  sNum.addEventListener('input', setSeries);
+  // Annotation: paragraphs separated by empty lines.
+  const ann = h('textarea', { class: 'ed-input ed-textarea wr-ann', rows: 5, spellcheck: 'true', dataset: { meta: 'annotation' } }, m.annotation.map((b) => blockText(b)).join('\n\n'));
+  ann.addEventListener('input', () => { m.annotation = ann.value.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean).map((x) => ({ type: 'p', c: [x.replace(/\s*\n\s*/g, ' ')] })); changed({ meta: true }); });
+  // Genres: chips and a picker.
+  const genres = new Map(FB2_GENRES);
+  const gWrap = h('div', { class: 'wr-genres', dataset: { meta: 'genres' } });
+  const paintGenres = () => {
+    gWrap.textContent = '';
+    const chips = h('div', { class: 'ed-chips' }, m.genres.map((g) => h('span', { class: 'ed-tag' }, genreLabel(g, genres.get(g)),
+      h('button', { type: 'button', class: 'wr-tag-x', 'aria-label': t('wr.meta.removeGenre', { name: genreLabel(g, genres.get(g)) }), onclick: () => { m.genres = m.genres.filter((x) => x !== g); changed({ meta: true }); paintGenres(); } }, iconEl('close')))));
+    const pick = h('select', { class: 'ed-input ed-select', 'aria-label': t('wr.meta.addGenre') }, h('option', { value: '' }, t('wr.meta.addGenre')),
+      FB2_GENRES.filter(([c]) => !m.genres.includes(c)).map(([c, en]) => [c, genreLabel(c, en)]).sort((a, b) => a[1].localeCompare(b[1])).map(([c, l]) => h('option', { value: c }, l)));
+    pick.addEventListener('change', () => { if (pick.value) { m.genres.push(pick.value); changed({ meta: true }); paintGenres(); gWrap.querySelector('select')?.focus(); } });
+    gWrap.append(chips, pick);
+  };
+  paintGenres();
+  const subjects = h('input', { type: 'text', class: 'ed-input', value: m.subjects.join(', '), placeholder: t('wr.meta.subjectsPh') });
+  subjects.addEventListener('input', () => { m.subjects = subjects.value.split(/[,;]/).map((x) => x.trim()).filter(Boolean); changed({ meta: true }); });
+  // Identifiers.
+  const ids = h('div', { class: 'wr-ids', dataset: { meta: 'ids' } });
+  const paintIds = () => {
+    ids.textContent = '';
+    for (const x of m.ids) ids.append(h('div', { class: 'wr-id' }, h('span', { class: 'ed-tag' }, x.scheme || 'id'), h('code', {}, x.value)));
+    ids.append(h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: async () => {
+      if (!await confirmDialog(t('wr.meta.newId'), t('wr.meta.newIdText'), t('wr.meta.newIdBtn'))) return;
+      m.ids = [{ scheme: 'uuid', value: uuid() }, ...m.ids.filter((x) => x.scheme !== 'uuid')];
+      changed({ meta: true });
+      paintIds();
+    } }, iconEl('refresh'), t('wr.meta.newId')));
+  };
+  paintIds();
+  const two = (...k) => h('div', { class: 'wr-two' }, ...k);
+  el.append(langs,
+    card(t('wr.meta.main'),
+      field('wr.meta.title', text('title', { maxlength: 300 })),
+      field('wr.meta.subtitle', text('subtitle', { maxlength: 300 })),
+      h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('wr.meta.authors')), persons('authors'), h('div', { class: 'ed-hint' }, t('wr.meta.personHint'))),
+      two(h('div', { class: 'ed-field' }, h('label', { class: 'ed-label', for: 'wr-lang' }, t('wr.meta.lang')), Object.assign(lang, { id: 'wr-lang' }), langHint),
+        h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('wr.meta.series')), h('div', { class: 'wr-series' }, sName, h('span', { class: 'ed-muted' }, '#'), sNum)))),
+    card(t('wr.meta.about'),
+      h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('wr.meta.annotation')), ann, h('div', { class: 'ed-hint' }, t('wr.meta.annotationHint'))),
+      h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('wr.meta.genres')), gWrap),
+      field('wr.meta.subjects', subjects),
+      field('wr.meta.keywords', text('keywords', { maxlength: 500 }))),
+    card(t('wr.meta.edition'),
+      two(field('wr.meta.publisher', text('publisher')), field('wr.meta.city', text('city'))),
+      two(field('wr.meta.year', text('year', { inputmode: 'numeric', maxlength: 12, spellcheck: 'false' })), field('wr.meta.isbn', text('isbn', { spellcheck: 'false', maxlength: 24 }))),
+      two(field('wr.meta.date', text('date', { spellcheck: 'false', maxlength: 40 }), 'wr.meta.dateHint'), field('wr.meta.srcLang', text('srcLang', { spellcheck: 'false', maxlength: 35, list: 'wr-meta-langs' }))),
+      h('div', { class: 'ed-field' }, h('span', { class: 'ed-label' }, t('wr.meta.translators')), persons('translators')),
+      field('wr.meta.rights', text('rights', { maxlength: 1000 }))),
+    card(t('wr.meta.ids'), ids, h('p', { class: 'ed-hint' }, t('wr.meta.dates', { created: fmtWhen(m.created) || '—', modified: fmtWhen(m.modified) || '—' }))));
+  if (focus) requestAnimationFrame(() => { const f = el.querySelector(`[data-meta="${CSS.escape(focus)}"]`); const inp = f && (f.matches('input, textarea, select') ? f : f.querySelector('input, textarea, select')); (inp || f)?.focus?.(); (f || inp)?.scrollIntoView({ block: 'center' }); });
+}
+
+// Cover: the current one, an upload, or a generated design (rasterized to JPEG when applied).
+function coverPane(host) {
+  const book = W.book, m = book.meta;
+  const el = pane(host, t('wr.cover'), t('wr.cover.lead'));
+  let design = m.coverDesign && COVER_DESIGNS.includes(m.coverDesign.design) ? { ...m.coverDesign } : autoDesign(m.title);
+  const current = h('img', { class: 'wr-cover-img', alt: t('wr.cover.current') });
+  const curLabel = h('p', { class: 'ed-hint' });
+  const paintCurrent = () => {
+    if (m.cover && book.images[m.cover]) { current.src = W.imgs.url(m.cover); const im = book.images[m.cover]; curLabel.textContent = t('wr.cover.info', { type: im.type.replace('image/', '').toUpperCase(), size: fmtBytes(im.data.length) }); }
+    else { current.src = svgURL(coverSVGFor(book, design)); curLabel.textContent = t('wr.cover.none'); }
+    removeBtn.disabled = !m.cover;
+  };
+  const upload = h('button', { type: 'button', class: 'ed-btn', onclick: async () => {
+    const files = await pickFiles({ accept: 'image/jpeg,image/png,image/webp,image/gif' });
+    if (!files.length) return;
+    let data = new Uint8Array(await files[0].arrayBuffer());
+    let type = sniffImage(data) || files[0].type;
+    if (!/^image\//.test(type)) { toast(t('wr.notImage'), 'error'); return; }
+    if (!/^image\/(jpeg|png)$/.test(type)) { const j = await raster({ data, type }, { type: 'image/jpeg', quality: 0.92, fit: 'contain' }); if (j) { data = j; type = 'image/jpeg'; } }
+    replaceCover(addImage(data, type, 'cover'), null);
+    paintCurrent();
+  } }, iconEl('upload'), t('wr.cover.upload'));
+  const removeBtn = h('button', { type: 'button', class: 'ed-btn ed-danger', onclick: () => { replaceCover('', null); paintCurrent(); } }, iconEl('trash'), t('wr.cover.remove'));
+  const preview = h('img', { class: 'wr-cover-gen', alt: t('wr.cover.preview') });
+  const designs = h('div', { class: 'wr-designs', role: 'radiogroup', 'aria-label': t('wr.cover.design') });
+  const palettes = h('div', { class: 'wr-palettes', role: 'radiogroup', 'aria-label': t('wr.cover.palette') });
+  const paintGen = () => {
+    preview.src = svgURL(coverSVGFor(book, design));
+    designs.textContent = '';
+    for (const d of COVER_DESIGNS) {
+      designs.append(h('button', { type: 'button', role: 'radio', class: 'wr-design' + (d === design.design ? ' ed-on' : ''), 'aria-checked': String(d === design.design), title: t('wr.design.' + d), onclick: () => { design = { ...design, design: d }; paintGen(); } },
+        h('img', { src: svgURL(coverSVGFor(book, { ...design, design: d })), alt: '' }), h('span', {}, t('wr.design.' + d))));
+    }
+    palettes.textContent = '';
+    for (const [name, c] of Object.entries(COVER_PALETTES)) {
+      palettes.append(h('button', { type: 'button', role: 'radio', class: 'wr-pal' + (name === design.palette ? ' ed-on' : ''), 'aria-checked': String(name === design.palette), title: t('wr.palette.' + name), 'aria-label': t('wr.palette.' + name), style: { '--a': c[0], '--b': c[2] }, onclick: () => { design = { ...design, palette: name }; paintGen(); } }));
+    }
+  };
+  const apply = h('button', { type: 'button', class: 'ed-btn ed-primary', onclick: async () => {
+    apply.disabled = true;
+    try {
+      const bytes = await raster(coverSVGFor(book, design), { width: 1200, height: 1800, type: 'image/jpeg', quality: 0.9 });
+      if (!bytes) throw new Error('canvas');
+      replaceCover(addImage(bytes, 'image/jpeg', 'cover'), design);
+      paintCurrent();
+      toast(t('wr.cover.applied'), 'ok');
+    } catch (e) { toast(t('err.generic', { msg: e.message }), 'error'); } finally { apply.disabled = false; }
+  } }, iconEl('check'), t('wr.cover.apply'));
+  const shuffle = h('button', { type: 'button', class: 'ed-btn', onclick: () => {
+    const ds = COVER_DESIGNS, ps = Object.keys(COVER_PALETTES);
+    design = { design: ds[(ds.indexOf(design.design) + 1 + Math.floor(Math.random() * (ds.length - 1))) % ds.length], palette: ps[Math.floor(Math.random() * ps.length)] };
+    paintGen();
+  } }, iconEl('shuffle'), t('wr.cover.shuffle'));
+  el.append(h('div', { class: 'wr-cover-grid' },
+    card(t('wr.cover.current'), h('div', { class: 'wr-cover-box' }, current), curLabel, h('div', { class: 'ap-actions' }, upload, removeBtn)),
+    card(t('wr.cover.generate'), h('div', { class: 'wr-gen' }, h('div', { class: 'wr-cover-box' }, preview),
+      h('div', { class: 'wr-gen-ctl' }, h('span', { class: 'ed-label' }, t('wr.cover.design')), designs, h('span', { class: 'ed-label' }, t('wr.cover.palette')), palettes,
+        h('p', { class: 'ed-hint' }, t('wr.cover.genHint')), h('div', { class: 'ap-actions' }, apply, shuffle))))));
+  paintGen();
+  paintCurrent();
+}
+
+function imageUsed(id) {
+  let used = W.book.meta.cover === id;
+  walkBlocks(W.book, (b) => {
+    if (used) return;
+    if (b.type === 'image' && b.src === id) used = true;
+    else for (const inl of blockInlines({ ...b, blocks: null, epigraphs: null, items: null })) if (JSON.stringify(inl).includes(`"src":${JSON.stringify(id)}`)) used = true;
+  });
+  return used;
+}
+
+// Sets the cover image ('' removes it); a previous cover image that nothing else uses is dropped.
+// Garbage-collects the previous cover image only when no block references it, so replacing a cover never breaks an
+// illustration that reused the same picture.
+function replaceCover(id, design) {
+  const m = W.book.meta;
+  const old = m.cover;
+  m.cover = id;
+  m.coverDesign = design;
+  if (old && old !== id && !imageUsed(old)) { delete W.book.images[old]; W.imgs.drop(old); }
+  changed({ meta: true });
+}
+
+function imagesPane(host, focus) {
+  const book = W.book;
+  const el = pane(host, t('wr.images'), t('wr.images.lead'));
+  const ids = Object.keys(book.images);
+  if (!ids.length) { el.append(h('p', { class: 'ap-empty' }, t('wr.images.none'))); return; }
+  const grid = h('div', { class: 'wr-imgs' });
+  for (const id of ids) {
+    const im = book.images[id];
+    const used = imageUsed(id);
+    const isCover = book.meta.cover === id;
+    grid.append(h('figure', { class: 'wr-imgcard' + (id === focus ? ' wr-focus' : ''), dataset: { id } },
+      h('div', { class: 'wr-imgbox' }, h('img', { src: W.imgs.url(id), alt: im.name || id, loading: 'lazy' })),
+      h('figcaption', {},
+        h('strong', {}, im.name || id),
+        h('span', { class: 'ed-muted' }, [im.type.replace('image/', '').toUpperCase(), fmtBytes(im.data.length)].join(' · ')),
+        h('span', { class: 'wr-imgtags' }, isCover ? h('span', { class: 'ed-tag ed-tag-accent' }, t('wr.images.cover')) : null, !used ? h('span', { class: 'ed-tag' }, t('wr.images.unused')) : null),
+        h('span', { class: 'ap-row' },
+          isCover ? null : h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => { setCover(id); show({ kind: 'images' }); } }, iconEl('book'), t('wr.img.cover')),
+          used ? null : h('button', { type: 'button', class: 'ed-btn ed-sm ed-danger', onclick: () => { delete book.images[id]; W.imgs.drop(id); changed({}); show({ kind: 'images' }); } }, iconEl('trash'), t('dlg.delete'))))));
+  }
+  el.append(grid, h('p', { class: 'ed-hint' }, t('wr.images.hint')));
+}
+
+function notesPane(host, focus) {
+  const book = W.book;
+  const el = pane(host, t('wr.notes'), t('wr.notes.lead'));
+  if (!book.notes.length) { el.append(h('p', { class: 'ap-empty' }, t('wr.notes.none'))); return; }
+  // Where each note is referenced.
+  const where = new Map();
+  const scan = (inl, s) => { for (const x of inl || []) { if (x && x.t === 'note') { if (!where.has(x.ref)) where.set(x.ref, []); where.get(x.ref).push(s); } if (x && x.c) scan(x.c, s); } };
+  walkSections(book.sections, (s) => { for (const b of s.blocks) for (const inl of blockInlines(b)) scan(inl, s); });
+  for (const b of book.front) for (const inl of blockInlines(b)) scan(inl, null);
+  const list = h('ol', { class: 'wr-notes' });
+  for (const n of book.notes) {
+    const refs = where.get(n.id) || [];
+    const text = n.blocks.map(blockText).join(' ').trim();
+    list.append(h('li', { class: 'wr-note' + (n.id === focus ? ' wr-focus' : ''), dataset: { id: n.id } },
+      h('span', { class: 'wr-note-n' }, inlineText(n.label)),
+      h('div', { class: 'wr-note-b' },
+        h('p', {}, text || h('em', { class: 'ed-muted' }, t('wr.notes.empty'))),
+        h('p', { class: 'ed-hint' }, n.kind === 'comment' ? h('span', { class: 'ed-tag' }, t('wr.note.kind.comment')) : null, ' ',
+          refs.length ? refs.map((s, i) => [i ? ', ' : '', h('button', { type: 'button', class: 'wr-link', onclick: () => show(s ? { kind: 'section', id: s.id } : { kind: 'front' }) }, s ? sectionTitle(s) || t('wr.untitled') : t('wr.front'))]) : h('span', { class: 'wr-warn' }, t('wr.notes.unused')))),
+      h('span', { class: 'wr-note-acts' },
+        ibtn('edit', t('wr.note.edit'), async () => { if (await noteDialog(W, n.id)) show({ kind: 'notes', focus: n.id }); }),
+        ibtn('trash', t('wr.note.delete'), async () => {
+          if (refs.length && !await confirmDialog(t('wr.note.delete'), t('wr.notes.deleteText', { label: inlineText(n.label), n: refs.length }), t('dlg.delete'), true)) return;
+          book.notes = book.notes.filter((x) => x !== n);
+          eachInline(book, (inl) => mapInline(inl, (x) => (x && x.t === 'note' && x.ref === n.id ? null : undefined)));
+          changed({ notes: true });
+          show({ kind: 'notes' });
+        }, 'ed-danger'))));
+  }
+  el.append(list);
+  if (focus) requestAnimationFrame(() => el.querySelector(`.wr-note[data-id="${CSS.escape(focus)}"]`)?.scrollIntoView({ block: 'center' }));
+}
+
+async function openStyles() {
+  W.ed?.flush();
+  if (await stylesDialog(W)) { refreshStyles(); paintSide(); }
+}
+
+// Check: the book's own issues, then the files it would write.
+function issueText(it) {
+  const k = 'chk.' + it.code;
+  return k in ED_I18N.en ? t(k, it.args) : checkText(it);
+}
+
+function checkPane(host) {
+  W.ed?.flush();
+  const book = W.book;
+  const el = pane(host, t('wr.check'), t('wr.check.lead'));
+  const issues = validateBook(book);
+  const count = (lv) => issues.filter((x) => x.level === lv).length;
+  W.issues = { errors: count('error'), warnings: count('warn') };
+  const st = bookStats(book);
+  el.append(card(t('wr.check.stats'), h('div', { class: 'wr-stats' },
+    [['words', st.words], ['chars', st.chars], ['sections', st.sections], ['notes', st.notes], ['images', st.images], ['minutes', st.minutes]]
+      .map(([k, v]) => h('div', { class: 'wr-stat' }, h('b', {}, v.toLocaleString()), h('span', {}, t('wr.check.' + k)))))));
+  const list = h('ul', { class: 'wr-issues' });
+  if (!issues.length) list.append(h('li', { class: 'wr-issue wr-lv-ok' }, iconEl('check'), h('span', {}, t('wr.check.clean'))));
+  for (const it of issues) {
+    const target = it.target;
+    list.append(h('li', { class: 'wr-issue wr-lv-' + it.level },
+      iconEl(it.level === 'info' ? 'info' : 'warn'),
+      h('span', { class: 'wr-issue-t' }, h('span', { class: 'wr-level' }, t('wr.level.' + it.level)), ' ', issueText(it)),
+      target ? h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => goIssue(target) }, t('wr.check.fix')) : null));
+  }
+  el.append(card(t('wr.check.book', { e: W.issues.errors, w: W.issues.warnings }), list));
+  const files = h('div', { class: 'wr-files' });
+  const run = h('button', { type: 'button', class: 'ed-btn', onclick: () => testFiles(files, run) }, iconEl('refresh'), t('wr.check.files'));
+  el.append(card(t('wr.check.formats'), h('p', { class: 'ed-hint' }, t('wr.check.formatsHint')), files, h('div', { class: 'ap-actions' }, run)));
+  paintSide();
+  testFiles(files, run);
+}
+
+async function testFiles(box, btn) {
+  const book = W.book;
+  btn.disabled = true;
+  box.textContent = '';
+  box.append(h('p', { class: 'ed-muted' }, t('wr.check.testing')));
+  const rows = [];
+  try {
+    for (const [fmt, label] of [['epub', 'EPUB 3'], ['epub2', 'EPUB 2'], ['fb2', 'FB2']]) {
+      const w = await writeBook(book, fmt, { labels: {} });
+      const r = fmt === 'fb2' ? checkFB2(w.data) : await checkEpub(w.data);
+      const size = typeof w.data === 'string' ? new TextEncoder().encode(w.data).length : w.data.length;
+      rows.push({ label, r, size });
+    }
+  } catch (e) { rows.push({ label: '!', r: { ok: false, errors: [{ code: 'x', args: {} }], warnings: [] }, size: 0, err: e.message }); }
+  if (!W || !box.isConnected) return;
+  box.textContent = '';
+  for (const { label, r, size, err } of rows) {
+    const msgs = [...r.errors.map((x) => ['error', x]), ...r.warnings.map((x) => ['warn', x])];
+    box.append(h('div', { class: 'wr-file wr-lv-' + (r.ok ? 'ok' : 'error') },
+      iconEl(r.ok ? 'check' : 'warn'),
+      h('strong', {}, label),
+      h('span', { class: 'ed-muted' }, err || (r.ok ? t('wr.check.fileOk', { size: fmtBytes(size), w: r.warnings.length, n: r.warnings.length }) : t('wr.check.fileBad', { n: r.errors.length }))),
+      msgs.length ? h('ul', { class: 'wr-file-msgs' }, msgs.slice(0, 8).map(([lv, x]) => h('li', { class: 'wr-lv-' + lv }, checkText(x)))) : null));
+  }
+  btn.disabled = false;
+}
+
+function goIssue(target) {
+  if (target.kind === 'section') show({ kind: 'section', id: target.id });
+  else if (target.kind === 'note') show({ kind: 'notes', focus: target.id });
+  else if (target.kind === 'image') show({ kind: 'images', focus: target.id });
+  else if (target.kind === 'meta') show(target.id === 'cover' ? { kind: 'cover' } : target.id === 'title' && !W.book.meta.title ? { kind: 'meta', focus: 'title' } : { kind: 'meta', focus: target.id });
+}
+
+// --- actions ------------------------------------------------------------------------------------------
+
+function exportItems() {
+  return [
+    { header: true, label: t('wr.exportAs') },
+    ...EXPORTS.map(([f, label]) => ({ label, icon: 'download', action: () => exportNow(f) })),
+  ];
+}
+
+async function exportNow(format) {
+  await saveNow();
+  try {
+    await exportBook(W.book, format);
+    const errors = validateBook(W.book).filter((x) => x.level === 'error');
+    if (errors.length) toast(t('wr.exportedIssues', { n: errors.length }), 'warn', { label: t('wr.check'), fn: () => show({ kind: 'check' }) });
+  } catch (e) { toast(t('err.generic', { msg: e.message }), 'error'); }
+}
+
+async function saveToLib() {
+  await saveNow();
+  try {
+    const exists = W.rec.libraryId && await db.getShelf(W.rec.libraryId);
+    const id = await saveToLibrary(structuredClone(W.book), { id: exists ? W.rec.libraryId : '', format: 'writer' });
+    W.rec.libraryId = id;
+    W.dirty = true;
+    await saveNow();
+    toast(t(exists ? 'wr.libUpdated' : 'wr.libSaved'), 'ok', { label: t('lib.readNow'), fn: () => go('read', id) });
+  } catch (e) { toast(t('err.generic', { msg: e.message }), 'error'); }
+}
+
+async function preview() {
+  await saveNow();
+  S.previewBook = W.book;
+  go('read', 'draft:' + W.id);
+}
+
+function moreItems() {
+  const draft = { id: W.id, book: W.book };
+  return [
+    { label: t('wr.addChapter'), icon: 'plus', action: () => addSection('end') },
+    { label: t('wr.front'), icon: 'book', action: () => show({ kind: 'front' }) },
+    { label: t('wr.meta'), icon: 'info', action: () => show({ kind: 'meta' }) },
+    { label: t('wr.cover'), icon: 'image', action: () => show({ kind: 'cover' }) },
+    { label: t('wr.notes'), icon: 'footnote', action: () => show({ kind: 'notes' }) },
+    { label: t('wr.images'), icon: 'gallery', action: () => show({ kind: 'images' }) },
+    { label: t('wr.styles'), icon: 'palette', action: openStyles },
+    { sep: true },
+    { label: t('wr.check'), icon: 'check', action: () => show({ kind: 'check' }) },
+    { label: t('wr.preview'), icon: 'read', action: preview },
+    { label: t('wr.toLibrary'), icon: 'library', action: saveToLib },
+    { label: t('wr.saveNow'), icon: 'save', kbd: 'Ctrl+S', action: () => saveNow(true) },
+    { sep: true },
+    { label: t('wr.duplicate'), icon: 'copy', action: async () => { await saveNow(); const id = await newDraftFrom(structuredClone(W.book)); toast(t('wr.duplicated'), 'ok'); go('write', id); } },
+    { label: t('wr.deleteDraft'), icon: 'trash', danger: true, action: () => deleteDraft(draft) },
+  ];
+}
+
+function bind() {
+  const on = (target, ev, fn, opts) => { target.addEventListener(ev, fn, opts); W.off.push(() => target.removeEventListener(ev, fn, opts)); };
+  on(window, 'keydown', (e) => {
+    if (!W || e.defaultPrevented) return;
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.altKey && (e.key === 's' || e.key === 'S')) { e.preventDefault(); saveNow(true); }
+    else if (e.key === 'Escape' && !layers.length && W.el.root.classList.contains('wr-side-open')) toggleSide(false);
+  });
+  on(document, 'visibilitychange', () => { if (document.visibilityState === 'hidden') saveNow(); });
+  on(window, 'pagehide', () => saveNow());
+  on(window, 'beforeunload', (e) => { if (W && (W.dirty || W.saving)) { saveNow(); e.preventDefault(); e.returnValue = ''; } });
+  let wasNarrow = narrow();
+  on(window, 'resize', debounce(() => { const n = narrow(); if (n !== wasNarrow) { wasNarrow = n; W.el.root.classList.remove('wr-side-open'); } }, 150));
+}
+
+function penArt() {
+  return '<svg viewBox="0 0 220 120" width="220" height="120" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round">'
+    + '<path d="M40 104h140M52 96V24h86l22 22v50z"/><path d="M138 24v22h22"/><path d="M66 48h56M66 60h70M66 72h48"/>'
+    + '<path d="M150 98l40-58 10 7-40 58-13 6z"/><path d="M186 46l10 7"/></g></svg>';
+}
+
+export { show as showWriterPane };

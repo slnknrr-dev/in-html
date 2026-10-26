@@ -1,0 +1,31 @@
+// docs-app/i18n-es.js - docs editor UI strings (Spanish).
+import { addDicts } from '../ui/i18n.js';
+
+addDicts({
+  es: {
+    'app.name': 'Documentos',
+    'app.tagline': 'Documentos sin conexión con importación y exportación de Markdown',
+    'files.empty': 'Aún no hay archivos. Añada imágenes, PDF o cualquier archivo para adjuntarlo al documento.',
+    'f.lang': 'Lenguaje',
+    'f.code': 'Código',
+    'f.lineNumbers': 'Números de línea',
+    'f.wrap': 'Ajustar líneas largas',
+    'f.depth': 'Niveles de títulos',
+    'f.numbered': 'Numerado',
+    'f.look': 'Elementos completados',
+    'f.done': 'Hecho',
+    'o.boxes': 'Casilla marcada',
+    'o.strike': 'Casilla marcada y tachado',
+    'b.code': 'Código', 'b.toc': 'Índice', 'b.checklist': 'Lista de tareas',
+    'bd.code': 'Código fuente con resaltado de sintaxis y números de línea.',
+    'bd.toc': 'Lista enlazada de los títulos del documento, actualizada automáticamente.',
+    'bd.checklist': 'Tareas con casillas de verificación.',
+    'pj.untitled': 'Documento sin título',
+    'io.badFile': 'Este archivo no es un proyecto de documento.',
+    'io.typeOpen': 'Documento, Markdown o página exportada',
+    'io.typeProject': 'Proyecto de documento (.json)',
+    'dx.md': 'Exportar a Markdown (.md)',
+    'dx.zip': 'Exportar a Markdown con archivos (.zip)',
+    'dx.txt': 'Exportar a texto sin formato (.txt)',
+  },
+});

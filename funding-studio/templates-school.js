@@ -1,0 +1,141 @@
+// funding-studio/templates-school.js - community / school template: "Green Gate School", a fictional school in the
+// fictional town of Mzetsvera (Georgia), raising money in GEL for a library and for heating; TBC Bank and transfers
+// first; theme 'schoolyard'; ka, en, ru.
+import { tplKit } from './templates-kit.js';
+
+// Structure: T = { <lang>: { key: text } } (HTML allowed in rich keys like 'story', 'lead'); the build function makes
+// the document through tplKit (t(key) -> { lang: text } with English fallback, B(type, props) -> block, page(kind,
+// slug, props, blocks), scene(name, kind, hue) -> generated SVG attachment), then normalizeDoc - so a template is
+// exactly as valid as any opened file. Figures (raised, donors), dates and names are invented sample data; emails
+// and websites use the reserved .example TLD so they can never reach anyone.
+const T = {
+  ka: {
+    brand: 'მწვანე ჭიშკრის სკოლა', navLib: 'ბიბლიოთეკა', navMoney: 'ხარჯები', navFaq: 'კითხვები', cta: 'დახმარება',
+    title: 'მწვანე ჭიშკრის სკოლა — ერთად ვაშენებთ', desc: 'მზეცვერის თემი სკოლის ბიბლიოთეკისა და თბილი საკლასო ოთახებისთვის აგროვებს.',
+    c1: 'ბიბლიოთეკა ჩვენი სკოლისთვის', c1d: 'ძველ სათავსოს გადავაქცევთ ნათელ ბიბლიოთეკად 3 000 წიგნით.',
+    eyebrow: 'მშობლებისა და მასწავლებლების ინიციატივა', h1: 'ბიბლიოთეკა, სადაც ბავშვებს დარჩენა მოუნდებათ',
+    lead: '<p>ჩვენს სკოლაში 420 მოსწავლეა და არცერთი წიგნის თარო. მშობლებმა, მასწავლებლებმა და ყოფილმა მოსწავლეებმა გადავწყვიტეთ, ძველი სათავსო ბიბლიოთეკად ვაქციოთ.</p>',
+    heroCta: 'შეწირვა', heroCta2: 'გეგმის ნახვა',
+    progT: 'როგორ ვივსებთ თაროებს', ms1: 'რემონტი და განათება', ms2: 'თაროები და მაგიდები', ms3: '3 000 წიგნი და ორი კომპიუტერი',
+    storyT: 'რატომ ახლა', story: '<p>სკოლის ბიბლიოთეკა 2009 წელს დაიხურა და წიგნები სარდაფში აღმოჩნდა. ბავშვები ახლა ტელეფონებით კითხულობენ, მაგრამ წყნარი, თბილი ადგილი, სადაც შეიძლება წიგნით ხელში იჯდე, აღარ არის.</p><p>რემონტის გეგმა მზადაა, ადგილობრივი ოსტატები დახმარებას გვპირდებიან. გვაკლია თანხა მასალებისთვის, ავეჯისა და წიგნებისთვის.</p>',
+    impT: 'რას ყიდულობს თქვენი შემოწირულობა', imp1: 'ახალი საბავშვო წიგნი', imp2: 'სამკითხველო ნათურა', imp3: 'წიგნის თარო', imp4: 'კომპიუტერი სამკითხველო დარბაზისთვის',
+    donT: 'დაეხმარეთ ბიბლიოთეკას', donLead: 'შეწირეთ თიბისი ბანკის ბარათით, ინტერნეტბანკით ან გადარიცხვით.', donBtn: 'შეწირვა',
+    donNote: '<p>მწვანე ჭიშკრის სკოლა შაბლონისთვის მოგონილი სკოლაა. ყოველი ლარი სკოლის ანგარიშზე ირიცხება.</p>',
+    moneyT: 'გამჭვირვალე ხარჯები', moneyLead: 'ყოველ ხარჯს სკოლის მშობელთა საბჭო ამოწმებს.', sp1: 'რემონტი და განათება', sp2: 'ავეჯი', sp3: 'წიგნები', sp4: 'კომპიუტერები',
+    wallT: 'მადლობა', cdT: 'სასწავლო წლის ბოლომდე დარჩა', cdDone: 'კამპანია დასრულდა — მადლობა ყველას!',
+    faqT: 'კითხვები', q1: 'ვინ განკარგავს თანხას?', a1: '<p>მშობელთა საბჭო და სკოლის დირექცია ერთად; ხარჯები ქვემოთ ქვეყნდება.</p>', q2: 'შემიძლია წიგნები მოვიტანო?', a2: '<p>დიახ — კარგ მდგომარეობაში მყოფ საბავშვო წიგნებს სკოლის მისაღებში ვიღებთ.</p>',
+    shareT: 'გაუზიარეთ თემს', shareText: 'მწვანე ჭიშკრის სკოლა ბიბლიოთეკისთვის აგროვებს — ყოველი ლარი მნიშვნელოვანია.',
+    footText: '<p>მზეცვერა, სკოლის ქუჩა 3. ოთხშაბათობით 16:00-დან მშობელთა საბჭოს შეხვედრებია.</p>', copy: '© მწვანე ჭიშკრის სკოლა (მაგალითი)',
+    c2: 'თბილი საკლასო ოთახები', c2d: 'ორი ძველი ღუმლის შეცვლა ზამთრამდე.', c2h: 'ზამთარში ქურთუკებით აღარ ვისწავლოთ', c2lead: '<p>ორ საკლასო ოთახში ზამთარში 14 გრადუსია. ახალი ღუმლები და ფანჯრების დალუქვა ამას შეცვლის.</p>',
+    campsT: 'სხვა კამპანიები', open: 'ნახვა',
+    thxT: 'დიდი მადლობა!', thx: '<p>ბიბლიოთეკის გახსნაზე ყველა შემწირველს დაგპატიჟებთ.</p>', thxBack: 'კამპანიაზე დაბრუნება',
+    org: 'მწვანე ჭიშკრის სკოლის მშობელთა საბჭო', addr: 'სკოლის ქუჩა 3, მზეცვერა', note: 'შაბლონის მაგალითი — ჩაანაცვლეთ თქვენი მონაცემებით.', purpose: 'შემოწირულობა ბიბლიოთეკისთვის', holder: 'მწვანე ჭიშკრის სკოლა',
+  },
+  en: {
+    brand: 'Green Gate School', navLib: 'The library', navMoney: 'Spending', navFaq: 'Questions', cta: 'Help',
+    title: 'Green Gate School — building it together', desc: 'The community of Mzetsvera raises money for a school library and warm classrooms.',
+    c1: 'A library for our school', c1d: 'Turning an old storeroom into a bright library with 3,000 books.',
+    eyebrow: 'An initiative of parents and teachers', h1: 'A library children will want to stay in',
+    lead: '<p>Our school has 420 pupils and not a single bookshelf. Parents, teachers and former pupils decided to turn the old storeroom into a library.</p>',
+    heroCta: 'Donate', heroCta2: 'See the plan',
+    progT: 'How we fill the shelves', ms1: 'Renovation and lighting', ms2: 'Shelves and tables', ms3: '3,000 books and two computers',
+    storyT: 'Why now', story: '<p>The school library closed in 2009 and the books ended up in the basement. Children read on phones now, but there is no quiet, warm place to sit with a book.</p><p>The renovation plan is ready and local craftsmen have promised to help. What we lack is money for materials, furniture and books.</p>',
+    impT: 'What your gift buys', imp1: 'a new children’s book', imp2: 'a reading lamp', imp3: 'a bookshelf', imp4: 'a computer for the reading room',
+    donT: 'Help the library', donLead: 'Give with a TBC Bank card, internet bank or a bank transfer.', donBtn: 'Donate',
+    donNote: '<p>Green Gate School is a fictional school used as an example. Every lari goes to the school’s account.</p>',
+    moneyT: 'Transparent spending', moneyLead: 'Every expense is checked by the parents’ council.', sp1: 'Renovation and lighting', sp2: 'Furniture', sp3: 'Books', sp4: 'Computers',
+    wallT: 'Thank you', cdT: 'Left until the end of the school year', cdDone: 'The campaign has ended — thank you all!',
+    faqT: 'Questions', q1: 'Who decides how the money is spent?', a1: '<p>The parents’ council together with the school management; spending is published below.</p>', q2: 'Can I bring books?', a2: '<p>Yes — children’s books in good condition are welcome at the school reception.</p>',
+    shareT: 'Share with the community', shareText: 'Green Gate School is raising money for a library — every lari counts.',
+    footText: '<p>3 School Street, Mzetsvera. Parents’ council meets on Wednesdays from 16:00.</p>', copy: '© Green Gate School (example)',
+    c2: 'Warm classrooms', c2d: 'Replacing two old stoves before winter.', c2h: 'No more lessons in winter coats', c2lead: '<p>Two classrooms are 14 °C in winter. New stoves and sealed windows will change that.</p>',
+    campsT: 'Other campaigns', open: 'Open',
+    thxT: 'Thank you so much!', thx: '<p>Every donor will be invited to the opening of the library.</p>', thxBack: 'Back to the campaign',
+    org: 'Green Gate School parents’ council', addr: '3 School Street, Mzetsvera', note: 'Template example — replace with your own details.', purpose: 'Donation for the library', holder: 'Green Gate School',
+  },
+  ru: {
+    brand: 'Школа «Зелёные ворота»', navLib: 'Библиотека', navMoney: 'Расходы', navFaq: 'Вопросы', cta: 'Помочь',
+    title: 'Школа «Зелёные ворота» — строим вместе', desc: 'Жители Мзецверы собирают на школьную библиотеку и тёплые классы.',
+    c1: 'Библиотека для нашей школы', c1d: 'Превращаем старую кладовую в светлую библиотеку на 3 000 книг.',
+    eyebrow: 'Инициатива родителей и учителей', h1: 'Библиотека, в которой детям захочется остаться',
+    lead: '<p>В нашей школе 420 учеников и ни одной книжной полки. Родители, учителя и выпускники решили превратить старую кладовую в библиотеку.</p>',
+    heroCta: 'Пожертвовать', heroCta2: 'Посмотреть план',
+    progT: 'Как мы заполняем полки', ms1: 'Ремонт и освещение', ms2: 'Полки и столы', ms3: '3 000 книг и два компьютера',
+    storyT: 'Почему сейчас', story: '<p>Школьная библиотека закрылась в 2009 году, а книги оказались в подвале. Дети читают с телефонов, но тихого тёплого места, где можно посидеть с книгой, больше нет.</p><p>План ремонта готов, местные мастера обещают помочь. Не хватает денег на материалы, мебель и книги.</p>',
+    impT: 'Что купит ваш вклад', imp1: 'новую детскую книгу', imp2: 'лампу для чтения', imp3: 'книжную полку', imp4: 'компьютер для читального зала',
+    donT: 'Помогите библиотеке', donLead: 'Пожертвуйте картой TBC Bank, через интернет-банк или переводом.', donBtn: 'Пожертвовать',
+    donNote: '<p>Школа «Зелёные ворота» — вымышленная школа для примера. Каждый лари поступает на счёт школы.</p>',
+    moneyT: 'Прозрачные расходы', moneyLead: 'Каждый расход проверяет родительский совет.', sp1: 'Ремонт и освещение', sp2: 'Мебель', sp3: 'Книги', sp4: 'Компьютеры',
+    wallT: 'Спасибо', cdT: 'До конца учебного года осталось', cdDone: 'Сбор завершён — спасибо всем!',
+    faqT: 'Вопросы', q1: 'Кто распоряжается деньгами?', a1: '<p>Родительский совет вместе с администрацией школы; расходы публикуются ниже.</p>', q2: 'Можно принести книги?', a2: '<p>Да — детские книги в хорошем состоянии принимают на вахте школы.</p>',
+    shareT: 'Расскажите соседям', shareText: 'Школа «Зелёные ворота» собирает на библиотеку — важен каждый лари.',
+    footText: '<p>Мзецвера, Школьная улица, 3. Родительский совет собирается по средам с 16:00.</p>', copy: '© Школа «Зелёные ворота» (пример)',
+    c2: 'Тёплые классы', c2d: 'Замена двух старых печей до зимы.', c2h: 'Хватит учиться в куртках', c2lead: '<p>В двух классах зимой 14 °C. Новые печи и заделанные окна это изменят.</p>',
+    campsT: 'Другие сборы', open: 'Открыть',
+    thxT: 'Большое спасибо!', thx: '<p>Всех жертвователей мы пригласим на открытие библиотеки.</p>', thxBack: 'Вернуться к сбору',
+    org: 'Родительский совет школы «Зелёные ворота»', addr: 'Школьная улица, 3, Мзецвера', note: 'Пример шаблона — замените своими данными.', purpose: 'Пожертвование на библиотеку', holder: 'Школа «Зелёные ворота»',
+  },
+};
+
+function tplBuildSchool(V) {
+  const langs = ['ka', 'en', 'ru'];
+  const K = tplKit(V, langs, T);
+  const { t, B, item, page } = K;
+  const d = K.doc({
+    name: 'Green Gate School', preset: 'schoolyard', title: t('title'), description: t('desc'),
+    org: { name: t('org'), email: 'council@greengate-school.example', address: t('addr'), regNo: 'MZ-0014', note: t('note') },
+  });
+  d.pay.bank.purpose = t('purpose');
+  d.pay.tbc.holder = 'Green Gate School';
+  const lib = K.scene('school', 'school', 45);
+  const heat = K.scene('heating', 'heating', 12);
+  d.regions.header = [B('nav', { brand: t('brand'), cta: t('cta'), ctaHref: '#donate', items: [item({ label: t('navLib'), href: '#story' }), item({ label: t('navMoney'), href: '#money' }), item({ label: t('navFaq'), href: '#faq' })] })];
+  const c1 = page('campaign', 'library', {
+    title: t('c1'), metaDesc: t('c1d'), image: lib, currency: 'GEL', currencies: ['USD', 'EUR'], goal: 25000, raised: 14300, donors: 206,
+    end: '2027-06-15', endTime: '18:00', tz: 4, methods: ['tbc', 'bank', 'stripe', 'paypal'],
+  }, [
+    B('hero', { layout: 'split', eyebrow: t('eyebrow'), title: t('h1'), lead: t('lead'), image: lib, progress: true, cta: t('heroCta'), ctaHref: '#donate', cta2: t('heroCta2'), cta2Href: '#story' }),
+    B('progress', { title: t('progT'), style: 'compact', items: [item({ amount: 7000, label: t('ms1') }), item({ amount: 15000, label: t('ms2') }), item({ amount: 25000, label: t('ms3') })] }),
+    B('story', { anchor: 'story', title: t('storyT'), html: t('story'), image: lib, side: 'right' }),
+    B('impact', { title: t('impT'), items: [item({ amount: 20, text: t('imp1'), icon: 'book' }), item({ amount: 50, text: t('imp2'), icon: 'bolt' }), item({ amount: 200, text: t('imp3'), icon: 'home' }), item({ amount: 1000, text: t('imp4'), icon: 'code' })] }),
+    B('donate', { anchor: 'donate', title: t('donT'), lead: t('donLead'), button: t('donBtn'), note: t('donNote'), amounts: [20, 50, 100, 200], defAmount: 50, intervals: 'once', askMessage: false }),
+    B('countdown', { title: t('cdT'), done: t('cdDone') }),
+    B('section', { anchor: 'money', tone: 'muted', blocks: [B('transparency', { title: t('moneyT'), lead: t('moneyLead'), updated: '2026-10-01', items: [
+      item({ label: t('sp1'), planned: 7000, spent: 6400 }), item({ label: t('sp2'), planned: 8000, spent: 3900 }), item({ label: t('sp3'), planned: 7000, spent: 1200 }), item({ label: t('sp4'), planned: 3000, spent: 0 }),
+    ] })] }),
+    B('wall', { title: t('wallT'), sort: 'recent', count: 8, items: [
+      item({ name: 'ნინო ბ.', amount: 100, message: 'ჩემი შვილის კლასს!', date: '2026-10-12' }), item({ name: 'Giorgi M.', amount: 200, message: '', date: '2026-10-11' }),
+      item({ name: '', anon: true, amount: 50, message: '', date: '2026-10-10' }), item({ name: 'Ирина К.', amount: 20, message: 'Удачи!', date: '2026-10-09' }),
+    ] }),
+    B('faq', { anchor: 'faq', title: t('faqT'), items: [item({ q: t('q1'), a: t('a1') }), item({ q: t('q2'), a: t('a2') })] }),
+    B('share', { title: t('shareT'), text: t('shareText'), nets: ['native', 'copy', 'facebook', 'whatsapp', 'telegram', 'qr'] }),
+    B('campaigns', { title: t('campsT'), cta: t('open') }),
+  ]);
+  const c2 = page('campaign', 'warm-classrooms', {
+    title: t('c2'), metaDesc: t('c2d'), image: heat, currency: 'GEL', goal: 8000, raised: 2150, donors: 47, end: '2026-12-01', tz: 4, methods: ['tbc', 'bank'],
+  }, [
+    B('hero', { layout: 'split', title: t('c2h'), lead: t('c2lead'), image: heat, progress: true, cta: t('heroCta'), ctaHref: '#donate' }),
+    B('donate', { anchor: 'donate', title: t('donT'), button: t('donBtn'), amounts: [20, 50, 100], defAmount: 50, intervals: 'once', askMessage: false }),
+    B('campaigns', { title: t('campsT'), cta: t('open') }),
+  ]);
+  const thanks = page('thanks', 'thanks', { title: t('thxT') }, [B('thanks', { title: t('thxT'), text: t('thx'), back: t('thxBack'), summary: true }), B('share', { title: t('shareT'), text: t('shareText'), nets: ['native', 'copy', 'facebook', 'whatsapp'] })]);
+  d.regions.main = [c1, c2, thanks];
+  d.regions.footer = [B('footer', { showOrg: true, text: t('footText'), copy: t('copy') })];
+  return V.normalizeDoc(d);
+}
+
+export const TPL_SCHOOL = {
+  id: 'school',
+  name: { en: 'Community / school', ru: 'Сообщество / школа', uk: 'Громада / школа', de: 'Gemeinschaft / Schule', fr: 'Collectif / école', es: 'Comunidad / escuela', ka: 'თემი / სკოლა' },
+  desc: {
+    en: 'Parents raise money in GEL for a school library and warm classrooms: TBC Bank and transfers, milestones, spending, countdown.',
+    ru: 'Родители собирают в лари на школьную библиотеку и тёплые классы: TBC Bank и переводы, этапы, расходы, отсчёт.',
+    uk: 'Батьки збирають у ларі на шкільну бібліотеку й теплі класи: TBC Bank і перекази, етапи, витрати, відлік.',
+    de: 'Eltern sammeln in GEL für eine Schulbibliothek und warme Klassenzimmer: TBC Bank und Überweisungen, Etappen, Ausgaben, Countdown.',
+    fr: 'Des parents collectent en GEL pour une bibliothèque scolaire et des classes chauffées : TBC Bank et virements, étapes, dépenses, compte à rebours.',
+    es: 'Familias recaudan en GEL para una biblioteca escolar y aulas cálidas: TBC Bank y transferencias, hitos, gastos, cuenta atrás.',
+    ka: 'მშობლები ლარში აგროვებენ სკოლის ბიბლიოთეკისა და თბილი კლასებისთვის: თიბისი ბანკი და გადარიცხვები, ეტაპები, ხარჯები, უკუათვლა.',
+  },
+  langs: ['ka', 'en', 'ru'],
+  build: tplBuildSchool,
+};

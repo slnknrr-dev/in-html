@@ -1,0 +1,2 @@
+const ONLINE=true;async function api(base,path,{method='GET',body,token,timeout=15000}={}){const ctl=new AbortController();const tm=setTimeout(()=>ctl.abort(),timeout);try{const r=await fetch(String(base).replace(/\/+$/,'')+'/'+path,{method,signal:ctl.signal,headers:{...(body?{'Content-Type':'application/json'}:{}),...(token?{Authorization:'Bearer '+token}:{})},body:body?JSON.stringify(body):undefined,});const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error||'HTTP '+r.status);return data;}finally{clearTimeout(tm);}}
+export{ONLINE,api};

@@ -1,0 +1,341 @@
+// access-designer/presets.js - starting projects, all expressed as data: an empty model with one owner role and demo
+// presets (a retail system, a regional portal / marketplace, a clinic, a multi-tenant SaaS admin). A preset is a compact
+// spec; `buildProject` turns it into a project of the current format. Seeded names point at dictionary keys (`key`)
+// built from the preset's key prefixes, so they follow the UI language until the user renames them (`name`, plain
+// text). Nothing here is read by the page logic except through the project.
+
+// FORMAT identifies the file type (imports of other JSON are refused); VERSION drives migration in common.js.
+// Bump VERSION only with a migration step, never silently.
+export const FORMAT = 'access-designer';
+export const VERSION = 2;
+
+const GENERIC_ICONS = { view: 'eye', create: 'plus', edit: 'edit', delete: 'trash', export: 'download', approve: 'check', publish: 'send', moderate: 'shield', sign: 'edit', impersonate: 'users' };
+// Session defaults shared by presets: an 8 h absolute TTL and 15 min idle timeout (typical back-office values), a
+// read-only ticket by default (a delegated link should not write), logout and narrowing always allowed in read-only
+// mode, and a polling endpoint that never counts as activity.
+const STD_SESSIONS = {
+  memberId: '', ttl: '8h', idle: '15m', actionPath: '/', scope: { panel: null, drop: [], readonly: false }, ticket: { panel: null, drop: [], readonly: true },
+  readonlyAllow: ['/api/logout', '/api/session/narrow'], idlePaths: ['/api/poll'], idlePolls: [],
+};
+
+/** spec -> project (format VERSION). */
+// Compact spec -> full project. Seeded items get a dictionary key (prefix + id) and an empty name, so labels follow
+// the UI language until renamed. Missing parts get safe defaults; normalizeProject validates the result again.
+export function buildProject(spec) {
+  const k = spec.keys || {};
+  const named = (prefix, id, extra = {}) => ({ id, name: '', key: prefix ? prefix + id : '', ...extra });
+  const actions = spec.actions || ['view', 'create', 'edit', 'delete'];
+  const p = {
+    format: FORMAT, version: VERSION, preset: spec.id || '', name: '', now: spec.now || '2026-11-01',
+    actions: [...actions],
+    actionInfo: Object.fromEntries(actions.map((a) => [a, { name: '', key: (k.act || 'ad.act.') + a, icon: GENERIC_ICONS[a] || '' }])),
+    readAction: spec.readAction || actions[0],
+    viewAsSection: spec.viewAs || '',
+    sections: (spec.sections || []).map((id) => named(k.sec, id)),
+    objects: (spec.objects || []).map((o) => ({ ...o })),
+    roles: (spec.roles || []).map((r) => ({ ...named(k.role, r.id), parent: r.parent || null, grants: r.grants || {}, revoke: r.revoke || {} })),
+    members: (spec.members || []).map((m) => ({ isOwner: false, objects: null, expiresAt: '', roleExpiresAt: '', objectsExpiresAt: '', extra: [], ...m })),
+    policy: {
+      entities: Object.fromEntries(Object.entries(spec.entities || {}).map(([id, own]) => [id, { name: '', key: k.ent ? k.ent + id : '', own }])),
+      permissions: Object.fromEntries(Object.entries(spec.permissions || {}).map(([id, v]) => [id, { name: '', key: k.perm ? k.perm + id : '', ...v }])),
+      org: spec.policyOrg || { mode: 'medium', overrides: {} }, roles: spec.policyRoles || {}, members: spec.policyMembers || {}, records: spec.records || [],
+    },
+    modules: {
+      catalog: Object.fromEntries(Object.entries(spec.modules || {}).map(([id, m]) => [id, {
+        name: m.name || '', key: !m.name && k.modName ? k.modName + id : '', purpose: '', purposeKey: k.mod ? k.mod + id : '',
+        sections: m.sections || [], deps: m.deps || [], carriers: m.carriers || [], views: m.views || ['standalone', 'embedded', 'hidden'], default: m.default || 'standalone', embeds: m.embeds || [],
+      }])),
+      enabled: spec.enabled || Object.keys(spec.modules || {}), org: spec.viewsOrg || {}, roles: spec.viewsRoles || {}, members: spec.viewsMembers || {},
+    },
+    sessions: { ...STD_SESSIONS, ...(spec.sessions || {}) },
+    config: {
+      schema: (spec.config?.schema || []).map(([key, type, secret]) => ({ key, type, secret: !!secret })),
+      defaults: spec.config?.defaults || {}, site: spec.config?.site || {}, hosts: spec.config?.hosts || [{ host: 'example.org', enabled: true, isPrimary: true, aliases: [], values: {} }],
+      probe: spec.config?.probe || 'example.org',
+    },
+  };
+  if (!p.sessions.memberId) p.sessions.memberId = p.members[0]?.id || '';
+  return p;
+}
+
+// --- an empty model --------------------------------------------------------------------------------------------------
+
+// The empty model: no sections yet, one "owner" role without grants and one member flagged isOwner (owners pass
+// every check in the library), so the project is usable before any section is defined.
+export function emptySpec(ownerName = 'Owner') {
+  return {
+    id: 'empty', actions: ['view', 'create', 'edit', 'delete'],
+    roles: [{ id: 'owner', grants: {} }],
+    members: [{ id: 'm1', name: ownerName, roleId: 'owner', isOwner: true }],
+    keys: { role: 'ad.role.' },
+    config: { schema: [['title', 'string']], defaults: { title: '' } },
+  };
+}
+
+// --- a retail system: the sample organisation is a shop chain using it --------------------------------------------
+
+// Demo presets below are data tables (header + structure comments only): sections, roles with parent/grants/revokes,
+// members with expiries, policy entities/permissions, modules with dependencies and carriers, config schema.
+const R_SECTIONS = ['catalog', 'objects', 'staff', 'admin', 'billing', 'inventory', 'equipment', 'purchasing', 'analytics', 'pos', 'prices', 'plan'];
+export const RETAIL = {
+  id: 'retail', now: '2026-11-01', viewAs: 'admin', readAction: 'view',
+  keys: { sec: 'ad.sec.', role: 'ad.role.', act: 'ad.act.', ent: 'ad.ent.', perm: 'ad.perm.', mod: 'ad.mod.' },
+  actions: ['view', 'create', 'edit', 'delete', 'export', 'approve'],
+  sections: R_SECTIONS,
+  objects: [{ id: 'tb-rust', name: 'Tbilisi · Rustaveli' }, { id: 'tb-sab', name: 'Tbilisi · Saburtalo' }, { id: 'bt-1', name: 'Batumi · Old Town' }, { id: 'wh-1', name: 'Central warehouse' }],
+  roles: [
+    { id: 'owner', grants: [...R_SECTIONS] },
+    { id: 'admin', grants: { admin: '*', staff: '*', objects: '*', catalog: '*', billing: ['view'], analytics: ['view', 'export'] } },
+    { id: 'staff', grants: { catalog: ['view'], objects: ['view'] } },
+    { id: 'cashier', parent: 'staff', grants: { pos: ['view', 'create'], prices: ['view'] } },
+    { id: 'senior', parent: 'cashier', grants: { pos: ['edit', 'approve', 'export'] } },
+    { id: 'trainee', parent: 'cashier', revoke: { pos: ['create'] } },
+    { id: 'storekeeper', parent: 'staff', grants: { inventory: ['view', 'create', 'edit'], equipment: ['view', 'create', 'edit'], plan: ['view'] } },
+    { id: 'manager', parent: 'staff', grants: { catalog: ['view', 'create', 'edit'], inventory: ['view', 'export'], prices: ['view', 'edit', 'approve'], analytics: ['view', 'export'], purchasing: ['view', 'create', 'edit'], staff: ['view'], plan: ['view', 'edit'], pos: ['view', 'export'] } },
+    { id: 'director', parent: 'manager', grants: { staff: ['view', 'create', 'edit'], pos: '*', billing: ['view'], purchasing: ['approve'], admin: ['view'] } },
+    { id: 'auditor', parent: 'manager', grants: { billing: ['view'] }, revoke: { catalog: ['create', 'edit'], prices: ['edit', 'approve'], purchasing: ['create', 'edit'], plan: ['edit'] } },
+  ],
+  members: [
+    { id: 'm1', name: 'Nino Beridze', roleId: 'owner', isOwner: true },
+    { id: 'm2', name: 'Giorgi Kapanadze', roleId: 'admin' },
+    { id: 'm3', name: 'Anna Ivanova', roleId: 'director', objects: ['tb-rust', 'tb-sab'] },
+    { id: 'm4', name: 'Levan Tsiklauri', roleId: 'manager', objects: ['tb-rust'], extra: [{ grants: { purchasing: ['approve'] }, objects: ['tb-sab'], expiresAt: '2026-12-31' }] },
+    { id: 'm5', name: 'Maria Sokolova', roleId: 'cashier', objects: ['tb-rust'], extra: [{ grants: { prices: ['edit'] }, objects: ['tb-rust'], expiresAt: '2026-10-15' }] },
+    { id: 'm6', name: 'Dato Gelashvili', roleId: 'trainee', objects: ['bt-1'], roleExpiresAt: '2026-12-01' },
+    { id: 'm7', name: 'Ivan Petrov', roleId: 'storekeeper', objects: ['wh-1'], extra: [{ grants: { pos: ['view'] }, objects: ['tb-rust'], expiresAt: '2026-11-20' }] },
+    { id: 'm8', name: 'Elene Abashidze', roleId: 'auditor', expiresAt: '2026-11-30', objectsExpiresAt: '2026-10-01' },
+  ],
+  entities: { receipts: ['created_by', 'responsible'], sales: ['created_by'], transfers: ['created_by', 'responsible'], orders: ['created_by', 'responsible'] },
+  permissions: {
+    'sidebar.edit': { open: 'allow', medium: 'allow', closed: 'deny' },
+    'export.data': { open: 'allow', medium: 'allow', closed: 'deny' },
+    'discount.manual': { open: 'allow', medium: 'deny', closed: 'deny' },
+  },
+  policyRoles: {
+    staff: { mode: null, overrides: { 'sidebar.edit': 'deny' } }, cashier: { mode: 'closed', overrides: {} }, trainee: { mode: null, overrides: { 'sales.view': 'own' } },
+    storekeeper: { mode: null, overrides: { 'receipts.edit': 'all' } }, manager: { mode: 'open', overrides: { 'discount.manual': 'deny' } }, auditor: { mode: 'medium', overrides: { 'export.data': 'allow' } },
+  },
+  policyMembers: { m5: { mode: null, overrides: { 'sales.view': 'all' } } },
+  records: [
+    { entity: 'receipts', id: 'R-101', created_by: 'm7', responsible: 'm7' }, { entity: 'receipts', id: 'R-102', created_by: 'm5', responsible: 'm7' },
+    { entity: 'receipts', id: 'R-103', created_by: 'm4', responsible: 'm3' }, { entity: 'sales', id: 'S-2001', created_by: 'm5' }, { entity: 'sales', id: 'S-2002', created_by: 'm6' },
+    { entity: 'sales', id: 'S-2003', created_by: 'm3' }, { entity: 'transfers', id: 'T-31', created_by: 'm7', responsible: 'm4' }, { entity: 'transfers', id: 'T-32', created_by: 'm4', responsible: 'm7' },
+    { entity: 'orders', id: 'PO-7', created_by: 'm4', responsible: 'm4' }, { entity: 'orders', id: 'PO-8', created_by: 'm3', responsible: 'm2' },
+  ],
+  modules: {
+    iams: { name: 'Retail IAMS', sections: ['equipment'] },
+    bi: { name: 'Retail BI', sections: ['purchasing', 'analytics'], views: ['standalone', 'hidden'] },
+    pos: { name: 'Retail POS', sections: ['pos'], views: ['standalone', 'hidden'] },
+    wms: { name: 'Retail WMS', sections: ['inventory'], views: ['standalone', 'hidden'] },
+    plan: { name: 'Retail Plan', sections: ['plan'], deps: ['iams'], carriers: ['iams', 'bi'], default: 'embedded', embeds: ['rack.tab', 'product.where'] },
+    price: { name: 'Retail Price', sections: ['prices'], carriers: ['bi', 'pos'], default: 'embedded', embeds: ['product.prices', 'pos.tags'] },
+    route: { name: 'Retail Route', deps: ['wms'], views: ['standalone', 'hidden'] },
+    fresh: { name: 'Retail Fresh', deps: ['wms'], carriers: ['wms', 'pos'], default: 'embedded', embeds: ['receipt.batches'] },
+    loyalty: { name: 'Retail Loyalty', deps: ['pos'], views: ['standalone', 'hidden'] },
+    cash: { name: 'Retail Cash', deps: ['pos'], views: ['standalone', 'hidden'] },
+    online: { name: 'Retail Online', deps: ['pos', 'price'], views: ['standalone', 'hidden'] },
+    desk: { name: 'Retail Desk', carriers: ['iams'], default: 'embedded', embeds: ['unit.requests'] },
+    board: { name: 'Retail Board', carriers: ['iams', 'bi'], embeds: ['object.discussion'] },
+    people: { name: 'Retail People', default: 'embedded', embeds: ['header.contacts'] },
+  },
+  enabled: ['iams', 'bi', 'pos', 'wms', 'plan', 'price', 'route', 'fresh', 'cash', 'online', 'desk', 'board', 'people'],
+  viewsOrg: { board: 'hidden' },
+  viewsRoles: { cashier: { bi: 'hidden', iams: 'hidden', plan: 'hidden' }, storekeeper: { bi: 'hidden', pos: 'hidden' }, auditor: { pos: 'hidden' } },
+  viewsMembers: { m3: { board: 'standalone' } },
+  sessions: {
+    memberId: 'm4', actionPath: '/catalog',
+    scope: { panel: ['catalog', 'pos', 'prices', 'purchasing'], drop: ['prices.approve'], readonly: false },
+    ticket: { panel: ['pos'], drop: [], readonly: true },
+    idlePaths: ['/api/poll', '/api/notifications'], idlePolls: [{ path: '/api/orders', param: 'since' }],
+  },
+  config: {
+    schema: [['title', 'string'], ['default_lang', 'string'], ['locales', 'list'], ['support_url', 'string'], ['show_prices', 'bool'], ['max_upload_mb', 'number'], ['modules', 'object'], ['seo', 'object'], ['theme', 'string'], ['smtp_password', 'string', true]],
+    defaults: { title: 'Retail', default_lang: 'en', locales: ['en'], support_url: '', show_prices: true, max_upload_mb: 10, modules: {}, seo: { index: true }, theme: 'auto' },
+    site: { title: 'Kimigae Market', default_lang: 'ka', locales: ['ka', 'en', 'ru'], support_url: 'https://help.example.ge', modules: { loyalty: false }, seo: { index: true, analytics_token: 'abc123' }, smtp_password: 'hunter2' },
+    hosts: [
+      { host: 'market.example.ge', enabled: true, isPrimary: true, aliases: [], values: {} },
+      { host: 'batumi.example.ge', enabled: true, isPrimary: false, aliases: ['bt.example.ge'], values: { title: 'Kimigae Batumi', show_prices: false, support_url: '', default_lang: 'ru' } },
+      { host: 'old.example.ge', enabled: false, isPrimary: false, aliases: [], values: { title: 'Kimigae (old)' } },
+    ],
+    probe: 'WWW.Batumi.example.ge:443',
+  },
+};
+
+// --- a regional portal and marketplace ------------------------------------------------------------------------------
+
+const PP = ['listings', 'bookings', 'agencies', 'sellers', 'moderation', 'blog', 'forum', 'reviews', 'payments', 'settings'];
+export const PORTAL = {
+  id: 'portal', now: '2026-11-01', viewAs: 'settings', readAction: 'view',
+  keys: { sec: 'ad.pp.sec.', role: 'ad.pp.role.', act: 'ad.act.', ent: 'ad.pp.ent.', perm: 'ad.pp.perm.', modName: 'ad.pp.mod.' },
+  actions: ['view', 'create', 'edit', 'delete', 'publish', 'moderate'],
+  sections: PP,
+  objects: [{ id: 'old', name: 'Old Batumi' }, { id: 'new', name: 'New Boulevard' }, { id: 'gonio', name: 'Gonio' }, { id: 'kobuleti', name: 'Kobuleti' }],
+  roles: [
+    { id: 'owner', grants: [...PP] },
+    { id: 'admin', grants: { settings: '*', moderation: '*', sellers: '*', agencies: '*', listings: '*', payments: ['view'] } },
+    { id: 'member', grants: { listings: ['view'], blog: ['view'], forum: ['view', 'create'], reviews: ['view'] } },
+    { id: 'moderator', parent: 'member', grants: { moderation: ['view', 'moderate'], forum: ['moderate', 'delete'], reviews: ['moderate'], listings: ['moderate'] } },
+    { id: 'seller', parent: 'member', grants: { listings: ['create', 'edit', 'publish'], bookings: ['view', 'edit'], reviews: ['create'] } },
+    { id: 'agency', parent: 'seller', grants: { agencies: ['view', 'edit'], sellers: ['view', 'create'], payments: ['view'] } },
+    { id: 'agent', parent: 'agency', revoke: { sellers: ['create'], payments: ['view'] } },
+    { id: 'author', parent: 'member', grants: { blog: ['create', 'edit', 'publish'] } },
+  ],
+  members: [
+    { id: 'u1', name: 'Tamar Diasamidze', roleId: 'owner', isOwner: true },
+    { id: 'u2', name: 'Irakli Bolkvadze', roleId: 'admin' },
+    { id: 'u3', name: 'Sea View Realty', roleId: 'agency', objects: ['old', 'new'] },
+    { id: 'u4', name: 'Nika Abuladze', roleId: 'agent', objects: ['new'], extra: [{ grants: { listings: ['delete'] }, objects: ['new'], expiresAt: '2026-12-15' }] },
+    { id: 'u5', name: 'Guesthouse Lali', roleId: 'seller', objects: ['gonio'] },
+    { id: 'u6', name: 'Mariam Tsintsadze', roleId: 'moderator', expiresAt: '2027-01-31' },
+    { id: 'u7', name: 'Batumi Food Blog', roleId: 'author', extra: [{ grants: { forum: ['moderate'] }, objects: null, expiresAt: '2026-10-20' }] },
+  ],
+  entities: { listings: ['owner', 'agent'], bookings: ['guest', 'host'], posts: ['author'] },
+  permissions: { 'contact.reveal': { open: 'allow', medium: 'allow', closed: 'deny' }, 'listing.promote': { open: 'allow', medium: 'deny', closed: 'deny' } },
+  policyOrg: { mode: 'medium', overrides: {} },
+  policyRoles: { admin: { mode: 'open', overrides: {} }, agency: { mode: null, overrides: { 'listings.edit': 'all', 'listing.promote': 'allow' } }, agent: { mode: 'closed', overrides: {} }, moderator: { mode: 'open', overrides: { 'bookings.view': 'own' } } },
+  records: [
+    { entity: 'listings', id: 'L-12', owner: 'u3', agent: 'u4' }, { entity: 'listings', id: 'L-13', owner: 'u3', agent: '' }, { entity: 'listings', id: 'L-40', owner: 'u5' },
+    { entity: 'bookings', id: 'B-501', guest: 'u7', host: 'u5' }, { entity: 'bookings', id: 'B-502', guest: 'u6', host: 'u3' },
+    { entity: 'posts', id: 'P-9', author: 'u7' }, { entity: 'posts', id: 'P-10', author: 'u2' },
+  ],
+  modules: {
+    listings: { sections: ['listings', 'sellers'] },
+    booking: { sections: ['bookings'], deps: ['listings'] },
+    agencies: { sections: ['agencies'], deps: ['listings'] },
+    reviews: { sections: ['reviews'], deps: ['booking'], carriers: ['listings'], default: 'embedded', embeds: ['listing.reviews'] },
+    payments: { sections: ['payments'], deps: ['booking'], views: ['standalone', 'hidden'] },
+    moderation: { sections: ['moderation'], views: ['standalone', 'hidden'] },
+    blog: { sections: ['blog'] },
+    forum: { sections: ['forum'], carriers: ['blog'], embeds: ['post.comments'] },
+  },
+  enabled: ['listings', 'booking', 'agencies', 'reviews', 'payments', 'moderation', 'blog', 'forum'],
+  viewsRoles: { member: { moderation: 'hidden', payments: 'hidden' }, moderator: { moderation: 'standalone' }, author: { forum: 'embedded' } },
+  sessions: { memberId: 'u3', actionPath: '/listings', scope: { panel: ['listings', 'bookings'], drop: ['listings.publish'], readonly: false }, idlePaths: ['/api/poll', '/api/chat'], idlePolls: [{ path: '/api/bookings', param: 'since' }] },
+  config: {
+    schema: [['title', 'string'], ['default_lang', 'string'], ['locales', 'list'], ['currency', 'string'], ['booking_enabled', 'bool'], ['max_photos', 'number'], ['seo', 'object'], ['payment_api_key', 'string', true]],
+    defaults: { title: 'Portal', default_lang: 'en', locales: ['en'], currency: 'GEL', booking_enabled: true, max_photos: 20, seo: { index: true } },
+    site: { title: 'Batumi Portal', default_lang: 'ka', locales: ['ka', 'en', 'ru', 'tr'], seo: { index: true, maps_api_key: 'xyz' }, payment_api_key: 'sk_live_0000' },
+    hosts: [
+      { host: 'batumi.example.ge', enabled: true, isPrimary: true, aliases: [], values: {} },
+      { host: 'rent.batumi.example.ge', enabled: true, isPrimary: false, aliases: ['stay.example.ge'], values: { title: 'Batumi Stays', max_photos: 40 } },
+      { host: 'forum.batumi.example.ge', enabled: true, isPrimary: false, aliases: [], values: { title: 'Batumi Forum', booking_enabled: false } },
+    ],
+    probe: 'stay.example.ge',
+  },
+};
+
+// --- a clinic -------------------------------------------------------------------------------------------------------
+
+const CS = ['patients', 'appointments', 'records', 'prescriptions', 'lab', 'schedule', 'billing', 'admin'];
+export const CLINIC = {
+  id: 'clinic', now: '2026-11-01', viewAs: 'admin', readAction: 'view',
+  keys: { sec: 'ad.pc.sec.', role: 'ad.pc.role.', act: 'ad.act.', ent: 'ad.pc.ent.', perm: 'ad.pc.perm.', modName: 'ad.pc.mod.' },
+  actions: ['view', 'create', 'edit', 'delete', 'sign', 'export'],
+  sections: CS,
+  objects: [{ id: 'main', name: 'Main building' }, { id: 'kids', name: 'Children’s department' }, { id: 'labs', name: 'Laboratory' }],
+  roles: [
+    { id: 'owner', grants: [...CS] },
+    { id: 'admin', grants: { admin: '*', schedule: '*', billing: ['view', 'export'] } },
+    { id: 'staff', grants: { schedule: ['view'], patients: ['view'] } },
+    { id: 'reception', parent: 'staff', grants: { patients: ['create', 'edit'], appointments: ['view', 'create', 'edit', 'delete'], billing: ['view', 'create'] } },
+    { id: 'nurse', parent: 'staff', grants: { appointments: ['view'], records: ['view', 'create'], lab: ['view', 'create'] } },
+    { id: 'doctor', parent: 'nurse', grants: { records: ['edit', 'sign'], prescriptions: ['view', 'create', 'sign'], lab: ['sign'] } },
+    { id: 'intern', parent: 'doctor', revoke: { records: ['sign'], prescriptions: ['sign'] } },
+    { id: 'labtech', parent: 'staff', grants: { lab: ['view', 'create', 'edit'] }, revoke: { patients: ['view'] } },
+  ],
+  members: [
+    { id: 'c1', name: 'Dr. Ketevan Lomidze', roleId: 'owner', isOwner: true },
+    { id: 'c2', name: 'Zurab Chkheidze', roleId: 'admin' },
+    { id: 'c3', name: 'Dr. Salome Gogua', roleId: 'doctor', objects: ['main', 'kids'] },
+    { id: 'c4', name: 'Dr. Luka Meladze', roleId: 'intern', objects: ['kids'], roleExpiresAt: '2027-06-30' },
+    { id: 'c5', name: 'Eka Japaridze', roleId: 'nurse', objects: ['kids'], extra: [{ grants: { prescriptions: ['view'] }, objects: ['kids'], expiresAt: '2026-11-15' }] },
+    { id: 'c6', name: 'Natia Kurtanidze', roleId: 'reception', objects: ['main'] },
+    { id: 'c7', name: 'Giga Mamaladze', roleId: 'labtech', objects: ['labs'] },
+  ],
+  entities: { appointments: ['doctor', 'booked_by'], records: ['doctor'], prescriptions: ['doctor'] },
+  permissions: { 'records.print': { open: 'allow', medium: 'allow', closed: 'deny' }, 'patients.merge': { open: 'allow', medium: 'deny', closed: 'deny' } },
+  policyOrg: { mode: 'closed', overrides: {} },
+  policyRoles: { reception: { mode: 'medium', overrides: { 'records.view': 'own' } }, admin: { mode: 'open', overrides: {} }, nurse: { mode: null, overrides: { 'records.view': 'all' } } },
+  records: [
+    { entity: 'appointments', id: 'A-1', doctor: 'c3', booked_by: 'c6' }, { entity: 'appointments', id: 'A-2', doctor: 'c4', booked_by: 'c6' },
+    { entity: 'records', id: 'MR-77', doctor: 'c3' }, { entity: 'records', id: 'MR-78', doctor: 'c4' }, { entity: 'prescriptions', id: 'RX-5', doctor: 'c3' },
+  ],
+  modules: {
+    registry: { sections: ['patients'] },
+    schedule: { sections: ['appointments', 'schedule'], deps: ['registry'] },
+    emr: { sections: ['records'], deps: ['registry'] },
+    pharmacy: { sections: ['prescriptions'], deps: ['emr'], carriers: ['emr'], default: 'embedded', embeds: ['record.prescriptions'] },
+    lab: { sections: ['lab'], deps: ['emr'], carriers: ['emr'], embeds: ['record.results'] },
+    billing: { sections: ['billing'], deps: ['schedule'], views: ['standalone', 'hidden'] },
+    portal: { deps: ['schedule'], views: ['standalone', 'hidden'] },
+  },
+  enabled: ['registry', 'schedule', 'emr', 'pharmacy', 'lab', 'billing'],
+  viewsRoles: { reception: { emr: 'hidden' }, labtech: { emr: 'hidden' } },
+  sessions: { memberId: 'c3', actionPath: '/records', ttl: '1d', idle: '15m', scope: { panel: ['records', 'prescriptions', 'patients'], drop: ['records.export'], readonly: false }, idlePaths: ['/api/poll'], idlePolls: [{ path: '/api/queue', param: 'since' }] },
+  config: {
+    schema: [['title', 'string'], ['locales', 'list'], ['slot_minutes', 'number'], ['online_booking', 'bool'], ['print', 'object'], ['lab_api_token', 'string', true]],
+    defaults: { title: 'Clinic', locales: ['en'], slot_minutes: 20, online_booking: false, print: { logo: true } },
+    site: { title: 'City Clinic', locales: ['ka', 'en'], online_booking: true, print: { logo: true, lab_api_token: 'x' } },
+    hosts: [{ host: 'clinic.example.ge', enabled: true, isPrimary: true, aliases: [], values: {} }, { host: 'kids.clinic.example.ge', enabled: true, isPrimary: false, aliases: [], values: { title: 'Kids clinic', slot_minutes: 30 } }],
+    probe: 'kids.clinic.example.ge',
+  },
+};
+
+// --- a multi-tenant SaaS admin --------------------------------------------------------------------------------------
+
+const SS = ['tenants', 'users', 'plans', 'billing', 'support', 'audit', 'flags', 'api'];
+export const SAAS = {
+  id: 'saas', now: '2026-11-01', viewAs: 'users', readAction: 'view',
+  keys: { sec: 'ad.ps.sec.', role: 'ad.ps.role.', act: 'ad.act.', ent: 'ad.ps.ent.', perm: 'ad.ps.perm.', modName: 'ad.ps.mod.' },
+  actions: ['view', 'create', 'edit', 'delete', 'impersonate', 'export'],
+  sections: SS,
+  objects: [{ id: 'eu-1', name: 'eu-1' }, { id: 'us-1', name: 'us-1' }, { id: 'ap-1', name: 'ap-1' }],
+  roles: [
+    { id: 'owner', grants: [...SS] },
+    { id: 'ops', grants: { tenants: '*', users: '*', flags: '*', api: ['view', 'edit'], audit: ['view'] } },
+    { id: 'support', grants: { tenants: ['view'], users: ['view', 'impersonate'], support: ['view', 'create', 'edit'] } },
+    { id: 'lead', parent: 'support', grants: { support: ['delete', 'export'], users: ['edit'] } },
+    { id: 'junior', parent: 'support', revoke: { users: ['impersonate'] } },
+    { id: 'finance', grants: { billing: '*', plans: ['view', 'edit'], tenants: ['view'] } },
+    { id: 'developer', grants: { api: '*', flags: ['view', 'edit'], audit: ['view'] } },
+    { id: 'auditor', grants: { audit: ['view', 'export'], billing: ['view'], tenants: ['view'] } },
+  ],
+  members: [
+    { id: 's1', name: 'Alex Morgan', roleId: 'owner', isOwner: true },
+    { id: 's2', name: 'Priya Shah', roleId: 'ops', objects: ['eu-1', 'us-1'] },
+    { id: 's3', name: 'Tom Becker', roleId: 'lead', objects: ['eu-1'] },
+    { id: 's4', name: 'Lea Martin', roleId: 'junior', objects: ['eu-1'], extra: [{ grants: { users: ['impersonate'] }, objects: ['eu-1'], expiresAt: '2026-11-02' }] },
+    { id: 's5', name: 'Kenji Sato', roleId: 'developer', objects: ['ap-1'] },
+    { id: 's6', name: 'Rosa Diaz', roleId: 'finance' },
+    { id: 's7', name: 'External auditor', roleId: 'auditor', expiresAt: '2026-12-31' },
+  ],
+  entities: { tickets: ['assignee', 'opened_by'], invoices: ['account_manager'], tenants: ['account_manager'] },
+  permissions: { 'impersonate.write': { open: 'allow', medium: 'deny', closed: 'deny' }, 'data.export': { open: 'allow', medium: 'allow', closed: 'deny' } },
+  policyOrg: { mode: 'medium', overrides: {} },
+  policyRoles: { support: { mode: 'closed', overrides: { 'tenants.view': 'all' } }, lead: { mode: 'medium', overrides: {} }, ops: { mode: 'open', overrides: { 'impersonate.write': 'deny' } } },
+  records: [
+    { entity: 'tickets', id: 'T-900', assignee: 's3', opened_by: 's4' }, { entity: 'tickets', id: 'T-901', assignee: 's4', opened_by: 's4' },
+    { entity: 'invoices', id: 'INV-3', account_manager: 's6' }, { entity: 'tenants', id: 'acme', account_manager: 's2' }, { entity: 'tenants', id: 'globex', account_manager: 's6' },
+  ],
+  modules: {
+    tenants: { sections: ['tenants', 'users'] },
+    billing: { sections: ['billing', 'plans'], deps: ['tenants'] },
+    support: { sections: ['support'], deps: ['tenants'] },
+    audit: { sections: ['audit'], views: ['standalone', 'hidden'] },
+    flags: { sections: ['flags'], carriers: ['tenants'], embeds: ['tenant.flags'] },
+    api: { sections: ['api'], deps: ['tenants'] },
+    sso: { deps: ['tenants'], carriers: ['tenants'], default: 'embedded', embeds: ['tenant.sso'] },
+  },
+  enabled: ['tenants', 'billing', 'support', 'audit', 'flags', 'api', 'sso'],
+  viewsRoles: { support: { billing: 'hidden', api: 'hidden' }, finance: { support: 'hidden' } },
+  sessions: { memberId: 's3', actionPath: '/tenants', ttl: '8h', idle: '1h', scope: { panel: ['support', 'users', 'tenants'], drop: ['users.impersonate'], readonly: false }, idlePaths: ['/api/poll', '/api/metrics'], idlePolls: [{ path: '/api/tickets', param: 'since' }] },
+  config: {
+    schema: [['title', 'string'], ['region', 'string'], ['seats', 'number'], ['sso_required', 'bool'], ['domains', 'list'], ['branding', 'object'], ['webhook_secret', 'string', true]],
+    defaults: { title: 'Admin', region: 'eu-1', seats: 5, sso_required: false, domains: [], branding: { color: '#334155' } },
+    site: { title: 'Cloud Admin', seats: 10, branding: { color: '#0f766e', cdn_token: 'abc' }, webhook_secret: 'whsec_1' },
+    hosts: [{ host: 'admin.example.com', enabled: true, isPrimary: true, aliases: [], values: {} }, { host: 'acme.example.com', enabled: true, isPrimary: false, aliases: ['acme.example.org'], values: { title: 'Acme admin', sso_required: true, domains: ['acme.com'] } }],
+    probe: 'acme.example.org',
+  },
+};
+
+export const PRESETS = { retail: RETAIL, portal: PORTAL, clinic: CLINIC, saas: SAAS };

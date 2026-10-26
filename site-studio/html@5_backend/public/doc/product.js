@@ -1,0 +1,4 @@
+const BLOCK_TYPES={};const THEMES={};const ICONS={};const UI={};const P={prefix:'x',format:'',version:'1.0.0',name:'Document',regions:[],uiLangs:['en'],commonDefaults:()=>({}),normCommon:null,newDoc:null,normalizeTop:null,isNormalized:()=>false,attachmentExtra:null,renderRoot:null,planExtra:null,attAnchorTypes:[],blockClasses:null,blockStyle:null,placeHref:null,routeHref:null,buildCSS:null,finishUsage:null,runtime:{fns:{},order:[]},exportHooks:{},};function defineProduct(spec){const{blocks,themes,icons,ui,...rest}=spec;if(blocks)Object.assign(BLOCK_TYPES,blocks);if(themes)Object.assign(THEMES,themes);if(icons)Object.assign(ICONS,icons);if(ui){for(const[lang,dict]of Object.entries(ui))UI[lang]=Object.assign(UI[lang]||{},dict);}
+Object.assign(P,rest);return P;}
+function addUI(dicts){for(const[lang,dict]of Object.entries(dicts))UI[lang]=Object.assign(UI[lang]||{},dict);}
+export{ICONS,P,UI,BLOCK_TYPES,THEMES,addUI,defineProduct};

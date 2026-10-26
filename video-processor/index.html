@@ -1,0 +1,39 @@
+<!doctype html>
+<!-- video-processor/index.html: entry page. A shell, not a document: main.js builds the whole UI inside <main>.
+     Why an empty shell: one render path (JS) owns content, i18n and state; static markup would duplicate it and
+     drift. Cost accepted: nothing useful without JS (see <noscript>). singlefile.js inlines the CSS/JS below into
+     the html@5_* builds and strips every comment, so these notes never ship. -->
+<html lang="en">
+<!-- lang="en" is the static default only; ui/i18n.js rewrites it on language switch (screen readers, hyphenation). -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: it must sit in the first 1024 bytes, before any non-ASCII byte, or the parser re-decodes the page. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Without a viewport meta, mobile browsers lay out at ~980px and zoom out, so no @media (max-width) in app.css fires. -->
+<meta name="color-scheme" content="light dark">
+<!-- color-scheme: the UA paints scrollbars, form controls and the pre-CSS canvas dark when the OS is dark, so there is
+     no white flash before ui/base.css loads its dark tokens. -->
+<title>Video Processor</title>
+<meta name="description" content="Offline video editor like TikTok or Instagram: timeline with clips, pictures, transitions, filters, text, stickers, drawings and music, slideshows from songs and photos, and every edit shown as an ffmpeg command for bash or cmd.exe. Exports WebM / MP4, audio and frames. Nothing leaves your device.">
+<!-- Favicon as a URL-encoded SVG data: URI: zero requests, works from file:// and offline builds. '#' must be %23,
+     otherwise it starts a URL fragment and truncates the image. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Crect x='6' y='9' width='20' height='14' rx='2.5' fill='none' stroke='white' stroke-width='2'/%3E%3Cpath d='M14 13v6l5-3z' fill='white'/%3E%3C/svg%3E">
+<!-- Cascade order is a contract (equal specificity: later file wins):
+       1. ui/base.css  tokens (ed-* custom properties), reset, shared primitives (.ed-*)
+       2. ui/app.css   app shell (.ap-*)
+       3. ./app.css    this app (vp-*), may override 1-2 without !important
+     Reordering breaks those overrides silently: no error, only wrong styles. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<main class="ap-main" id="main"></main>
+<!-- .ed-noscript is styled in ui/base.css as a top-layer banner; <noscript> is the only content a JS-less visitor sees. -->
+<noscript><div class="ed-noscript">This application needs JavaScript. It runs entirely in your browser and works offline.</div></noscript>
+<!-- type=module: deferred by default (runs after parsing, so #main exists), strict mode, own scope, and imports are
+     resolved relative to this file. Modules do not load from file:// in Chromium; that is why the html@5_* single-file
+     builds exist for offline use. -->
+<script type="module" src="./main.js"></script>
+</body>
+</html>

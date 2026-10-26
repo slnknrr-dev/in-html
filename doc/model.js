@@ -1,0 +1,415 @@
+// doc/model.js - registry-driven document model: block factories, tree walking and normalization.
+//
+// Container lists come from BLOCK_TYPES[type].lists ('blocks', 'cols.*.blocks'). Per-language keys come from
+// i18nFields, schema fields of type 'i18n' and richFields. Reference and format fields are validated from the schema:
+// att -> existing attachment, req -> existing request, icon -> ICONS key, date / day / time / color formats, nullable
+// numbers, plus an optional per-field `norm(value)`. The product supplies common block props (P.commonDefaults,
+// P.normCommon), the document top level (P.normalizeTop, P.newDoc) and per-type fixups (type.normalize).
+// normalizeDoc never throws; hostile input is bounded by safeClone and the size caps below.
+//
+// Why "coerce to the default's type" instead of a validator that rejects: documents come from old versions, other
+// tools and hand edits. Rejecting a whole file for one bad field loses user work; coercing field by field keeps every
+// salvageable value and guarantees renderers a fixed shape (no typeof checks downstream).
+// Ids are re-issued when missing, malformed or duplicated (freshId + ctx.seen): references (#anchors, xrefs) rely on
+// uniqueness, and a copy-pasted block must not alias its source.
+
+import { isB64 } from '../codec/base64.js';
+import { safeColor } from '../color/color.js';
+import { canonLang } from '../i18n/lang.js';
+import { normI18n } from '../i18n/text.js';
+import { BLOCK_TYPES, ICONS, P } from './product.js';
+import { uid } from '../util/id.js';
+import { MIME_RE, bool, clone, getPath, isObj, num, oneOf, own, pad2, str } from '../util/value.js';
+
+// Size caps for imported documents (keep normalization and rendering bounded on hostile/broken input).
+export const MAX_NEST = 6;        // container blocks at list depth >= MAX_NEST are dropped
+export const MAX_LIST = 2000;     // blocks per list
+export const MAX_ITEMS = 500;     // items per block
+export const MAX_ELEMS = 12;      // elements of a wildcard container list (type.listMax overrides)
+export const MAX_ATTS = 2000;     // attachments
+
+export const BLOCK_ID_RE = /^[a-z][a-z0-9]{2,31}$/i;
+export const ITEM_ID_RE = /^[a-z0-9]{3,32}$/i;
+
+/* ---------- field formats ---------- */
+
+// 'YYYY' | 'YYYY-MM' | 'present' (when allowed), else ''.
+export function normDate(v, allowPresent) {
+  if (v === 'present') return allowPresent ? 'present' : '';
+  v = str(v).trim();
+  const m = /^(\d{4})(?:-(\d{1,2}))?$/.exec(v);
+  if (!m) return '';
+  if (!m[2]) return m[1];
+  const mo = +m[2];
+  return mo >= 1 && mo <= 12 ? m[1] + '-' + String(mo).padStart(2, '0') : m[1];
+}
+
+// 'YYYY-MM-DD' (a trailing ISO time is ignored) with a real calendar day, else ''.
+// Date.UTC(y, mo, 0) = day 0 of the next month = last day of month mo, so leap years come from the engine, not
+// from a hand-written rule.
+export function normDay(v) {
+  const m = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?$/.exec(str(v).trim());
+  if (!m) return '';
+  const y = +m[1];
+  const mo = +m[2];
+  const d = +m[3];
+  if (mo < 1 || mo > 12 || d < 1 || d > new Date(Date.UTC(y, mo, 0)).getUTCDate()) return '';
+  return m[1] + '-' + pad2(mo) + '-' + pad2(d);
+}
+
+// 'HH:MM' (24 h; seconds dropped), else ''.
+export function normTime(v) {
+  const m = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(str(v).trim());
+  if (!m || +m[1] > 23 || +m[2] > 59) return '';
+  return pad2(+m[1]) + ':' + m[2];
+}
+
+/* ---------- factories and tree helpers ---------- */
+
+// Throws on unknown types (unlike normBlock, which drops them): this is a programming error of the editor, not bad
+// input. Overrides are cloned so callers can pass shared templates without aliasing.
+export function newBlock(type, overrides = {}) {
+  const t = own(BLOCK_TYPES, type);
+  if (!t || typeof t.defaults !== 'function') throw new Error('Unknown block type: ' + type);
+  const id = uid();
+  const d = t.defaults();
+  const b = { id, type, ...P.commonDefaults(), ...d };
+  if (isObj(d.style)) b.style = P.commonDefaults().style; // a type default never replaces the common style object
+  const o = clone(overrides) || {};
+  if (isObj(o.style) && isObj(b.style)) { Object.assign(b.style, o.style); delete o.style; }
+  delete o.type;
+  return Object.assign(b, o);
+}
+
+// Child block lists of a container: spec 'blocks' -> b.blocks ('<id>:blocks'); 'cols.*.blocks' -> each
+// b.cols[i].blocks ('<id>:cols.<i>.blocks'). fn(list, listPath).
+export function eachChildList(b, fn) {
+  const t = isObj(b) ? own(BLOCK_TYPES, b.type) : null;
+  if (!t || !Array.isArray(t.lists)) return;
+  for (const spec of t.lists) {
+    if (typeof spec !== 'string' || !spec) continue;
+    const parts = spec.split('.');
+    const star = parts.indexOf('*');
+    if (star < 0) {
+      const l = getPath(b, spec);
+      if (Array.isArray(l)) fn(l, b.id + ':' + spec);
+      continue;
+    }
+    const head = parts.slice(0, star).join('.');
+    const tail = parts.slice(star + 1).join('.');
+    const arr = head ? getPath(b, head) : null;
+    if (!Array.isArray(arr)) continue;
+    arr.forEach((el, i) => {
+      if (!isObj(el)) return;
+      const l = tail ? getPath(el, tail) : null;
+      if (Array.isArray(l)) fn(l, `${b.id}:${head}.${i}${tail ? '.' + tail : ''}`);
+    });
+  }
+}
+
+// Deep clone with fresh ids (block, items, container elements such as columns, nested blocks).
+export function cloneBlock(block) {
+  const b = clone(block);
+  reid(b);
+  return b;
+}
+
+// Element ids of wildcard containers (cols.*) are renewed as well: they are anchors of their own lists' paths.
+function reid(b) {
+  if (!isObj(b)) return;
+  b.id = uid();
+  if (Array.isArray(b.items)) for (const it of b.items) if (isObj(it)) it.id = uid();
+  const t = own(BLOCK_TYPES, b.type);
+  for (const spec of t && Array.isArray(t.lists) ? t.lists : []) {
+    const parts = String(spec).split('.');
+    const star = parts.indexOf('*');
+    const arr = star > 0 ? getPath(b, parts.slice(0, star).join('.')) : null;
+    if (Array.isArray(arr)) for (const el of arr) if (isObj(el)) el.id = uid();
+  }
+  eachChildList(b, (list) => list.forEach(reid));
+}
+
+// fn(block, list, index, parentBlock|null, listPath); returning false skips the block's children.
+export function walkBlocks(doc, fn) {
+  const walk = (list, parent, path) => {
+    if (!Array.isArray(list)) return;
+    for (let i = 0; i < list.length; i++) {
+      const b = list[i];
+      if (!isObj(b)) continue;
+      if (fn(b, list, i, parent, path) === false) continue;
+      eachChildList(b, (l, p) => walk(l, b, p));
+    }
+  };
+  const r = (doc && doc.regions) || {};
+  for (const k of P.regions) walk(r[k], null, 'regions.' + k);
+}
+
+/* ---------- schema lookups ---------- */
+
+// Per-type indexes keyed by the registry object itself: WeakMap needs no invalidation and frees with the type.
+// First declaration of a key wins, matching how the editor renders duplicate schema rows (first one visible).
+const FIELD_CACHE = new WeakMap();
+export function fieldOf(t, key, item) {
+  let c = FIELD_CACHE.get(t);
+  if (!c) {
+    const idx = (list) => {
+      const m = new Map();
+      for (const f of Array.isArray(list) ? list : []) if (isObj(f) && typeof f.key === 'string' && !m.has(f.key)) m.set(f.key, f);
+      return m;
+    };
+    c = { b: idx(t.schema), i: idx(t.itemSchema) };
+    FIELD_CACHE.set(t, c);
+  }
+  return (item ? c.i : c.b).get(key);
+}
+
+// Keys holding per-language values: declared i18n fields, schema fields of type 'i18n' and rich-text fields.
+const I18N_CACHE = new WeakMap();
+export function i18nKeysOf(t, item) {
+  let c = I18N_CACHE.get(t);
+  if (!c) {
+    const mk = (list, schema, rich) => {
+      const s = new Set(Array.isArray(list) ? list.filter((k) => typeof k === 'string') : []);
+      for (const f of Array.isArray(schema) ? schema : []) if (isObj(f) && f.type === 'i18n' && typeof f.key === 'string') s.add(f.key);
+      if (isObj(rich)) for (const k of Object.keys(rich)) if (k.indexOf('.') < 0) s.add(k);
+      return s;
+    };
+    c = { b: mk(t.i18nFields, t.schema, t.richFields), i: mk(t.itemI18nFields, t.itemSchema, t.itemRichFields) };
+    I18N_CACHE.set(t, c);
+  }
+  return item ? c.i : c.b;
+}
+
+/* ---------- normalization ---------- */
+
+// Coerce props of `obj` to the types of `def`, using the schema for ranges / enums and reference field types.
+// Only keys present in def are coerced. Precedence of rules: i18n -> field norm() -> product key norm -> reference
+// types (att / req / icon) -> nullable numbers -> by default value type. Reference fields resolve against ctx, so a
+// dangling id becomes null instead of a broken link at render time.
+export function coerceProps(obj, def, t, item, i18nKeys, ctx) {
+  for (const k of Object.keys(def)) {
+    const dv = def[k];
+    const v = obj[k];
+    if (i18nKeys.has(k)) { obj[k] = normI18n(v, ctx.dl); continue; }
+    const f = fieldOf(t, k, item);
+    const ft = f ? f.type : '';
+    if (f && typeof f.norm === 'function') { obj[k] = f.norm(v, dv, ctx); continue; }
+    // Product-wide normalizers by key name (P.keyNorms, e.g. { sku: normSku }) for string props.
+    const kn = typeof dv === 'string' && P.keyNorms ? own(P.keyNorms, k) : null;
+    if (typeof kn === 'function') { obj[k] = kn(v); continue; }
+    if (ft === 'att' || (!f && (k === 'att' || k === 'photo') && dv === null)) {
+      obj[k] = typeof v === 'string' && isObj(own(ctx.atts, v)) ? v : null;
+      continue;
+    }
+    if (ft === 'req') { obj[k] = typeof v === 'string' && ctx.reqIds && ctx.reqIds.has(v) ? v : null; continue; }
+    if (ft === 'icon' || (k === 'icon' && typeof dv === 'string')) {
+      obj[k] = typeof v === 'string' && typeof own(ICONS, v) === 'string' ? v : typeof dv === 'string' ? '' : null;
+      continue;
+    }
+    if ((ft === 'number' || ft === 'range') && (dv === null || f.nullable)) {
+      if (v == null || v === '') { obj[k] = null; continue; }
+      let n = num(v, null, f.min, f.max);
+      if (n !== null && f.step === 1) n = Math.round(n);
+      obj[k] = n;
+      continue;
+    }
+    if (typeof dv === 'boolean') obj[k] = bool(v, dv);
+    else if (typeof dv === 'number') {
+      let n = num(v, dv, f && f.min, f && f.max);
+      if (f && f.type === 'select' && Array.isArray(f.options)) n = oneOf(n, f.options.map((o) => o.v), dv);
+      if (f && f.step === 1) n = Math.round(n);
+      obj[k] = n;
+    } else if (typeof dv === 'string') {
+      if (ft === 'select' && Array.isArray(f.options)) obj[k] = oneOf(v, f.options.map((o) => o.v), dv);
+      else if (ft === 'date') obj[k] = normDate(v, !!f.allowPresent);
+      else if (ft === 'day') obj[k] = normDay(v);
+      else if (ft === 'time') obj[k] = normTime(v);
+      else if (ft === 'color') obj[k] = safeColor(v);
+      else obj[k] = str(v, dv);
+    } else if (dv === null && !Array.isArray(v) && !isObj(v)) {
+      obj[k] = typeof v === 'string' && v ? v : typeof v === 'number' && Number.isFinite(v) ? v : null;
+    }
+  }
+}
+
+// Keeps a valid, unseen id (stable anchors across saves); otherwise a new uid, retried until unique.
+export function freshId(v, re, seen) {
+  let id = typeof v === 'string' && re.test(v) && !seen.has(v) ? v : uid();
+  while (seen.has(id)) id = uid();
+  seen.add(id);
+  return id;
+}
+
+// Block / item normalization context: default language, ids seen so far, attachments, request ids, anchors.
+export function normContext(dl, atts, extra = {}) {
+  return { dl, seen: new Set(), atts: atts || {}, reqIds: new Set(), anchorSet: new Set(), ...extra };
+}
+
+export function normItems(list, t, ctx) {
+  const src = [];
+  if (Array.isArray(list)) for (let i = 0; i < list.length && src.length < MAX_ITEMS; i++) if (isObj(list[i])) src.push(list[i]);
+  const keys = i18nKeysOf(t, true);
+  return src.map((it) => {
+    const idef = t.itemDefaults();
+    const o = { ...(isObj(idef) ? idef : {}), ...it };
+    o.id = freshId(it.id, ITEM_ID_RE, ctx.seen);
+    coerceProps(o, isObj(idef) ? idef : {}, t, true, keys, ctx);
+    return o;
+  });
+}
+
+// Note: `...b` carries unknown props through unvalidated (forward compatibility: a newer version's fields survive a
+// round trip through an older editor). Safe only because renderers escape every value they interpolate.
+export function normBlock(b, ctx, depth = 0) {
+  if (!isObj(b)) return null;
+  const t = own(BLOCK_TYPES, b.type);
+  if (!t || typeof t.defaults !== 'function') return null; // drop unknown types
+  if (t.container && depth >= MAX_NEST) return null;       // too deeply nested
+  const out = { ...P.commonDefaults(), ...b };
+  out.type = b.type;
+  out.id = freshId(b.id, BLOCK_ID_RE, ctx.seen);
+  out.hidden = bool(b.hidden, false);
+  out.langs = Array.isArray(b.langs) ? [...new Set(b.langs.slice(0, 200).map(canonLang).filter(Boolean))] : null;
+  if (out.langs && !out.langs.length) out.langs = null;
+  const def = t.defaults();
+  if (!isObj(def)) return null;
+  if (def.style !== undefined && typeof def.style !== 'string') delete def.style; // `style` is the common style object
+  if (P.normCommon) P.normCommon(out, b, ctx, def);
+  coerceProps(out, def, t, false, i18nKeysOf(t, false), ctx);
+  if (typeof t.itemDefaults === 'function') out.items = normItems(b.items, t, ctx);
+  // Container lists from the registry ('blocks', 'cols.*.blocks'). A `transparent` container (a page of a multi-page
+  // product) keeps its children at its own nesting depth: they are the top level of the page.
+  const inner = depth + (t.transparent ? 0 : 1);
+  for (const spec of Array.isArray(t.lists) ? t.lists : []) {
+    if (typeof spec !== 'string' || !spec) continue;
+    const parts = spec.split('.');
+    if (parts.length === 1) { out[spec] = normList(b[spec], ctx, inner); continue; }
+    if (parts.length !== 3 || parts[1] !== '*') continue;
+    const [arrKey, , listKey] = parts;
+    const max = t.listMax || MAX_ELEMS;
+    const els = [];
+    if (Array.isArray(b[arrKey])) for (let i = 0; i < b[arrKey].length && els.length < max; i++) if (isObj(b[arrKey][i])) els.push(b[arrKey][i]);
+    const src = els.length ? els : Array.isArray(def[arrKey]) ? def[arrKey].filter(isObj) : [];
+    out[arrKey] = src.map((c) => ({ ...c, id: freshId(c.id, ITEM_ID_RE, ctx.seen), [listKey]: normList(c[listKey], ctx, inner) }));
+  }
+  if (typeof t.normalize === 'function') t.normalize(out, b, ctx, def);
+  // Object/array defaults the steps above did not produce keep their default shape.
+  const i18n = i18nKeysOf(t, false);
+  for (const k of Object.keys(def)) {
+    const dv = def[k];
+    if (dv === null || typeof dv !== 'object' || i18n.has(k)) continue;
+    if (Array.isArray(dv) ? !Array.isArray(out[k]) : !isObj(out[k])) out[k] = dv;
+  }
+  return out;
+}
+
+export function normList(list, ctx, depth = 0) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (let i = 0; i < list.length && out.length < MAX_LIST; i++) {
+    let n = null;
+    try { n = normBlock(list[i], ctx, depth); } catch (e) { n = null; } // one bad block never fails the document
+    if (n) out.push(n);
+  }
+  return out;
+}
+
+export function normAttachments(atts, dl) {
+  const out = {};
+  if (!isObj(atts)) return out;
+  let n = 0;
+  for (const key of Object.keys(atts)) {
+    const a = atts[key];
+    if (!isObj(a) || !ITEM_ID_RE.test(key)) continue;
+    if (++n > MAX_ATTS) break;
+    const o = {
+      id: key,
+      // eslint-disable-next-line no-control-regex
+      name: str(a.name, 'file').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 255) || 'file',
+      mime: MIME_RE.test(str(a.mime)) ? str(a.mime).toLowerCase() : 'application/octet-stream',
+      size: Math.max(0, Math.round(num(a.size, 0))),
+      title: normI18n(a.title, dl), desc: normI18n(a.desc, dl),
+    };
+    if (P.attachmentExtra) P.attachmentExtra(o, a);
+    o.asset = bool(a.asset, false);
+    o.added = str(a.added, '');
+    // Size is trusted from the file only when non-zero; otherwise derived from base64 length (4 chars = 3 bytes,
+    // minus padding).
+    if (typeof a.data === 'string') {
+      // Base64 only (base64url is mapped); anything else (markup, CSS, ...) is dropped -> metadata-only attachment.
+      const data = a.data.replace(/^data:[^,]*,/, '').replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/');
+      if (isB64(data)) o.data = data;
+    }
+    if (typeof o.data === 'string' && !o.size) {
+      o.size = Math.floor(o.data.length * 3 / 4) - (o.data.endsWith('==') ? 2 : o.data.endsWith('=') ? 1 : 0);
+    }
+    out[key] = o;
+  }
+  return out;
+}
+
+// [langs, defaultLang]: canonical, unique, at most 200; 'en' when empty.
+export function docLangs(list, def) {
+  let langs = Array.isArray(list) ? [...new Set(list.slice(0, 200).map(canonLang).filter(Boolean))] : [];
+  if (!langs.length) langs = ['en'];
+  const dl0 = canonLang(def);
+  return [langs, langs.includes(dl0) ? dl0 : langs[0]];
+}
+
+// JSON-like deep copy of untrusted input that never throws: what JSON.stringify would reject or blow up on is dropped
+// instead (cycles, BigInt, functions, symbols, getters that throw, nesting deeper than 64, arrays past 10000 entries,
+// more than 2M values in total). Non-finite numbers become null; toJSON() is honoured; '__proto__' keys are skipped.
+export function safeClone(v, depth = 0, st = { seen: new Set(), n: 0 }) {
+  if (v === null) return null;
+  const t = typeof v;
+  if (t === 'string' || t === 'boolean') return v;
+  if (t === 'number') return Number.isFinite(v) ? v : null;
+  if (t !== 'object' || depth > 64 || st.seen.has(v) || ++st.n > 2e6) return undefined;
+  if (typeof v.toJSON === 'function') {
+    try { return safeClone(v.toJSON(), depth + 1, st); } catch (e) { return undefined; }
+  }
+  st.seen.add(v); // ancestors only (removed below): shared subtrees are copied like JSON does, cycles are cut
+  let out;
+  try {
+    if (Array.isArray(v)) {
+      const n = Math.min(v.length, 10000);
+      out = new Array(n);
+      for (let i = 0; i < n; i++) {
+        const x = safeClone(v[i], depth + 1, st);
+        out[i] = x === undefined ? null : x;
+      }
+    } else {
+      out = {};
+      for (const k of Object.keys(v)) {
+        if (k === '__proto__') continue;
+        const x = safeClone(v[k], depth + 1, st);
+        if (x !== undefined) out[k] = x;
+      }
+    }
+  } catch (e) {
+    out = undefined;
+  }
+  st.seen.delete(v);
+  return out;
+}
+
+// Fill defaults deeply, repair tables, validate references, drop unknown block types. Returns a new doc; never
+// sanitizes HTML (renderers do). Never throws: a document that cannot be repaired at all becomes a blank one.
+// safeClone first: the product's normalizeTop then works on plain data only (no getters, proxies, cycles), so its
+// own code needs no defensive try/catch.
+export function normalizeDoc(doc) {
+  let src = {};
+  if (isObj(doc)) { try { src = safeClone(doc); } catch (e) { src = {}; } }
+  if (!isObj(src)) src = {};
+  try { return P.normalizeTop(src); } catch (e) { return P.newDoc({}); }
+}
+
+// Structural guard used by renderers: documents without the normalized shape are normalized first (renderers
+// additionally escape / validate every token they interpolate).
+export function ensureDoc(doc) {
+  return P.isNormalized(doc) ? doc : normalizeDoc(doc);
+}
+
+export function newDoc(opts = {}) {
+  return P.newDoc(opts);
+}

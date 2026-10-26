@@ -1,0 +1,199 @@
+/* icon-creator/app.css - Icon Creator: toolbar, three columns (tools and colours / pixel canvas / sizes and
+   preview), the checkerboard canvas with its overlay, size rows, previews and the square crop dialog.
+   Needs ui/base.css + ui/app.css, loaded before this file.
+
+   CONTRACT
+   - Namespace: every class starts with `ic-`. Shared primitives `ed-` (ui/base.css), shell `ap-` (ui/app.css).
+   - Specificity budget: one class (0,1,0); two for state or context (`.ic-tool.ed-on`, `.ic-size.ic-cur`). The only
+     heavier selector is `.ap-main.ic-main` (0,2,0), which must beat the shell's `.ap-main` max-width.
+   - Colours via tokens, with deliberate exceptions: transparency checkerboards (#ccc/#fff and similar greys) and the
+     light/dark preview tiles use fixed colours because they represent "transparent pixels" and "a light/dark
+     taskbar", which must look the same in both UI themes. The crop dimming and grid are fixed white/black overlays.
+   - Checkerboards are one conic-gradient each: four quadrants (25% steps) tiled by background-size, no image file,
+     scalable through a custom property (--cell on the board).
+   - !important only once (.ic-tag-custom), commented there. */
+
+/* Wider than the shell default: three columns with a large canvas. (0,2,0) beats `.ap-main` (0,1,0). */
+.ap-main.ic-main { max-width: 1500px; }
+.ic-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; }
+/* The document title is a <button> (click to rename) styled as a heading: button semantics give keyboard and
+   screen-reader access; the reset (background/border none) removes the button look. Negative margin aligns the
+   text with the column edge while the padding still provides a hover background. Ellipsis caps long names at 40ch. */
+.ic-title {
+  font: 700 19px/1.2 var(--ed-font); letter-spacing: -.01em; color: var(--ed-text); background: none; border: 0;
+  padding: 4px 6px; margin-left: -6px; border-radius: var(--ed-radius-sm); cursor: text; max-width: 40ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ic-title:hover { background: var(--ed-hover); }
+
+/* Three columns: tools (fixed 196px: 5 tool buttons + palette) | canvas (fluid, may shrink: minmax(0,1fr)) | sizes
+   (fixed 300px). align-items:start is required for the sticky side columns (a stretched grid item has nothing to
+   stick within). top:76px = shell header height + gap. */
+.ic-work { display: grid; grid-template-columns: 196px minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+.ic-left, .ic-right { display: flex; flex-direction: column; gap: 12px; position: sticky; top: 76px; }
+.ic-center { min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+
+/* tools */
+/* 5 x 2 grid of square buttons; 1fr columns share the panel width equally. */
+.ic-tools { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 6px; background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: var(--ed-radius); }
+/* aspect-ratio:1 keeps them square at any column width; place-items centres the icon. */
+.ic-tool {
+  aspect-ratio: 1; display: grid; place-items: center; border: 0; border-radius: var(--ed-radius-sm); background: none;
+  color: var(--ed-text); cursor: pointer;
+}
+.ic-tool:hover { background: var(--ed-hover); }
+/* Active tool filled with accent: (0,2,0) beats the hover (0,1,1), so the active tool keeps its colour on hover. */
+.ic-tool.ed-on { background: var(--ed-accent); color: var(--ed-accent-text); }
+
+/* colours */
+/* Foreground/background swatch pair in the classic overlapping layout (Photoshop, Aseprite): absolute positioning
+   inside a fixed-height box, foreground above (z-index 1). */
+.ic-colors { position: relative; height: 70px; }
+/* Swatch: checkerboard base + ::after colour layer with opacity = the colour's alpha (custom props --c, --a set by
+   main.js). A semi-transparent colour therefore shows the checkerboard through, as it will on the canvas.
+   Double box-shadow ring = a gap in panel colour, then a border: separates the overlapping swatches. */
+.ic-csw {
+  position: absolute; width: 46px; height: 46px; border-radius: 10px; cursor: pointer; overflow: hidden;
+  box-shadow: 0 0 0 2px var(--ed-panel), 0 0 0 3px var(--ed-border-strong);
+  background: conic-gradient(#ccc 25%, #fff 0 50%, #ccc 0 75%, #fff 0) 0 0 / 12px 12px;
+}
+.ic-csw::after { content: ''; position: absolute; inset: 0; background: var(--c); opacity: var(--a); }
+.ic-fg { left: 4px; top: 4px; z-index: 1; }
+.ic-bg { left: 30px; top: 22px; }
+/* The native colour input is stretched invisibly over the swatch: clicking opens the OS picker while the visible
+   swatch can show alpha (which <input type=color> cannot). opacity:0, not display:none: a hidden input would not
+   receive the click, and opacity keeps it focusable for keyboard users. */
+.ic-cin { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+.ic-swap { position: absolute; left: 92px; top: 4px; }
+.ic-alpha { display: grid; gap: 2px; font-size: 12px; color: var(--ed-muted); }
+/* 8 columns: the 16-colour palette in two rows; recent colours in the same grid. */
+.ic-pal { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; }
+.ic-recent:empty { display: none; }
+.ic-recent-h { font-size: 12px; color: var(--ed-muted); }
+.ic-sw { aspect-ratio: 1; border: 1px solid var(--ed-border); border-radius: 4px; background: var(--c); cursor: pointer; padding: 0; }
+/* Scale on hover: a transform does not reflow the grid, unlike changing the size. */
+.ic-sw:hover { transform: scale(1.12); }
+
+/* options bar */
+/* min-height 36px on all three bars: switching tools changes their content, a fixed minimum stops the canvas from
+   jumping up and down. */
+.ic-opts, .ic-selbar, .ic-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; min-height: 36px; }
+.ic-opts { padding: 6px 10px; background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: var(--ed-radius); }
+.ic-opt { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
+.ic-opt .ed-range-wrap { width: 150px; }
+.ic-opt-check { cursor: pointer; }
+/* The hint takes the remaining row (flex-grow) and wraps to its own line below 260px. */
+.ic-hint { font-size: 12px; color: var(--ed-muted); flex: 1 1 260px; }
+.ic-selbar { min-height: 0; padding: 4px 10px; border-radius: var(--ed-radius); background: var(--ed-accent-weak); }
+/* Redundant with base.css `[hidden] { display: none !important }`, kept local so the bar's own display:flex never
+   resurrects it if that global rule changes. */
+.ic-selbar[hidden] { display: none; }
+
+/* canvas */
+/* Stage: scroll container for a board larger than the viewport (high zoom); height between min(70vh, 640px) and
+   76vh. place-items:center centres a small board.
+   KNOWN DEFECT: an item larger than its grid area is still centred, so it overflows equally to the top/left, and
+   negative overflow is not scrollable: at high zoom the top-left part of the board cannot be reached.
+   Fix: place-items: safe center (or margin: auto on .ic-board, which falls back to start when overflowing). */
+.ic-stage {
+  display: grid; place-items: center; overflow: auto; min-height: min(70vh, 640px); max-height: 76vh; padding: 12px;
+  background: var(--ed-stage); border-radius: var(--ed-radius); border: 1px solid var(--ed-border);
+}
+/* Board: size set inline by main.js (n x zoom). Checkerboard square = 2 x --cell, so one checker = one --cell, which
+   main.js ties to the zoom: transparency checkers align with the pixel grid. */
+.ic-board {
+  position: relative; --cell: 8px; box-shadow: var(--ed-shadow);
+  background: conic-gradient(#d6d6d6 25%, #fafafa 0 50%, #d6d6d6 0 75%, #fafafa 0) 0 0 / calc(var(--cell) * 2) calc(var(--cell) * 2);
+}
+/* Pixel canvas and overlay stacked exactly over the board. */
+.ic-pix, .ic-over { position: absolute; inset: 0; display: block; }
+/* Nearest-neighbour upscaling of the native-size pixel canvas: `pixelated` (Chromium, Safari) and `crisp-edges`
+   (Firefox) as two declarations: an engine that does not know the second keeps the first. */
+.ic-pix { image-rendering: pixelated; image-rendering: crisp-edges; }
+/* The overlay gets the pointer events; touch-action:none lets a finger draw instead of scrolling the stage. */
+.ic-over { cursor: crosshair; touch-action: none; }
+.ic-foot { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ed-muted); }
+.ic-cursize { font-weight: 600; color: var(--ed-text); }
+/* Fixed min-widths + tabular digits: changing readouts (zoom %, cursor x,y) do not shift the buttons next to them. */
+.ic-zoom { min-width: 56px; text-align: center; font-variant-numeric: tabular-nums; }
+.ic-pos { min-width: 64px; font: 12px var(--ed-mono); }
+.ic-dropnote { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ed-muted); }
+
+/* sizes */
+.ic-sizes { display: flex; flex-direction: column; gap: 6px; }
+/* Transparent border by default so the selected state (accent border) does not change the box size. */
+.ic-size { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: var(--ed-radius-sm); border: 1px solid transparent; }
+.ic-size.ic-cur { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+/* Excluded sizes fade, but only the pick area: the include toggle must stay fully legible to turn it back on. */
+.ic-size.ic-off .ic-size-pick { opacity: .5; }
+.ic-size-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; background: none; border: 0; padding: 0; color: inherit; text-align: start; cursor: pointer; }
+.ic-thumb-wrap {
+  width: 40px; height: 40px; flex: none; display: grid; place-items: center; border-radius: 6px;
+  background: conic-gradient(#ddd 25%, #fff 0 50%, #ddd 0 75%, #fff 0) 0 0 / 8px 8px;
+}
+/* Every size shown in the same 36px box; pixelated so a 32 px icon stays crisp when slightly enlarged. */
+.ic-thumb { width: 36px; height: 36px; image-rendering: pixelated; }
+.ic-size-txt { display: flex; flex-direction: column; min-width: 0; font-size: 13px; }
+.ic-size-txt small { color: var(--ed-muted); }
+/* !important: `.ic-size-txt small` (0,1,1) outranks this single class (0,1,0). `.ic-size-txt .ic-tag-custom`
+   (0,2,0) would do the same without !important. */
+.ic-tag-custom { color: var(--ed-accent) !important; font-weight: 600; }
+.ic-size-act { display: flex; align-items: center; gap: 6px; }
+.ic-size-act .ed-btn { padding-inline: 8px; }
+
+/* preview */
+.ic-pv-wrap { display: flex; flex-direction: column; gap: 6px; }
+/* align-items:flex-end: icons of different sizes share a baseline like icons in a real taskbar row. */
+.ic-pv-row { display: flex; align-items: flex-end; gap: 12px; padding: 10px; border-radius: var(--ed-radius-sm); overflow-x: auto; }
+/* Fixed light and dark tiles, independent of the UI theme: they simulate the OS surfaces the icon will sit on. */
+.ic-pv-light { background: #f3f4f6; color: #374151; }
+.ic-pv-dark { background: #1f2937; color: #d1d5db; }
+.ic-pv-check { background: conic-gradient(#ccc 25%, #fff 0 50%, #ccc 0 75%, #fff 0) 0 0 / 10px 10px; color: #111; }
+.ic-pv-f { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; }
+/* image-rendering:auto (smooth) here, unlike the editor: previews show the icon at true size, where the browser
+   should render it as the OS would; max-width caps the 256 px icon in the 300px column. */
+.ic-pv { image-rendering: auto; max-width: 128px; }
+
+/* square crop dialog */
+.ic-crop { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
+.ic-crop-stage { position: relative; flex: none; background: conic-gradient(#ddd 25%, #fff 0 50%, #ddd 0 75%, #fff 0) 0 0 / 16px 16px; overflow: hidden; border-radius: 4px; }
+.ic-crop-c { display: block; }
+/* Crop box: the 9999px spread shadow dims everything outside the square (clipped by the stage's overflow:hidden):
+   one element, no four masking divs. Rule-of-thirds grid from two 1px linear-gradients tiled at 33.34% (slightly
+   over a third so the third line does not land exactly on the right/bottom edge). touch-action:none for dragging. */
+.ic-crop-box {
+  position: absolute; box-shadow: 0 0 0 9999px rgba(0, 0, 0, .45); outline: 2px solid #fff; cursor: move; touch-action: none;
+  background-image: linear-gradient(rgba(255,255,255,.35) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.35) 1px, transparent 1px);
+  background-size: 33.34% 33.34%;
+}
+/* KNOWN DEFECT: --ed-focus is a box-shadow value ("0 0 0 3px rgba(...)"), not a colour, so this outline is invalid
+   at computed-value time and falls back to its initial value (no outline). Keyboard focus thus REMOVES the white
+   outline instead of highlighting the box, and the global :focus-visible ring is overridden by the 9999px shadow.
+   Fix: `outline: 3px solid var(--ed-accent)`. */
+.ic-crop-box:focus-visible { outline: 3px solid var(--ed-focus); }
+/* Resize handle at the bottom-right corner, centred on it by -7px (half its 14px size). */
+.ic-crop-h { position: absolute; right: -7px; bottom: -7px; width: 14px; height: 14px; border-radius: 3px; background: #fff; border: 2px solid var(--ed-accent); cursor: nwse-resize; }
+.ic-crop-side { flex: 1 1 220px; display: flex; flex-direction: column; gap: 10px; }
+.ic-crop-info { font: 12px var(--ed-mono); color: var(--ed-muted); }
+.ic-crop-prevwrap { width: 72px; height: 72px; display: grid; place-items: center; border-radius: 8px; background: conic-gradient(#ddd 25%, #fff 0 50%, #ddd 0 75%, #fff 0) 0 0 / 8px 8px; }
+.ic-crop-prev { width: 64px; height: 64px; }
+.ic-crop-side .ed-range-wrap { width: 160px; }
+
+/* Medium screens: the sizes column moves under the canvas, spanning both columns as a 2-column grid (sizes |
+   preview); side columns stop being sticky because they now scroll with content. */
+@media (max-width: 1180px) {
+  .ic-work { grid-template-columns: 180px minmax(0, 1fr); }
+  .ic-left { position: static; }
+  .ic-right { grid-column: 1 / -1; position: static; display: grid; grid-template-columns: 1fr 1fr; }
+}
+/* Phones: single column. Tools become one row of 10, colours and palette side by side; toolbar buttons drop their
+   text labels (.ic-tb-l) and keep icons; the button title then serves as the accessible name. Smaller stage minimum. */
+@media (max-width: 760px) {
+  .ic-work { grid-template-columns: minmax(0, 1fr); }
+  .ic-left { position: static; display: grid; grid-template-columns: 1fr 1fr; }
+  .ic-tools { grid-column: 1 / -1; grid-template-columns: repeat(10, 1fr); }
+  .ic-right { grid-template-columns: 1fr; }
+  .ic-tb-l { display: none; }
+  .ic-stage { min-height: 300px; padding: 6px; }
+  .ic-opt .ed-range-wrap { width: 110px; }
+}

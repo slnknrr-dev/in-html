@@ -1,0 +1,2 @@
+import{str}from"../util/value.js";function safeColor(c){c=str(c).trim();if(!c)return'';if(/^#[0-9a-f]{3,8}$/i.test(c)||/^[a-z]{3,24}$/i.test(c))return c;if(/^(rgb|hsl)a?\((?:[\d\s.,%/+-]|deg|turn|g?rad)+\)$/i.test(c))return c;return'';}
+export{safeColor};

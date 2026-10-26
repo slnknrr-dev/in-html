@@ -1,0 +1,111 @@
+// timeline/frame.js - geometry of the output frame that the browser renderer and the ffmpeg description share:
+// where a clip lands (fit / fill / blurred background, zoom, pan, quarter turns), the Ken Burns window, how text
+// lines are laid out, and the animation state of an overlay at a time.
+//
+//   placement(srcW, srcH, clip, fit, W, H) -> { rw, rh, fit, fg: { x, y, w, h }, cover: { x, y, w, h }, simple }
+//      rw x rh: the source after the quarter turn; fg: where it is drawn; cover: the blurred background (blur mode);
+//      simple: no zoom / pan (ffmpeg can use force_original_aspect_ratio)
+//   coverCrop(srcW, srcH, W, H) -> { x, y, w, h }   the centred part of the source with the frame's aspect
+//   kbWindow(crop, view) -> { x, y, w, h }          the Ken Burns window (z, x, y) inside the crop
+//   blurSigma(W, H)
+//   textLayout(item, W, H, measure?) -> { fs, lineH, pad, border, shadow, lines: [{ text, x, w, baseline }], box }
+//      measure(text, fs, item) -> width in px (canvas measureText); without it widths are estimated
+//   animState(item, t, W, H) -> { alpha, dx, dy, scale, reveal }   in / out animations (reveal: typewriter share)
+//   SLIDE                          slide distances (fractions of the frame height / width)
+//   easeOut3(p), backOut(p)
+
+export const SLIDE = { v: 0.12, h: 0.2 };
+export const LINE = 1.25;
+
+export const blurSigma = (W, H) => Math.max(4, Math.round(Math.min(W, H) / 40));
+
+// fit = contain scale (whole picture visible), fill = cover scale (frame filled, edges cropped); 'blur' draws the
+// contain picture over a blurred cover copy, hence `cover` is always returned. Quarter turns swap width and height
+// before scaling. Pan is in frame fractions so it survives a change of output resolution.
+export function placement(srcW, srcH, clip, fit, W, H) {
+  const q = clip.rotate === 90 || clip.rotate === 270;
+  const rw = Math.max(1, q ? srcH : srcW), rh = Math.max(1, q ? srcW : srcH);
+  const kFit = Math.min(W / rw, H / rh), kCover = Math.max(W / rw, H / rh);
+  const zoom = clip.zoom || 1;
+  const k = (fit === 'fill' ? kCover : kFit) * zoom;
+  const w = rw * k, h = rh * k;
+  const fg = { x: (W - w) / 2 + (clip.panX || 0) * W, y: (H - h) / 2 + (clip.panY || 0) * H, w, h };
+  const cw = rw * kCover, ch = rh * kCover;
+  return { rw, rh, fit, fg, cover: { x: (W - cw) / 2, y: (H - ch) / 2, w: cw, h: ch }, simple: zoom === 1 && !clip.panX && !clip.panY };
+}
+
+export function coverCrop(srcW, srcH, W, H) {
+  const a = W / H;
+  let w = srcW, h = srcW / a;
+  if (h > srcH) { h = srcH; w = srcH * a; }
+  return { x: (srcW - w) / 2, y: (srcH - h) / 2, w, h };
+}
+
+export function kbWindow(crop, v) {
+  const w = crop.w / v.z, h = crop.h / v.z;
+  const x = Math.min(crop.x + crop.w - w, Math.max(crop.x, crop.x + v.x * crop.w - w / 2));
+  const y = Math.min(crop.y + crop.h - h, Math.max(crop.y, crop.y + v.y * crop.h - h / 2));
+  return { x, y, w, h };
+}
+
+export function textLayout(item, W, H, measure = null) {
+  const fs = Math.max(1, item.size * H * (item.scale || 1));
+  const lineH = fs * LINE;
+  const lines = String(item.text || '').split('\n');
+  const blockH = lines.length * lineH;
+  const cx = item.x * W, top = item.y * H - blockH / 2;
+  const widths = lines.map((s) => (measure ? measure(s, fs, item) : s.length * fs * 0.55));
+  const bw = Math.max(1, ...widths);
+  const left = cx - bw / 2;
+  const out = lines.map((text, i) => {
+    const w = widths[i];
+    const x = item.align === 'left' ? left : item.align === 'right' ? left + bw - w : cx - w / 2;
+    return { text, x, w, baseline: top + i * lineH + lineH / 2 + fs * 0.35 };
+  });
+  const pad = Math.round(fs * 0.25);
+  return {
+    fs, lineH, pad, lines: out,
+    border: Math.round((item.stroke?.width || 0) * fs),
+    shadow: item.shadow ? Math.max(1, Math.round(fs * 0.05)) : 0,
+    box: { x: left - pad, y: top - pad, w: bw + pad * 2, h: blockH + pad * 2 },
+  };
+}
+
+export const easeOut3 = (p) => 1 - Math.pow(1 - p, 3);
+export function backOut(p) {
+  const c1 = 1.70158, c3 = c1 + 1;
+  return 1 + c3 * Math.pow(p - 1, 3) + c1 * Math.pow(p - 1, 2);
+}
+const clamp01 = (v) => Math.min(1, Math.max(0, v));
+
+/** Durations of the in / out animations of an item (each at most half of the item). */
+export function animDurations(item) {
+  const len = item.end - item.start;
+  return {
+    din: item.animIn.type === 'none' ? 0 : Math.min(item.animIn.duration, len / 2),
+    dout: item.animOut.type === 'none' ? 0 : Math.min(item.animOut.duration, len / 2),
+  };
+}
+
+export function animState(item, t, W, H) {
+  const { din, dout } = animDurations(item);
+  const pin = din > 0 ? clamp01((t - item.start) / din) : 1;
+  const pout = dout > 0 ? clamp01((item.end - t) / dout) : 1;
+  const s = { alpha: item.opacity ?? 1, dx: 0, dy: 0, scale: 1, reveal: 1 };
+  const ov = SLIDE.v * H, oh = SLIDE.h * W;
+  const apply = (type, p, dir) => {
+    if (type === 'none' || p >= 1) return;
+    const r = Math.pow(1 - p, 3);
+    if (type === 'fade') s.alpha *= p;
+    else if (type === 'slideup') { s.alpha *= p; s.dy += dir * ov * r; }
+    else if (type === 'slidedown') { s.alpha *= p; s.dy -= dir * ov * r; }
+    else if (type === 'slideleft') { s.alpha *= p; s.dx += dir * oh * r; }
+    else if (type === 'slideright') { s.alpha *= p; s.dx -= dir * oh * r; }
+    else if (type === 'zoom') { s.alpha *= p; s.scale *= 0.6 + 0.4 * easeOut3(p); }
+    else if (type === 'pop') { s.alpha *= Math.min(1, p * 3); s.scale *= Math.max(0.05, 0.3 + 0.7 * backOut(p)); }
+    else if (type === 'typewriter') { if (dir > 0) s.reveal = p; else s.alpha *= p; }
+  };
+  apply(item.animIn.type, pin, 1);
+  apply(item.animOut.type, pout, -1);
+  return s;
+}

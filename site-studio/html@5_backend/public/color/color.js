@@ -1,0 +1,7 @@
+import{str}from"../util/value.js";function safeColor(c){c=str(c).trim();if(!c)return'';if(/^#[0-9a-f]{3,8}$/i.test(c)||/^[a-z]{3,24}$/i.test(c))return c;if(/^(rgb|hsl)a?\((?:[\d\s.,%/+-]|deg|turn|g?rad)+\)$/i.test(c))return c;return'';}
+function parseColor(c){c=str(c).trim().toLowerCase();let m=/^#([0-9a-f]{3,8})$/.exec(c);if(m){let h=m[1];if(h.length===3||h.length===4)h=h.split('').map((x)=>x+x).join('');if(h.length!==6&&h.length!==8)return null;return[0,2,4].map((i)=>parseInt(h.slice(i,i+2),16));}
+m=/^rgba?\(\s*([\d.]+)(%?)[\s,]+([\d.]+)(%?)[\s,]+([\d.]+)(%?)/.exec(c);if(m)return[[m[1],m[2]],[m[3],m[4]],[m[5],m[6]]].map(([v,p])=>Math.max(0,Math.min(255,Math.round(p?+v*2.55:+v))));if(c==='white')return[255,255,255];if(c==='black')return[0,0,0];return null;}
+function relLum(rgb){const f=(v)=>{v/=255;return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4);};return 0.2126*f(rgb[0])+0.7152*f(rgb[1])+0.0722*f(rgb[2]);}
+function contrastRatio(a,b){const x=parseColor(a);const y=parseColor(b);if(!x||!y)return NaN;const l1=relLum(x);const l2=relLum(y);return(Math.max(l1,l2)+0.05)/(Math.min(l1,l2)+0.05);}
+function onAccent(c){if(!parseColor(c))return'';return contrastRatio('#ffffff',c)>=contrastRatio('#111827',c)?'#fff':'#111827';}
+export{safeColor,parseColor,onAccent};

@@ -1,0 +1,7 @@
+const DAY=864e5;const MIN=6e4;function newCard(now=Date.now()){return{e:2.5,i:0,n:0,l:0,d:now,t:now};}
+function review(card,grade,now=Date.now()){const c={...(card||newCard(now))};const g=Math.max(0,Math.min(3,Math.round(grade)));if(g===0){c.l+=1;c.n=0;c.e=Math.max(1.3,c.e-0.2);c.i=0;c.d=now+10*MIN;}else{c.e=Math.max(1.3,c.e+[0,-0.15,0,0.15][g]);if(c.n===0)c.i=g===1?0.5:g===2?1:3;else if(c.n===1)c.i=g===1?2:g===2?4:6;else c.i=Math.round(c.i*(g===1?1.2:g===2?c.e:c.e*1.3)*10)/10;c.i=Math.min(c.i,3650);c.n+=1;c.d=now+c.i*DAY;}
+c.t=now;return c;}
+function dueItems(cards,ids,now=Date.now(),limit=20){const due=[],fresh=[];for(const id of ids){const c=cards[id];if(!c)fresh.push(id);else if(c.d<=now)due.push([id,now-c.d]);}
+due.sort((a,b)=>b[1]-a[1]);return[...due.map((x)=>x[0]),...fresh].slice(0,limit);}
+function strength(card,now=Date.now()){if(!card||card.n===0)return card&&card.l?0.1:0;const elapsed=Math.max(0,now-card.t)/DAY;return Math.exp(-elapsed/Math.max(0.5,card.i*1.5));}
+const merge=(a,b)=>(!a?b:!b?a:(b.t||0)>(a.t||0)?b:a);const validCard=(c)=>!!c&&typeof c==='object'&&[c.e,c.i,c.n,c.l,c.d,c.t].every((x)=>typeof x==='number'&&Number.isFinite(x));export{validCard,merge,strength,review,dueItems};

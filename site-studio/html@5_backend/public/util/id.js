@@ -1,0 +1,2 @@
+const ID_CHARS='abcdefghijklmnopqrstuvwxyz0123456789';function uid(){const bytes=new Uint8Array(8);const c=globalThis.crypto;if(c&&typeof c.getRandomValues==='function')c.getRandomValues(bytes);else for(let i=0;i<8;i++)bytes[i]=(Math.random()*256)|0;let s=ID_CHARS[bytes[0]%26];for(let i=1;i<8;i++)s+=ID_CHARS[bytes[i]%36];return s;}
+export{uid};

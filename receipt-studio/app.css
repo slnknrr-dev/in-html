@@ -1,0 +1,330 @@
+/* receipt-studio/app.css - Receipt Studio: POS page (catalogue tiles with scan field, the check with quantities and
+   discounts, totals with the VAT breakdown, loyalty and payment, the receipt on thermal paper and the shift card),
+   returns page (receipt list, return lines, refund), shift page (X report, cash operations, receipts, Z reports,
+   journal), editors in dialogs, the printable HTML receipt and print sheets at 58 / 80 mm. Needs ui/base.css +
+   ui/app.css.
+
+   CONTRACT
+   - Namespace: every own class starts with `rs-`. Shared primitives `ed-` (ui/base.css), shell `ap-` (ui/app.css).
+     Rules may target ed-/ap- classes only inside an rs- context (`.rs-card-h .ap-card-h`), with the one exception
+     of `.ed-hint-warn .ed-ic` and `.ed-dialog.rs-dlg-wide` noted below.
+   - Specificity budget: one class (0,1,0), two for state or context (`.rs-chip.rs-on`, `.rs-kv .rs-big`). No ids
+     except #rs-print in print. Equal low specificity lets source order decide.
+   - Two colour worlds: screen UI uses tokens only (--ed-*, dark mode for free). Paper (the thermal receipt preview,
+     the HTML receipt, print) uses raw #fff / #111 / greys on purpose: a receipt is white paper in every theme, and
+     the preview must look like what the printer produces.
+   - Money and quantities are tabular-nums (often with the mono font) so digits align in columns and totals do not
+     jitter while typing.
+   - !important only to beat a primitive's :focus/:hover rule or inline styles in print; every use is commented. */
+
+/* Wider cap than the shell's 1280px: the POS page has three columns. */
+.rs-pos, .rs-returns, .rs-shift { max-width: 1480px; }
+.rs-num { font-variant-numeric: tabular-nums; font-family: var(--ed-mono); }
+/* Explicit 14px on number inputs: the mono font family renders visually larger than the UI font at equal size. */
+input.rs-num { font-size: 14px; }
+/* Vertical card stack; min-width: 0 lets long names wrap inside grid columns instead of widening them. */
+.rs-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.rs-card-h { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.rs-card-h .ap-card-h { margin: 0; }
+/* Pill badge. color-mix() derives the soft background from the same token as the text, so it follows dark mode
+   without an extra token. font-family reset: badges can sit inside mono-font contexts (.rs-num). */
+.rs-badge { display: inline-block; margin-inline-start: 6px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 650; color: var(--ed-warn); background: color-mix(in srgb, var(--ed-warn) 14%, transparent); white-space: nowrap; font-family: var(--ed-font); }
+.rs-badge-bad { color: var(--ed-danger); background: color-mix(in srgb, var(--ed-danger) 12%, transparent); }
+.rs-warn { color: var(--ed-danger); }
+/* !important: .ed-input:focus (0,2,0) in ui/base.css sets border-color; an invalid field must stay red while
+   focused. Cheaper than duplicating every :focus/:hover variant. */
+.rs-bad { border-color: var(--ed-danger) !important; }
+/* A button that looks like a link (keeps button semantics: keyboard, no navigation). font: inherit because buttons
+   do not inherit font. */
+.rs-link { border: 0; background: none; padding: 0; color: var(--ed-accent); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.rs-details { border: 1px solid var(--ed-border); border-radius: 10px; padding: 8px 10px; background: var(--ed-panel-2); }
+/* Custom disclosure: list-style: none removes the marker in Firefox/Chromium, ::-webkit-details-marker in Safari;
+   an icon rotated by [open] replaces it. */
+.rs-details > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 600; font-size: 13px; list-style: none; }
+.rs-details > summary::-webkit-details-marker { display: none; }
+.rs-details > summary .ed-ic { transition: transform .15s; }
+.rs-details[open] > summary .ed-ic { transform: rotate(90deg); }
+.rs-details[open] > summary { margin-bottom: 10px; }
+.rs-wrap { flex-wrap: wrap; }
+/* Shared primitive targeted directly: aligns the warning icon inside ed-hint-warn on this app's pages only (the
+   stylesheet is loaded only by Receipt Studio pages, so the reach stays local). */
+.ed-hint-warn .ed-ic { vertical-align: -3px; margin-inline-end: 4px; }
+
+/* ---------------------------------------------------------------- POS layout */
+/* Three columns via named areas: catalogue (a), check (bc), payment/receipt (d). Areas make the breakpoints a
+   template swap instead of re-specifying every child's placement. minmax() floors keep inputs usable; 1.15fr gives
+   the check slightly more room because it carries the most columns. */
+.rs-work {
+  display: grid; gap: 18px; align-items: start;
+  grid-template-columns: minmax(300px, 1fr) minmax(360px, 1.15fr) minmax(300px, 380px);
+  grid-template-areas: "a bc d";
+}
+.rs-a { grid-area: a; }
+.rs-bc { grid-area: bc; }
+.rs-d { grid-area: d; }
+/* Sticky payment column only when it fits vertically and the three-column layout is active; a sticky panel taller
+   than the viewport would make its bottom (the Pay button) unreachable. top: 72px clears the shell header. */
+@media (min-height: 700px) and (min-width: 1181px) { .rs-d { position: sticky; top: 72px; } }
+/* Two columns: the check spans both rows on the right, catalogue and payment stack on the left. */
+@media (max-width: 1180px) {
+  .rs-work { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "a bc" "d bc"; }
+}
+/* One column in reading order: catalogue, check, payment. */
+@media (max-width: 760px) {
+  .rs-work { grid-template-columns: minmax(0, 1fr); grid-template-areas: "a" "bc" "d"; }
+}
+
+/* ---------------------------------------------------------------- catalogue */
+/* Scan field styled as one control: the wrapper draws the border and the focus ring (:focus-within), the inner
+   input is visually bare. */
+.rs-scan-row { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 10px; border: 1px solid var(--ed-border-strong); border-radius: 10px; background: var(--ed-panel); }
+.rs-scan-row:focus-within { box-shadow: var(--ed-focus); border-color: var(--ed-accent); }
+.rs-scan-row > .ed-ic { color: var(--ed-muted); flex: none; }
+/* !important strips the .ed-input border and focus shadow (0,2,0 on :focus) from the inner input, otherwise two
+   nested focus rings would show. */
+.rs-scan { border: 0 !important; box-shadow: none !important; background: transparent; font: 15px var(--ed-mono); flex: 1; min-width: 0; }
+.rs-scan-row + .ed-hint { margin: 6px 0 10px; }
+.rs-cats { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.rs-chip { padding: 4px 10px; border-radius: 999px; border: 1px solid var(--ed-border); background: var(--ed-panel-2); color: var(--ed-muted); font-size: 12.5px; font-weight: 600; }
+.rs-chip:hover { color: var(--ed-text); border-color: var(--ed-border-strong); }
+.rs-chip.rs-on { color: var(--ed-accent); border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+/* auto-fill + minmax(132px, 1fr): as many tiles per row as fit, stretched to fill; no breakpoints needed. */
+.rs-tiles { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
+.rs-tile {
+/* Tiles are buttons (keyboard and click), laid out as a column whose last item (barcode or PLU) is pushed to the
+   bottom with margin-top: auto, so tiles in a row align their codes regardless of name length. */
+  display: flex; flex-direction: column; align-items: stretch; gap: 3px; min-height: 108px; padding: 9px 10px 8px; text-align: start;
+  border: 1px solid var(--ed-border); border-radius: 11px; background: var(--ed-panel-2); color: var(--ed-text); cursor: pointer;
+  transition: border-color .15s, transform .08s, box-shadow .15s;
+}
+.rs-tile:hover { border-color: var(--ed-accent); box-shadow: var(--ed-shadow-sm); }
+/* Press feedback; transform does not trigger layout, so it is cheap even on large grids. */
+.rs-tile:active { transform: scale(.98); }
+.rs-tile.rs-promo { border-color: color-mix(in srgb, var(--ed-warn) 55%, var(--ed-border)); }
+.rs-tile-name { font-weight: 650; font-size: 13px; line-height: 1.2; }
+.rs-tile-price { display: flex; align-items: baseline; gap: 5px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.rs-tile-price b { font-size: 15px; }
+.rs-tile-price s, .rs-line-sub s, .rs-line-total s { color: var(--ed-faint); font-size: 11.5px; }
+.rs-tile-price small { color: var(--ed-muted); }
+.rs-tile-meta { font-size: 11px; color: var(--ed-muted); display: flex; flex-wrap: wrap; gap: 2px; align-items: center; }
+.rs-tile-meta .rs-badge { margin: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+/* White plate behind the EAN barcode in every theme: scanners and eyes need dark bars on light ground. */
+.rs-tile-ean { margin-top: auto; background: #fff; border-radius: 4px; padding: 2px; display: flex; justify-content: center; }
+.rs-tile-ean svg { display: block; width: 100%; height: auto; max-height: 34px; }
+.rs-tile-plu { margin-top: auto; display: flex; align-items: center; gap: 4px; font: 11.5px var(--ed-mono); color: var(--ed-muted); }
+.rs-tile-plu .ed-ic svg { width: 14px; height: 14px; }
+.rs-tools { margin-top: 12px; flex-wrap: wrap; }
+
+/* ---------------------------------------------------------------- check */
+.rs-cart { display: flex; flex-direction: column; gap: 6px; }
+.rs-cart-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 22px 10px; }
+.rs-cart-empty svg { width: 34px; height: 34px; opacity: .45; }
+.rs-cart-empty p { margin: 0; max-width: 36ch; }
+/* Line grid: name (flexible) | qty | unit | total (min 64px for money) | actions. minmax(0, 1fr) lets long product
+   names wrap instead of pushing the totals off the card. */
+.rs-line {
+  display: grid; align-items: center; gap: 6px 8px; padding: 8px 8px 8px 10px; border: 1px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel-2);
+  grid-template-columns: minmax(0, 1fr) auto auto minmax(64px, auto) auto;
+}
+/* Flash on add (the same product scanned again only bumps the qty, so the eye needs a cue); disabled under
+   prefers-reduced-motion. */
+.rs-line.rs-flash { animation: rs-flash .7s ease-out; }
+@keyframes rs-flash { from { box-shadow: 0 0 0 3px var(--ed-accent); } to { box-shadow: 0 0 0 0 transparent; } }
+@media (prefers-reduced-motion: reduce) { .rs-line.rs-flash { animation: none; } }
+/* overflow-wrap: anywhere breaks long unspaced names (SKU-like strings) that would otherwise overflow. */
+.rs-line-name { font-weight: 600; font-size: 13.5px; overflow-wrap: anywhere; }
+.rs-line-sub { font-size: 11.5px; color: var(--ed-muted); font-variant-numeric: tabular-nums; display: flex; gap: 5px; flex-wrap: wrap; }
+.rs-line-qty { display: flex; align-items: center; gap: 2px; }
+.rs-qty { width: 64px; text-align: center; padding-inline: 4px; }
+.rs-unit { font-size: 11.5px; color: var(--ed-muted); margin-inline-start: 2px; }
+.rs-disc-btn { padding-inline: 7px; }
+.rs-disc-btn.rs-on { color: var(--ed-warn); border-color: color-mix(in srgb, var(--ed-warn) 50%, var(--ed-border)); }
+.rs-line-total { text-align: end; font-weight: 650; display: flex; flex-direction: column; align-items: flex-end; }
+/* Phones: the name row spans the full width, controls go on the second row. */
+@media (max-width: 520px) {
+  .rs-line { grid-template-columns: auto auto minmax(0, 1fr) auto; }
+  .rs-line-main { grid-column: 1 / -1; }
+}
+
+.rs-totals { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+/* :empty hides the container when JS renders nothing (empty cart): no extra class toggling. */
+.rs-totals:empty { display: none; }
+.rs-disc { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rs-disc .ed-label { display: inline-flex; align-items: center; gap: 4px; margin: 0; }
+.rs-disc-in { width: 96px; }
+.rs-kv { font-size: 13.5px; }
+.rs-kv dd { text-align: end; }
+.rs-kv .rs-big { font-size: 18px; font-weight: 750; color: var(--ed-text); }
+.rs-kv dt.rs-big { font-size: 15px; align-self: center; }
+.rs-kv .rs-change { color: var(--ed-ok); }
+.rs-kv .rs-strong { font-weight: 650; color: var(--ed-text); }
+.rs-vat { font-size: 12.5px; }
+/* caption-side: top + start alignment: the VAT table caption reads like a small heading above the numbers. */
+.rs-vat caption { text-align: start; font-size: 11.5px; color: var(--ed-muted); padding: 2px 0 6px; caption-side: top; }
+.rs-vat th, .rs-vat td { padding: 4px 8px; }
+.rs-vat td.rs-num, .rs-vat th.rs-num { text-align: end; }
+.rs-vat tfoot th { border-bottom: 0; }
+
+/* ---------------------------------------------------------------- loyalty and payment */
+.rs-loyalty { margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
+.rs-loy-card { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--ed-accent) 40%, var(--ed-border)); background: var(--ed-accent-weak); }
+.rs-loy-card > .ed-ic { color: var(--ed-accent); }
+.rs-loy-card.rs-blocked { border-color: var(--ed-danger); background: var(--ed-danger-weak); }
+.rs-loy-card.rs-blocked > .ed-ic { color: var(--ed-danger); }
+.rs-loy-who { display: flex; flex-direction: column; min-width: 0; }
+.rs-loy-who span { font-size: 11.5px; color: var(--ed-muted); }
+.rs-loy-bal { font-size: 12.5px; font-weight: 600; text-align: end; }
+.rs-points { width: 110px; }
+.rs-pay { display: flex; flex-direction: column; gap: 10px; }
+.rs-pay > .ed-seg { align-self: flex-start; flex-wrap: wrap; }
+.rs-quick { display: flex; flex-wrap: wrap; gap: 6px; }
+.rs-quick:empty { display: none; }
+/* !important beats .ed-input font-size from the primitive: the tendered amount is the field the cashier reads. */
+.rs-tendered { font-size: 16px !important; }
+.rs-pay-out { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+.rs-errors { display: flex; flex-direction: column; gap: 4px; }
+/* 46px tall primary action, above the 44px touch-target guideline: the most frequent tap on a touch POS. */
+.rs-pay-btn { justify-content: center; min-height: 46px; font-size: 16px; font-weight: 700; }
+
+/* ---------------------------------------------------------------- receipt preview and paper */
+.rs-receipt-box { display: flex; flex-direction: column; gap: 10px; }
+.rs-r-ctl { justify-content: space-between; }
+.rs-r-state { font-size: 12.5px; font-weight: 650; color: var(--ed-muted); text-transform: uppercase; letter-spacing: .04em; }
+.rs-r-state.rs-final { color: var(--ed-ok); }
+.rs-r-acts { flex-wrap: wrap; }
+.rs-qr-payload code { font-size: 11px; overflow-wrap: anywhere; }
+/* Container query context: the paper's font size is computed from this wrapper's width (100cqi below), not the
+   viewport, because the column width differs per layout. justify-content: safe center centres the receipt but
+   falls back to start when it overflows, so its left edge never becomes unscrollable. */
+.rs-paper-wrap { container-type: inline-size; overflow-x: auto; display: flex; justify-content: safe center; padding: 14px 8px; border-radius: 12px; background: var(--ed-stage); }
+/* Thermal paper imitation. --cols = characters per line (32 for 58 mm, 48 for 80 mm, set inline by JS). The mask
+   cuts a row of 5px semicircles out of the bottom edge (torn-paper look): a radial gradient tile, 12px wide,
+   repeated along x; -webkit-mask duplicates it for Safari. */
+.rs-paper {
+  --cols: 32; background: #fff; color: #111; padding: 14px 12px 22px; border-radius: 3px; max-width: 100%;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .1), 0 14px 30px -14px rgba(16, 24, 40, .45);
+  -webkit-mask: radial-gradient(circle 5px at 50% 100%, transparent 98%, #000) 0 0 / 12px 100% repeat-x;
+  mask: radial-gradient(circle 5px at 50% 100%, transparent 98%, #000) 0 0 / 12px 100% repeat-x;
+}
+/* The receipt is preformatted text exactly as the printer gets it (white-space: pre). Font size fits --cols
+   characters into the container: (width - padding) / (cols x 0.61), 0.61 being the advance of a typical monospace
+   glyph in em; capped at 13px. min-width: cols x 1ch guarantees the line never wraps if the estimate is off. */
+.rs-paper-text {
+  margin: 0; font-family: "Cascadia Mono", "DejaVu Sans Mono", "Noto Sans Mono", Consolas, ui-monospace, monospace;
+  font-size: min(13px, calc((100cqi - 44px) / (var(--cols) * 0.61))); line-height: 1.35; white-space: pre; width: max-content; min-width: calc(var(--cols) * 1ch);
+}
+.rs-paper-codes { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 10px; }
+.rs-r-bar svg { display: block; max-width: 100%; height: auto; }
+.rs-r-bar { flex: 0 1 auto; min-width: 0; }
+.rs-r-qr { width: 76px; height: 76px; flex: none; }
+.rs-r-qr svg { display: block; width: 100%; height: 100%; }
+.rs-html-wrap { display: flex; justify-content: safe center; padding: 14px 8px; border-radius: 12px; background: var(--ed-stage); overflow: auto; }
+
+/* The printable HTML receipt: screen size first, true size in print. 300px / 420px approximate 58 / 80 mm paper. */
+/* The printable HTML receipt: screen size first, true size in print. */
+.rs-rcpt { width: 300px; max-width: 100%; background: #fff; color: #111; padding: 14px 14px 18px; font: 12px/1.4 var(--ed-font); box-shadow: 0 10px 28px -14px rgba(16, 24, 40, .5); }
+.rs-rcpt[data-paper="80"] { width: 420px; font-size: 13px; }
+/* Dashed rules imitate the cut lines of a printed receipt; raw greys because this is paper (see CONTRACT). */
+.rs-r-head { text-align: center; display: flex; flex-direction: column; gap: 1px; padding-bottom: 8px; border-bottom: 1px dashed #999; }
+.rs-r-head b { font-size: 1.15em; }
+.rs-r-title { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0 2px; }
+.rs-r-row { display: flex; justify-content: space-between; gap: 8px; }
+.rs-r-amt { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rs-r-lines { border-top: 1px dashed #999; border-bottom: 1px dashed #999; margin: 6px 0; padding: 4px 0; display: flex; flex-direction: column; gap: 5px; }
+.rs-r-name { font-weight: 600; }
+.rs-r-promo { font-weight: 400; color: #92400e; }
+.rs-r-sub { padding-inline-start: 10px; color: #333; }
+.rs-r-code { padding-inline-start: 10px; color: #666; font: .85em var(--ed-mono); }
+.rs-r-total { font-weight: 800; font-size: 1.2em; }
+.rs-r-vat { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: .92em; }
+.rs-r-vat th, .rs-r-vat td { padding: 1px 2px; text-align: end; font-variant-numeric: tabular-nums; }
+.rs-r-vat th:first-child, .rs-r-vat td:first-child { text-align: start; }
+.rs-r-vat thead th { border-bottom: 1px solid #bbb; font-weight: 600; }
+.rs-r-pay { border-top: 1px dashed #999; padding-top: 4px; }
+.rs-r-codes { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px; }
+.rs-r-codes .rs-r-qr { width: 72px; height: 72px; }
+/* pre-line: the footer text keeps the user's line breaks but collapses extra spaces. */
+.rs-r-foot { text-align: center; margin-top: 10px; font-weight: 600; white-space: pre-line; }
+
+/* ---------------------------------------------------------------- shift */
+.rs-shift-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 650; padding: 4px 10px; border-radius: 999px; color: var(--ed-ok); background: color-mix(in srgb, var(--ed-ok) 13%, transparent); }
+.rs-shift-badge.rs-closed { color: var(--ed-muted); background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.rs-shift-badge.rs-expired { color: var(--ed-danger); background: var(--ed-danger-weak); }
+.rs-shift-badge .ed-ic svg { width: 15px; height: 15px; }
+.rs-shift-mini { display: flex; flex-direction: column; gap: 10px; }
+.rs-shift-mini p { margin: 0; }
+.rs-diff { font-weight: 650; font-variant-numeric: tabular-nums; }
+.rs-sh-work { display: grid; gap: 18px; align-items: start; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+@media (max-width: 900px) { .rs-sh-work { grid-template-columns: minmax(0, 1fr); } }
+.rs-sh-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
+.rs-report { margin-bottom: 12px; }
+.rs-ops { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.rs-ops li { display: flex; gap: 10px; align-items: baseline; }
+.rs-op-in, .rs-op-out { font: 600 13px var(--ed-mono); min-width: 80px; }
+.rs-op-in { color: var(--ed-ok); }
+.rs-op-out { color: var(--ed-danger); }
+.rs-rc-wrap { max-height: 420px; }
+.rs-rc-table td.rs-num { text-align: end; }
+.rs-neg { color: var(--ed-danger); }
+.rs-zlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.rs-zlist li { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; }
+
+/* ---------------------------------------------------------------- returns */
+/* Returns: receipt list (capped width) and the return editor. */
+.rs-ret-work { display: grid; gap: 18px; align-items: start; grid-template-columns: minmax(280px, 360px) minmax(0, 1fr); }
+@media (max-width: 860px) { .rs-ret-work { grid-template-columns: minmax(0, 1fr); } }
+.rs-ret-work > .ap-card { display: flex; flex-direction: column; gap: 10px; }
+/* The list scrolls on its own so the editor next to it stays in view. */
+.rs-salelist { display: flex; flex-direction: column; gap: 5px; max-height: 70vh; overflow: auto; }
+.rs-sale { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 10px; padding: 8px 10px; text-align: start; border: 1px solid var(--ed-border); border-radius: 9px; background: var(--ed-panel-2); color: var(--ed-text); cursor: pointer; }
+.rs-sale:hover { border-color: var(--ed-border-strong); }
+.rs-sale.rs-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); box-shadow: inset 0 0 0 1px var(--ed-accent); }
+.rs-sale-t { font-size: 12px; color: var(--ed-muted); align-self: center; }
+.rs-sale-sum { font-weight: 650; }
+.rs-sale-m { grid-column: 1 / -1; font-size: 12px; color: var(--ed-muted); }
+.rs-ret-table td.rs-num { text-align: end; white-space: nowrap; }
+.rs-ret-table .rs-qty { width: 76px; }
+.rs-ret-prev { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.rs-ret-prev h3 { margin: 0; font-size: 14px; }
+.ap-card > .ap-kv { margin-bottom: 10px; }
+
+/* ---------------------------------------------------------------- dialogs */
+/* Compound with .ed-dialog (0,2,0) to beat the dialog primitive's own width rule. min(1100px, 100vw - 24px) keeps a
+   12px margin on phones. */
+.ed-dialog.rs-dlg-wide { width: min(1100px, calc(100vw - 24px)); }
+.rs-dlg-report .rs-paper-wrap { max-height: 64vh; overflow: auto; align-items: flex-start; }
+.rs-edit-wrap { max-height: 56vh; }
+.rs-edit td { padding: 4px; }
+.rs-edit .ed-input { min-width: 64px; }
+.rs-edit td:first-child .ed-input { min-width: 160px; }
+.rs-w5 { width: 76px; }
+.rs-promos { display: flex; flex-direction: column; gap: 8px; }
+/* Promotion editor row: seven columns on desktop, two on narrow screens with a separator between promotions. */
+.rs-promo-row { display: grid; gap: 6px; align-items: center; grid-template-columns: minmax(140px, 1.4fr) minmax(110px, 1fr) 90px minmax(140px, 1.3fr) 140px 140px auto; }
+@media (max-width: 900px) { .rs-promo-row { grid-template-columns: 1fr 1fr; padding-bottom: 8px; border-bottom: 1px solid var(--ed-border); } }
+.rs-settings h3 { margin: 6px 0 0; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--ed-muted); }
+.rs-cards { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.rs-card-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.rs-card-row code { font-size: 12px; }
+
+/* ---------------------------------------------------------------- print */
+/* Print strategy: common.js printNode() appends #rs-print with the content, adds body.rs-printing and prints.
+   Everything else is hidden, so printing a receipt or report never prints the app around it. */
+.rs-print { display: none; }
+@media print {
+/* Undo the shell's app layout (body.ap is a flex column with min-height 100vh): a printed page must be a plain
+   block box or the content can be pushed to a second page. */
+  body.rs-printing { display: block; background: #fff; min-height: 0; height: auto; margin: 0; overflow: visible; }
+/* !important beats every display value set by the shell and the app on body's children (any specificity). */
+  body.rs-printing > :not(#rs-print) { display: none !important; }
+  body.rs-printing .rs-print { display: block !important; width: 100%; padding: 2mm 4mm; box-sizing: border-box; color: #000; }
+/* Sizes in pt/mm: physical units are honoured in print; px would depend on the printer driver's scaling. */
+  .rs-print .rs-rcpt { width: 100%; padding: 0; box-shadow: none; font-size: 8.5pt; }
+  .rs-print[data-paper="80"] .rs-rcpt { font-size: 9.5pt; }
+  .rs-print .rs-r-qr { width: 20mm; height: 20mm; }
+  .rs-print .rs-r-bar svg { max-width: 30mm; }
+  .rs-print-text { margin: 0; font: 6.9pt/1.3 "DejaVu Sans Mono", Consolas, monospace; white-space: pre; }
+  /* Redundant today: it repeats the 6.9pt of the base rule, so 80 mm text prints at the same size as 58 mm (the
+     wider paper just gets longer lines). Kept as the hook for tuning the 80 mm size separately. */
+  .rs-print[data-paper="80"] .rs-print-text { font-size: 6.9pt; }
+}

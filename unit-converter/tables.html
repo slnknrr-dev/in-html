@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- unit-converter/tables.html — cheat-sheet builder page. Same shell as index.html (see there for the rationale of
+     every line); only <title> and the entry module differ. Two thin HTML files instead of one router: each page is a
+     real URL (bookmarkable, printable, survives the single-file build as its own file). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unit Converter — Tables</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f46e5'/%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.2' stroke-linejoin='round' d='M5 21 21 5l6 6-16 16z'/%3E%3Cpath stroke='%23fff' stroke-width='2' d='M10 17l2 2M14 13l2 2M18 9l2 2'/%3E%3C/svg%3E">
+<!-- Cascade order is a contract: shared tokens → shell → app overrides. Same three files as index.html, so both pages
+     share one stylesheet set; the print rules for this page live in app.css @media print. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- Page registry duplicated on purpose: each page must resolve every sibling on its own (no shared runtime config). -->
+<a id="pg-convert" href="index.html" hidden></a>
+<a id="pg-tables" href="tables.html" hidden></a>
+<main class="ap-main" id="main"></main>
+<!-- Entry differs: tables.js. Shared code (shell, picker, table element) comes from common.js, deduplicated by the bundler. -->
+<script type="module" src="./tables.js"></script>
+</body>
+</html>

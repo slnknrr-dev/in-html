@@ -1,0 +1,224 @@
+// plan/model.js - one plan model for flats, halls and shops, in metres: a plan of `kind` 'floor' | 'hall' | 'shop'
+// (a choice of palette and defaults, not another program) has pages (floors / halls / rooms) of w x h metres with an
+// optional polygon outline, layers and shapes in drawing order (the array order is the z order: "bring to front" is
+// a move in the list, not an invisible number). Normalisers clamp every value and round to millimetres, so any JSON
+// gives a working model. Converters from the old percent-based seating chart and from the retail floor-plan editor
+// (centimetres, items with equipment ids) and back. Pure editing operations returning new pages.
+
+import { bounds, mm, rectOutline, snap } from './geom.js';
+import { color, num, stencil } from './stencils.js';
+
+// Caps bound user JSON (a plan file can be hand-edited or hostile): pages, shapes and sizes are clamped on load.
+export const KINDS = ['floor', 'hall', 'shop'];
+export const PAGE_MAX = 24;          // floors / halls per plan
+export const SHAPE_MAX = 1000;       // shapes per page
+export const SIZE_MAX = 500;         // metres per page side
+export const DEFAULT_LAYERS = [
+  { id: 'zones', name: 'Zones', visible: true, locked: false },
+  { id: 'equipment', name: 'Equipment', visible: true, locked: false },
+  { id: 'labels', name: 'Labels', visible: true, locked: false },
+];
+
+const cleanId = (v, max = 24) => String(v ?? '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, max);
+const text = (v, max) => (v != null && String(v) ? String(v).slice(0, max) : null);
+// Short, not globally unique: ids only need to be unique within one plan (time suffix + random part).
+export const newId = (prefix = 'sh') => prefix + Date.now().toString(36).slice(-4) + Math.random().toString(36).slice(2, 6);
+
+export function normalizeShape(raw, i = 0, layerIds = null) {
+  if (!raw || typeof raw !== 'object') return null;
+  const st = stencil(String(raw.kind || 'rect'));
+  const flat = !!st.flat;
+  const sh = {
+    id: cleanId(raw.id) || 's' + i + Math.random().toString(36).slice(2, 6),
+    kind: st.key,
+    x: mm(num(raw.x, -SIZE_MAX, SIZE_MAX, 0)),
+    y: mm(num(raw.y, -SIZE_MAX, SIZE_MAX, 0)),
+    // zero width is legal only for flat shapes (lines): a rectangle of zero width cannot be seen or grabbed.
+    w: mm(num(raw.w, flat ? 0 : 0.05, SIZE_MAX, st.w)),
+    h: mm(num(raw.h, 0, SIZE_MAX, st.h)),
+    rot: Math.round(num(raw.rot, -360, 360, 0) * 10) / 10,
+  };
+  if (flat) sh.h = 0;
+  // A polygon room: points in the shape's own coordinates, moved so their box starts at (0, 0).
+  if (st.room && Array.isArray(raw.pts) && raw.pts.length >= 3) {
+    const pts = raw.pts.slice(0, 200).map((p) => [num(p?.[0], -SIZE_MAX, SIZE_MAX, 0), num(p?.[1], -SIZE_MAX, SIZE_MAX, 0)]);
+    const b = bounds([], [pts]);
+    sh.x = mm(sh.x + b.x); sh.y = mm(sh.y + b.y);
+    sh.w = mm(Math.max(0.05, b.w)); sh.h = mm(Math.max(0.05, b.h));
+    sh.pts = pts.map((p) => [mm(p[0] - b.x), mm(p[1] - b.y)]);
+  }
+  const lbl = text(raw.label, 80); if (lbl) sh.label = lbl;
+  if (raw.fill != null && color(raw.fill)) sh.fill = color(raw.fill);
+  else if (raw.color != null && color(raw.color)) sh.fill = color(raw.color);
+  if (raw.stroke != null && color(raw.stroke)) sh.stroke = color(raw.stroke);
+  if (raw.strokeW != null) sh.strokeW = num(raw.strokeW, 0, 0.5, 0.04);
+  if (raw.textColor != null && color(raw.textColor)) sh.textColor = color(raw.textColor);
+  if (raw.fontSize != null) sh.fontSize = num(raw.fontSize, 0.08, 3, 0.3);
+  if (raw.radius != null) sh.radius = num(raw.radius, 0, 5, 0);
+  if (raw.dashed) sh.dashed = true;
+  if (raw.noArea) sh.noArea = true;
+  if (raw.ends && st.key === 'table-rect') sh.ends = true;
+  const emoji = text(raw.emoji, 8); if (emoji) sh.emoji = emoji;
+  const s2 = text(raw.sub, 40); if (s2) sh.sub = s2;
+  // Seats only on what draws them: `seats: 8` on a wall would show nowhere and inflate the hall's capacity.
+  if (st.seated) sh.seats = Math.round(num(raw.seats, 0, st.key === 'chair-row' ? 40 : 30, st.seats || 0));
+  // The room key links a room shape to records elsewhere (listing rooms, photos); the type drives area summaries.
+  if (st.room && raw.roomKey != null && cleanId(raw.roomKey, 32)) sh.roomKey = cleanId(raw.roomKey, 32);
+  if (st.room) { const rt = String(raw.roomType ?? '').replace(/[^a-z-]/g, '').slice(0, 20); if (rt) sh.roomType = rt; }
+  if (st.sleep && raw.places != null && String(raw.places) !== '') sh.places = Math.round(num(raw.places, 0, 20, st.cap || 0));
+  if (st.sleep) { const note = text(raw.note, 80); if (note) sh.note = note; }
+  // A reference to something outside the plan: an equipment unit, a planogram fixture, a guest table.
+  if (raw.ref != null && cleanId(raw.ref, 64)) sh.ref = cleanId(raw.ref, 64);
+  if (raw.layer != null && (!layerIds || layerIds.has(String(raw.layer)))) sh.layer = String(raw.layer).slice(0, 40);
+  // "my table" is set by whoever renders a guest's page; the model only carries it through.
+  if (raw.mine) sh.mine = true;
+  return sh;
+}
+
+export function normalizeLayers(v) {
+  if (!Array.isArray(v) || !v.length) return null;
+  const seen = new Set(), out = [];
+  for (const l of v.slice(0, 20)) {
+    const id = String(l?.id ?? '').slice(0, 40);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, name: String(l.name ?? id).slice(0, 100), visible: l.visible !== false, locked: !!l.locked });
+  }
+  return out.length ? out : null;
+}
+
+export function normalizePage(raw, i = 0, kind = 'hall') {
+  const p = raw && typeof raw === 'object' ? raw : {};
+  const layers = normalizeLayers(p.layers);
+  const ids = layers ? new Set(layers.map((l) => l.id)) : null;
+  const list = Array.isArray(p.shapes) ? p.shapes : [];
+  const shapes = [];
+  for (let j = 0; j < list.length && shapes.length < SHAPE_MAX; j++) { const s = normalizeShape(list[j], j, ids); if (s) shapes.push(s); }
+  const page = {
+    id: cleanId(p.id) || 'p' + i,
+    name: String(p.name ?? '').slice(0, 60) || (kind === 'floor' ? `Floor ${i + 1}` : kind === 'shop' ? `Hall ${i + 1}` : i ? `Hall ${i + 1}` : 'Hall'),
+    w: mm(num(p.w, 1, SIZE_MAX, 16)),
+    h: mm(num(p.h, 1, SIZE_MAX, 10)),
+    shapes,
+  };
+  if (Array.isArray(p.outline) && p.outline.length >= 3) {
+    page.outline = p.outline.slice(0, 200).map((q) => [mm(num(q?.[0], -SIZE_MAX, SIZE_MAX, 0)), mm(num(q?.[1], -SIZE_MAX, SIZE_MAX, 0))]);
+    const b = bounds([], [page.outline]);
+    page.w = mm(Math.max(page.w, b.x + b.w)); page.h = mm(Math.max(page.h, b.y + b.h));
+  }
+  if (layers) page.layers = layers;
+  if (p.floor != null) page.floor = Math.round(num(p.floor, -5, 200, 1));
+  if (p.roomType != null) { const rt = String(p.roomType).replace(/[^a-z-]/g, '').slice(0, 20); if (rt) page.roomType = rt; }
+  if (p.ox != null || p.oy != null) { page.ox = mm(num(p.ox, -1e4, 1e4, 0)); page.oy = mm(num(p.oy, -1e4, 1e4, 0)); }
+  return page;
+}
+
+/**
+ * The whole plan. Accepts the new form and the old percent-based seating chart ({ tables: [...] }, see fromSeating);
+ * always returns a working model (one empty page when there is nothing to read).
+ */
+export function normalizePlan(raw) {
+  const d = raw && typeof raw === 'object' ? raw : {};
+  if (!Array.isArray(d.pages) && Array.isArray(d.tables)) return fromSeating(d);
+  const kind = KINDS.includes(d.kind) ? d.kind : 'hall';
+  const pages = (Array.isArray(d.pages) ? d.pages : []).slice(0, PAGE_MAX).map((p, i) => normalizePage(p, i, kind));
+  if (!pages.length) pages.push(normalizePage({}, 0, kind));
+  const plan = { v: 1, kind, grid: num(d.grid, 0, 5, kind === 'shop' ? 0.1 : 0.5), pages };
+  const name = text(d.name, 200); if (name) plan.name = name;
+  return plan;
+}
+
+/**
+ * The old seating chart kept tables in PERCENT of the frame; the plan lives in metres, so a hall size is assumed
+ * (16 x 10 m, a usual banquet hall). The percentages were table CENTRES, the plan keeps top-left corners.
+ */
+export function fromSeating(seat, { w: W = 16, h: H = 10 } = {}) {
+  const tables = Array.isArray(seat?.tables) ? seat.tables : [];
+  const shapes = tables.map((t, i) => {
+    const st = stencil(t.shape !== 'rect' ? 'table-round' : 'table-rect');
+    return normalizeShape({
+      id: t.id || 'tb' + i, kind: st.key,
+      x: (num(t.x, 0, 100, 50) / 100) * W - st.w / 2, y: (num(t.y, 0, 100, 50) / 100) * H - st.h / 2,
+      w: st.w, h: st.h, label: t.name || '', seats: t.seats,
+    }, i);
+  }).filter(Boolean);
+  return { v: 1, kind: 'hall', grid: 0.5, pages: [{ id: 'p0', name: 'Hall', w: W, h: H, shapes }] };
+}
+
+// Retail floor-plan items (centimetres) -> a shop page. equipment -> rack with ref, zone, label -> text, door.
+const RETAIL_KIND = { equipment: 'rack', zone: 'zone', label: 'text', door: 'door' };
+export function fromRetailPlan(rp) {
+  const cm = (v) => mm((Number(v) || 0) / 100);
+  const outline = Array.isArray(rp.outline) && rp.outline.length >= 3 ? rp.outline.map((p) => [cm(p[0]), cm(p[1])]) : rectOutline(10, 8);
+  const b = bounds([], [outline]);
+  const page = normalizePage({
+    id: rp.id, name: rp.name, w: b.x + b.w, h: b.y + b.h, outline, layers: rp.layers ?? DEFAULT_LAYERS, floor: rp.floor ?? 1,
+    roomType: rp.roomKind ?? 'hall', ox: rp.ox != null ? cm(rp.ox) : undefined, oy: rp.oy != null ? cm(rp.oy) : undefined,
+    shapes: (rp.items ?? []).map((it) => ({
+      id: it.id, kind: RETAIL_KIND[it.kind] ?? 'rect', x: cm(it.x), y: cm(it.y), w: cm(it.w), h: it.kind === 'door' ? cm(it.w) : cm(it.d),
+      rot: it.rotation ?? 0, layer: it.layer, label: it.label, color: it.color, ref: it.equipmentId,
+    })),
+  }, 0, 'shop');
+  return { v: 1, kind: 'shop', grid: rp.grid ? mm(rp.grid / 100) : 0.1, pages: [page] };
+}
+
+// A shop page -> retail floor-plan fields (centimetres). Shop stencils with a ref become equipment.
+export function toRetailPlan(page, grid = 0.1) {
+  const cm = (v) => Math.round(v * 1000) / 10;
+  const kindOf = (s) => (s.ref && stencil(s.kind).shop && s.kind !== 'zone' ? 'equipment' : s.kind === 'zone' ? 'zone' : s.kind === 'door' ? 'door' : 'label');
+  return {
+    name: page.name, outline: (page.outline ?? rectOutline(page.w, page.h)).map((p) => [cm(p[0]), cm(p[1])]), grid: Math.max(1, Math.round(grid * 100)),
+    layers: page.layers ?? DEFAULT_LAYERS, floor: page.floor ?? 1, roomKind: page.roomType ?? 'hall',
+    items: page.shapes.map((s) => {
+      const kind = kindOf(s);
+      return { id: s.id, kind, equipmentId: kind === 'equipment' ? s.ref : null, x: cm(s.x), y: cm(s.y), w: cm(s.w), d: cm(kind === 'door' ? 12 / 100 : s.h),
+        rotation: ((s.rot % 360) + 360) % 360, layer: s.layer ?? (kind === 'zone' ? 'zones' : kind === 'label' ? 'labels' : 'equipment'), label: s.label ?? '', color: s.fill ?? null };
+    }),
+  };
+}
+
+// --- editing (pure: new pages) -------------------------------------------------------------------------------------
+
+// A fresh shape of a stencil, placed by its CENTRE at (x, y): shapes are dropped where they should end up.
+export function makeShape(key, x = 0, y = 0, { step = 0, id = newId() } = {}) {
+  const st = stencil(key);
+  const sh = { id, kind: st.key, x: snap(x - st.w / 2, step), y: snap(y - st.h / 2, step), w: st.w, h: st.h, rot: 0 };
+  if (st.seated) sh.seats = st.seats || 0;
+  if (st.roomType) sh.roomType = st.roomType;
+  if (st.room || st.key === 'text') sh.label = '';
+  return normalizeShape(sh, 0);
+}
+
+export const addShape = (page, sh) => (page.shapes.length >= SHAPE_MAX ? page : { ...page, shapes: [...page.shapes, sh] });
+export const removeShapes = (page, ids) => { const k = new Set(ids); return { ...page, shapes: page.shapes.filter((s) => !k.has(s.id)) }; };
+export const updateShape = (page, id, patch) => ({ ...page, shapes: page.shapes.map((s) => (s.id === id ? normalizeShape({ ...s, ...patch }) : s)) });
+
+export function moveShapes(page, ids, dx, dy, step = 0) {
+  const k = new Set(ids);
+  return { ...page, shapes: page.shapes.map((s) => (k.has(s.id) ? { ...s, x: snap(s.x + dx, step), y: snap(s.y + dy, step) } : s)) };
+}
+export function duplicateShape(page, id, { offset = 0.4, newIdFn = newId } = {}) {
+  const s = page.shapes.find((x) => x.id === id);
+  if (!s) return page;
+  const copy = { ...JSON.parse(JSON.stringify(s)), id: newIdFn(), x: mm(s.x + offset), y: mm(s.y + offset) };
+  delete copy.mine;
+  return addShape(page, copy);
+}
+// 'front' | 'back' | 'up' | 'down': drawing order is the array order.
+export function reorder(page, id, where) {
+  const list = page.shapes.slice(), i = list.findIndex((s) => s.id === id);
+  if (i < 0) return page;
+  const [s] = list.splice(i, 1);
+  const j = where === 'front' ? list.length : where === 'back' ? 0 : where === 'up' ? Math.min(list.length, i + 1) : Math.max(0, i - 1);
+  list.splice(j, 0, s);
+  return { ...page, shapes: list };
+}
+
+// Shapes of visible layers in drawing order (layer order first, then array order); shapes without a known layer
+// go with the first layer.
+export function visibleShapes(page) {
+  if (!page.layers) return page.shapes;
+  const first = page.layers[0].id;
+  return page.layers.filter((l) => l.visible).flatMap((l) => page.shapes.filter((s) => (page.layers.some((x) => x.id === s.layer) ? s.layer : first) === l.id));
+}
+export const isLocked = (page, sh) => !!page.layers?.find((l) => l.id === (sh.layer ?? page.layers[0].id))?.locked;

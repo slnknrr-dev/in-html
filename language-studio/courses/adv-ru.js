@@ -1,0 +1,198 @@
+// language-studio/courses/adv-ru.js - Russian C1 and C2 for English speakers: participles and verbal adverbs, the
+// finer points of aspect, word formation, idioms, functional styles and bureaucratese, particles and word order,
+// bookish and archaic words; readings from Chekhov (1883) and Tyutchev (1830), both in the public domain, with the
+// studio's own translations. The sections join the course in courses/index.js.
+//
+// Structure: arrays of lesson sections in the same shape as the course files' SECTIONS; courses/index.js appends them
+// to the matching course at import. Data, not logic: header and structure comment only. Section ids must stay
+// stable (spaced-repetition keys contain them).
+import { lines, words } from './util.js';
+
+const L = ['en'];
+const N = (en) => ({ en });
+
+export const SECTIONS_RU = [
+  // --- C1 --------------------------------------------------------------------------------------------------------------
+  {
+    id: 'c1-participles', kind: 'text', topic: 'grammar', level: 'C1', title: N('Participles: four forms and the participial phrase'),
+    blocks: [
+      { p: N('A participle is a verb that declines like an adjective. Russian has four: active and passive, present and past. They belong to written Russian — newspapers, science, literature; speech prefers a clause with который ("which, who").') },
+      { table: { head: ['form', 'suffix', 'example', 'sense'], rows: [
+        ['active present', '-ущ- / -ющ- (1st conj.), -ащ- / -ящ- (2nd)', 'читающий, говорящий', 'who is reading, speaking'],
+        ['active past', '-вш- / -ш-', 'читавший, нёсший', 'who was reading / carried'],
+        ['passive present', '-ем- / -им-', 'читаемый, любимый', 'being read, loved'],
+        ['passive past', '-нн- / -енн- / -т-', 'прочитанный, решённый, открытый', 'read (done), decided, opened'],
+      ] } },
+      { p: N('Short passive participles make the passive voice: Книга прочитана "The book has been read", Дверь открыта "The door is open". They have one н: прочитана, but the long form has two: прочитанная книга.') },
+      { p: N('A participial phrase (причастный оборот) stands after its noun between commas: Студент, читающий книгу, — мой брат = Студент, который читает книгу… Before the noun there are no commas: читающий книгу студент.') },
+      { table: { head: ['written', 'spoken'], rows: [['Письмо, написанное вчера, потерялось.', 'Письмо, которое написали вчера, потерялось.'], ['Люди, живущие рядом, всё слышат.', 'Люди, которые живут рядом, всё слышат.']] } },
+      { quiz: [
+        { q: N('Which form means "the person who has solved (the problem)"?'), opts: ['решивший', 'решённый', 'решающий'], a: 0, why: N('-вш- is the active past participle; решённый is passive ("solved"), решающий is present ("deciding").') },
+        { q: N('Choose the correct spelling: "the book has been read".'), opts: ['Книга прочитанна.', 'Книга прочитана.', 'Книга прочитаная.'], a: 1, why: N('Short passive participles have a single н.') },
+      ] },
+      { try: [{ tool: 'morph', arg: 'читающий', label: N('Take читающий apart') }, { tool: 'morph', arg: 'прочитанный', label: N('Take прочитанный apart') }, { tool: 'morph', arg: 'переписывающиеся', label: N('Take переписывающиеся apart') }] },
+    ],
+  },
+  {
+    id: 'c1-gerunds', kind: 'text', topic: 'grammar', level: 'C1', title: N('Verbal adverbs (деепричастия) and the same-subject rule'),
+    blocks: [
+      { p: N('A verbal adverb names a second action of the same subject: Читая, он улыбался "Reading, he smiled". Imperfective ones (-я / -а) mean "while": читая, слыша, держа. Perfective ones (-в, -вши, -ши) mean "having done": прочитав, вернувшись, принёсши.') },
+      { table: { head: ['aspect', 'form', 'example'], rows: [['imperfective', 'present stem + -я / -а', 'читать → читая, слышать → слыша'], ['perfective', 'past stem + -в / -вши (+ -сь)', 'прочитать → прочитав, вернуться → вернувшись'], ['perfective, consonant stem', '-ши', 'принести → принёсши (bookish), usually принеся']] } },
+      { p: N('The subject of the verbal adverb must be the subject of the sentence. Chekhov mocked the error in "Жалобная книга" (1884): «Подъезжая к сией станции и глядя на природу в окно, у меня слетела шляпа» — literally "Approaching this station, my hat flew off", as if the hat were travelling. Correct: Подъезжая к станции, я потерял шляпу.') },
+      { quiz: [
+        { q: N('Which sentence is correct?'), opts: ['Выйдя из дома, начался дождь.', 'Выйдя из дома, я попал под дождь.', 'Выйдя из дома, мне стало холодно.'], a: 1, why: N('Only in the second sentence does the one who left the house (я) act in the main clause.') },
+        { q: N('"Having returned home, she called her mother." — the verbal adverb:'), opts: ['возвращаясь', 'вернувшись', 'вернув'], a: 1, why: N('Perfective вернуться → вернувшись (-вши + -сь); вернув is from the transitive вернуть "to give back".') },
+      ] },
+    ],
+  },
+  {
+    id: 'c1-aspect', kind: 'text', topic: 'grammar', level: 'C1', title: N('Aspect: the finer points'),
+    blocks: [
+      { p: N('The basic rule — imperfective for process, perfective for one result — does not cover everything. At C1 these uses matter:') },
+      { table: { head: ['use', 'example', 'sense'], rows: [
+        ['general fact (imperfective)', 'Ты читал «Войну и мир»? — Читал.', 'Have you ever read it? — Yes (the fact, not the result).'],
+        ['annulled result (imperfective)', 'Я открывал окно.', 'I opened the window (and it is closed again).'],
+        ['polite invitation (imperfective imperative)', 'Садитесь, пожалуйста!', 'Do sit down (warm, expected).'],
+        ['one specific request (perfective imperative)', 'Сядьте сюда.', 'Sit here (a concrete instruction, can sound curt).'],
+        ['warning with negation (imperfective)', 'Не открывай!', 'Don\'t open (it)!'],
+        ['fear of an accident (perfective)', 'Не упади!', 'Mind you don\'t fall!'],
+        ['impossibility (perfective future)', 'Его не переспоришь.', 'You can\'t out-argue him.'],
+        ['repetition (imperfective)', 'Он звонил каждый день.', 'He called every day.'],
+      ] } },
+      { p: N('Georgian marks the same distinction by the preverb: წერს "is writing" — დაწერს "will write (it through)"; the aorist with a preverb is like a Russian perfective past (დაწერა — написал). Compare the Georgian course, "The verb".') },
+      { quiz: [
+        { q: N('Your friend asks if you have ever seen "Ivan the Terrible". You have. Answer:'), opts: ['Да, посмотрел.', 'Да, смотрел.', 'Да, посмотрю.'], a: 1, why: N('A general fact of experience takes the imperfective: смотрел.') },
+        { q: N('A child is climbing a tree. Warn them: "Don\'t fall!"'), opts: ['Не падай!', 'Не упади!', 'Не упал!'], a: 1, why: N('A warning against an accidental result uses the negated perfective imperative.') },
+      ] },
+      { try: [{ course: 'ka', tool: 'ka-verb', label: N('Georgian preverbs and screeves') }] },
+    ],
+  },
+  {
+    id: 'c1-wordform', kind: 'parse', topic: 'abstract', level: 'C1', title: N('Word formation: long words taken apart'),
+    intro: N('Bookish Russian builds long words from familiar pieces. Every piece is a morpheme with its own sense; many such words are calques of Latin, Greek or German (see "Across languages" → "Word families").'),
+    items: [
+      { w: 'непредсказуемость', tr: 'nepredskazúyemost\'', m: N('unpredictability'), parts: [['не', 'not'], ['пред', 'before'], ['сказ', 'say'], ['у', 'verb stem'], ['ем', 'passive present participle'], ['ость', 'quality']], lit: N('"the quality of not being said-before"'), note: N('Pre-dict-abil-ity in English is built the same way, from Latin prae + dicere.') },
+      { w: 'мировоззрение', tr: 'mirovozzréniye', m: N('worldview'), parts: [['мир', 'world'], ['о', 'linking vowel'], ['воз', 'up'], ['зр', 'see (зреть)'], ['ени', 'action noun'], ['е', 'ending']], lit: N('"world-up-seeing"'), note: N('A calque of German Weltanschauung; Georgian მსოფლმხედველობა is a calque too.') },
+      { w: 'небоскрёб', tr: 'neboskryób', m: N('skyscraper'), parts: [['неб', 'sky'], ['о', 'linking vowel'], ['скрёб', 'scrape']], lit: N('"sky-scrape"'), note: N('A calque of English skyscraper.') },
+      { w: 'самолёт', tr: 'samolyót', m: N('aeroplane'), parts: [['сам', 'self'], ['о', 'linking vowel'], ['лёт', 'fly']], lit: N('"self-flier"'), note: N('In folk tales ковёр-самолёт was the flying carpet; the word was later given to the aeroplane.') },
+      { w: 'достопримечательность', tr: 'dostoprimechátel\'nost\'', m: N('sight, place of interest'), parts: [['досто', 'worthy of'], ['при', 'towards'], ['меч', 'mark, notice (метить)'], ['а', 'verb stem'], ['тель', 'agent / adjective'], ['н', 'adjective'], ['ость', 'quality']], lit: N('"the quality of being worth noticing"') },
+      { w: 'учительница', tr: 'uchítel\'nitsa', m: N('(female) teacher'), parts: [['уч', 'teach'], ['и', 'verb stem'], ['тель', 'agent'], ['ниц', 'female'], ['а', 'ending']], lit: N('"she who teaches"') },
+    ],
+  },
+  {
+    id: 'c1-idioms', kind: 'words', topic: 'speech', level: 'C1', title: N('Idioms (фразеологизмы) and where they come from'),
+    intro: N('Idioms cannot be translated word for word. The note gives the literal image and, where known, its origin.'),
+    words: words(L, `
+бить баклуши | bit\' baklúshi | to idle about // "to split chocks": cutting wooden blanks for spoons was the easiest job in the village
+водить за нос | vodít\' za nos | to lead someone up the garden path // like a bear led by a ring in its nose
+вешать лапшу на уши | véshat\' lapshú na úshi | to tell tall tales // "to hang noodles on someone\'s ears"; colloquial
+медвежья услуга | medvézh\'ya uslúga | a well-meant act that does harm // from Krylov\'s fable "The Hermit and the Bear" (1808): the bear kills a fly on his sleeping friend\'s forehead with a rock
+после дождичка в четверг | pósle dózhdichka v chetvérg | when pigs fly; never // "after the little rain on Thursday"
+как с гуся вода | kak s gúsya vodá | like water off a duck\'s back // the same image as English, with a goose
+кот наплакал | kot naplákal | very little // "the cat has cried (that much)"
+ни пуха ни пера | ni púkha ni perá | good luck! (break a leg) // a hunters\' charm: wishing good luck directly would bring bad; the answer is К чёрту!
+заварить кашу | zavarít\' káshu | to stir up trouble // "to brew the porridge"; расхлёбывать кашу — to deal with the consequences
+точить лясы | tochít\' lyásy | to chatter idly // лясы (balusters) were turned on a lathe — a leisurely craft
+с бухты-барахты | s búkhty-barákhty | out of the blue, without thinking
+набрать в рот воды | nabrát\' v rot vodý | to keep silent // the same image exists in Georgian: პირში წყალი ჩაიგუბა
+выйти сухим из воды | výyti sukhím iz vodý | to get off scot-free // "to come out of the water dry"
+белая ворона | bélaya voróna | the odd one out // "a white crow": Juvenal\'s corvo rarior albo, "rarer than a white crow"
+`),
+  },
+  {
+    id: 'c1-reading', kind: 'poem', topic: 'poetry', level: 'C1', title: N('Reading: Chekhov, "The Death of a Civil Servant" (1883)'),
+    intro: N('The opening of the story. Chekhov plays with the cliché "но вдруг" ("but suddenly") and with the official\'s grand title. Translation: the studio\'s own.'),
+    lines: lines(L, `
+В один прекрасный вечер не менее прекрасный экзекутор, Иван Дмитрич Червяков, | v odín prekrásnyy vécher ne méneye prekrásnyy ekzekútor, iván dmítrich chervyakóv | One fine evening a no less fine office manager, Ivan Dmitrich Chervyakov, // экзекутор: a clerk in charge of a department\'s premises; Червяков is from червяк "worm"
+сидел во втором ряду кресел и глядел в бинокль на «Корневильские колокола». | sidél vo vtoróm ryadú krésel i glyadél v binókl\' na «kornevíl\'skiye kolokolá» | sat in the second row of the stalls and looked through his opera glasses at "The Bells of Corneville". // an operetta by Robert Planquette (1877)
+Он глядел и чувствовал себя на верху блаженства. | on glyadél i chúvstvoval sebyá na verkhú blazhénstva | He looked and felt himself at the height of bliss.
+Но вдруг… В рассказах часто встречается это «но вдруг». | no vdrug… v rasskázakh chásto vstrecháyetsya éto «no vdrug» | But suddenly… In stories one often meets this "but suddenly". // the author steps into his own story
+Авторы правы: жизнь так полна внезапностей! | ávtory právy: zhizn\' tak polná vnezápnostey | Authors are right: life is so full of surprises!
+Но вдруг лицо его поморщилось, глаза подкатились, дыхание остановилось… | no vdrug litsó yegó pomórshchilos\', glazá podkatílis\', dykhániye ostanovílos\' | But suddenly his face wrinkled, his eyes rolled up, his breath stopped…
+он отвел от глаз бинокль, нагнулся и… апчхи!!! Чихнул, как видите. | on otvyól ot glaz binókl\', nagnúlsya i… apchkhí!!! chikhnúl, kak vídite | he took the glasses from his eyes, bent forward and… atishoo!!! He sneezed, as you see. // the perfective chain отвёл — нагнулся — чихнул: one quick action after another
+`),
+    note: N('Look at the aspect: глядел, чувствовал (imperfective — the background) against поморщилось, остановилось, чихнул (perfective — the sudden events). Paste the passage into "Text analysis" to see who does what.'),
+  },
+  // --- C2 --------------------------------------------------------------------------------------------------------------
+  {
+    id: 'c2-styles', kind: 'text', topic: 'speech', level: 'C2', title: N('Functional styles and bureaucratese (канцелярит)'),
+    blocks: [
+      { p: N('Russian distinguishes five functional styles: scientific, official (деловой), journalistic, conversational and literary. Each has its own vocabulary and syntax: the scientific style uses passive and impersonal constructions (рассматривается, следует отметить), the official one — strings of nouns in the genitive, the conversational one — particles, ellipsis and free word order.') },
+      { p: N('Канцелярит — Korney Chukovsky\'s name (1962) for the official style leaking into ordinary speech: verbs become nouns, nouns pile up in the genitive.') },
+      { table: { head: ['канцелярит', 'plain Russian', 'sense'], rows: [
+        ['осуществлять деятельность по оказанию помощи', 'помогать', 'to help'],
+        ['в целях улучшения качества обслуживания', 'чтобы лучше обслуживать', 'to serve better'],
+        ['произвести оплату', 'заплатить', 'to pay'],
+        ['имеет место нехватка', 'не хватает', 'there is a shortage'],
+        ['в связи с отсутствием', 'потому что нет', 'because there is no…'],
+        ['принять участие в обсуждении', 'обсудить', 'to discuss'],
+      ] } },
+      { p: N('English has the same disease ("nominalisation"; see the English course, C1 register). The cure is the same: give the action back to a verb.') },
+      { quiz: [
+        { q: N('Rewrite plainly: «Производится выдача справок».'), opts: ['Выдаём справки.', 'Осуществляется выдача справок.', 'Имеет место выдача справок.'], a: 0, why: N('The verb выдаём carries the action; the other two are still канцелярит.') },
+      ] },
+    ],
+  },
+  {
+    id: 'c2-particles', kind: 'text', topic: 'speech', level: 'C2', title: N('Particles and word order: what the sentence is about'),
+    blocks: [
+      { p: N('Russian word order is free because cases show the roles; order shows the information. The known (theme) comes first, the new (rheme) last: Книгу взял Иван "It was Ivan who took the book"; Иван взял книгу "Ivan took the book". Intonation can move the rheme anywhere.') },
+      { table: { head: ['particle', 'example', 'nuance'], rows: [
+        ['же', 'Я же говорил!', 'insistence: "I told you so!"'], ['ведь', 'Ведь ты знал.', 'appeal to shared knowledge: "you did know, after all"'],
+        ['-то', 'Книгу-то ты взял?', 'contrast: "the book, at least — did you take it?"'], ['ли', 'Знает ли он?', 'a bookish yes/no question'],
+        ['вот', 'Вот это да!', 'pointing, surprise'], ['ну', 'Ну, давай!', 'urging, hesitation'], ['уж', 'Уж он-то знает.', '"he, of all people, knows"'], ['разве', 'Разве он не пришёл?', '"didn\'t he come, then?" (surprise)'],
+      ] } },
+      { p: N('Georgian marks focus by putting the focused word right before the verb and with სწორედ "precisely": სწორედ ნინომ დაწერა "It was Nino who wrote it" — compare English cleft sentences (English course, C1).') },
+      { quiz: [
+        { q: N('Which sentence answers "Who wrote the letter?"'), opts: ['Письмо написала Анна.', 'Анна написала письмо.', 'Написала Анна письмо.'], a: 0, why: N('The new information (who) goes last: Письмо написала Анна.') },
+        { q: N('"I did tell you!" (insisting)'), opts: ['Я ведь говорил.', 'Я же говорил!', 'Говорил ли я?'], a: 1, why: N('же insists; ведь appeals to what both know.') },
+      ] },
+      { try: [{ tool: 'text', label: N('Text analysis: theme and rheme in the topic chain') }] },
+    ],
+  },
+  {
+    id: 'c2-words', kind: 'words', topic: 'abstract', level: 'C2', title: N('Bookish and archaic words'),
+    intro: N('Words of the high style, many from Church Slavonic. They live on in literature, speeches and irony.'),
+    words: words(L, `
+дабы | dáby | in order that // archaic; ironic today
+ибо | íbo | for, because // bookish
+сей | sey | this // archaic: сей час → сейчас "now"
+оный | ónyy | that, the aforesaid // archaic; ironic
+доколе | dokóle | how long? until when? // rhetorical
+зиждиться | zízhdit\'sya | to rest upon, be founded on // Church Slavonic; здание "building" is the same root
+тщиться | tshchít\'sya | to strive in vain // тщета "vanity", тщетный "futile"
+упование | upovániye | hope, trust // high style
+благоговение | blagogovéniye | reverence // благо "good" + говеть "to fast, revere"
+сподвижник | spodvízhnik | companion-in-arms, associate // с- + по- + движ- "moving together"
+кручина | kruchína | sorrow // folk-poetic
+вящий | vyáshchiy | greater // only in для вящей убедительности "to be more convincing"
+лепта | lépta | a mite, a small contribution // внести свою лепту: the widow\'s mite of the Gospel
+злословие | zloslóviye | malicious gossip // зло + слово: a calque of Greek kakologia
+`),
+  },
+  {
+    id: 'c2-silentium', kind: 'poem', topic: 'poetry', level: 'C2', title: N('Reading: Tyutchev, "Silentium!" (1830)'),
+    intro: N('Three stanzas, each ending in "— и молчи" ("— and be silent"). The poem\'s most quoted line: Мысль изречённая есть ложь "A thought once uttered is a lie". Iambic tetrameter with rhyming couplets; оне is the old feminine plural of они. Translation: the studio\'s own.'),
+    lines: lines(L, `
+Молчи, скрывайся и таи | molchí, skryváysya i taí | Be silent, hide yourself and conceal
+И чувства и мечты свои — | i chúvstva i mechtý svoí | both your feelings and your dreams —
+Пускай в душевной глубине | puskáy v dushévnoy glubiné | let them, in the depth of your soul,
+Встают и заходят оне | vstayút i zakhódyat oné | rise and set // like stars; оне = они (feminine)
+Безмолвно, как звезды в ночи, — | bezmólvno, kak zvézdy v nochí | soundlessly, like stars in the night —
+Любуйся ими — и молчи. | lyubúysya ími — i molchí | admire them — and be silent.
+Как сердцу высказать себя? | kak sérdtsu výskazat\' sebyá | How can the heart express itself?
+Другому как понять тебя? | drugómu kak ponyát\' tebyá | How can another understand you?
+Поймёт ли он, чем ты живёшь? | poymyót li on, chem ty zhivyósh\' | Will he understand what you live by?
+Мысль изречённая есть ложь. | mysl\' izrechyónnaya yest\' lozh\' | A thought once uttered is a lie. // изречённая: passive past participle of изречь "to utter"; есть as a copula — bookish
+Взрывая, возмутишь ключи, — | vzryváya, vozmutísh\' klyuchí | Digging, you will stir up the springs — // ключи: springs of water, not keys
+Питайся ими — и молчи. | pitáysya ími — i molchí | feed on them — and be silent.
+Лишь жить в себе самом умей — | lish\' zhit\' v sebé samóm uméy | Only know how to live within yourself —
+Есть целый мир в душе твоей | yest\' tsélyy mir v dushé tvoyéy | there is a whole world in your soul
+Таинственно-волшебных дум; | taínstvenno-volshébnykh dum | of mysterious, magic thoughts;
+Их оглушит наружный шум, | ikh oglushít narúzhnyy shum | the noise outside will deafen them,
+Дневные разгонят лучи, — | dnevnýye razgónyat luchí | the rays of day will scatter them —
+Внимай их пенью — и молчи!.. | vnimáy ikh pén\'yu — i molchí | listen to their singing — and be silent!..
+`),
+    note: N('A C2 reading: archaic forms (оне, пенью for пению, внимай "listen" + dative), a participle (изречённая), a verbal adverb (взрывая) and the bookish copula есть.'),
+  },
+];

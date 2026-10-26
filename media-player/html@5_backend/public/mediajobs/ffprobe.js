@@ -1,0 +1,2 @@
+import{Args,argPath,makeJob,baseName}from"./job.js";function probeJob(input){if(input==null||input==='')throw new Error('probeJob: input is required');const a=new Args().add('-v','error').add('-print_format','json').add('-show_format','-show_streams','-show_chapters');if(/^-/.test(String(input)))a.add('-i',input);else a.add(argPath(input));return makeJob('ffprobe',`Read the media information of ${baseName(input)}`,[a.step({tool:'ffprobe',comment:'Streams, format, tags and chapters as JSON',capture:'json',parse:'ffprobe'})],[]);}
+export{probeJob};

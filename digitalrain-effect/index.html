@@ -1,0 +1,37 @@
+<!doctype html>
+<!-- digitalrain-effect/index.html - Digital Rain Creator: live canvas preview, settings panel, exporters. A shell,
+     not a document: main.js builds everything into <main>. The build strips every comment of this file. -->
+<html lang="en">
+<!-- lang="en" is the static default; ui/i18n.js rewrites it on language switch (screen readers, hyphenation). -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: it must sit in the first 1024 bytes, before any non-ASCII text, or the parser re-decodes. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Without viewport, phones lay out at ~980px and zoom out: the @media (max-width) rules of app.css never fire. -->
+<title>Digital Rain Creator</title>
+<!-- description: shown by search engines and link previews; the published page is a standalone tool. -->
+<meta name="description" content="Design a Matrix-style digital rain and export it as an offline HTML page, an embeddable snippet, a WebM video or a wallpaper.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23010702'/%3E%3Cg stroke-linecap='round' stroke-width='2.6'%3E%3Cpath stroke='%2300561b' d='M8 5v6M16 4v4M24 6v7M8 15v3M16 12v8M24 17v4'/%3E%3Cpath stroke='%235dff8a' d='M8 22v2M16 24v2M24 25v1'/%3E%3C/g%3E%3C/svg%3E">
+<!-- Icon as a URL-encoded SVG data: URI: zero requests, works from file:// and offline builds. %23 for '#': a raw
+     '#' would start a URL fragment and truncate the image. -->
+
+<!-- Cascade order is a contract (equal specificity: the later file wins):
+       1. ui/base.css  design tokens (ed- custom properties), reset, primitives (.ed-input, .ed-btn)
+       2. ui/app.css   app shell (.ap-*: header, main, cards)
+       3. ./app.css    this app, overrides 1-2 by order, not by weight -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- .ap on body: root hook of the ui/app.css shell (flex column, footer pushed down). -->
+<!-- Empty mount point: all UI is built by main.js. One render path (JS) for content, i18n and state; static markup
+     would duplicate it and drift. <main> landmark lets assistive tech jump straight to content. -->
+<main class="ap-main" id="main"></main>
+<!-- The only static content: without JS the page would otherwise be blank with no explanation. -->
+<noscript><div class="ed-noscript">This application needs JavaScript.</div></noscript>
+<!-- type="module": deferred by spec (runs after parsing, so #main exists), strict mode, and native ../ imports in
+     development; the build inlines every module into one file. -->
+<script type="module" src="./main.js"></script>
+</body>
+</html>

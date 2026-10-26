@@ -1,0 +1,130 @@
+// access-designer/sessions.js - the sessions page: effective rights = the member's rights ∩ the session scope (panel
+// groups, dropped rights, read-only), the stored form of the scope, a ticket issued from the session (scopeIntersect,
+// never wider) with the one-way ratchet check (scopeWithin), the read-only write check with its allowlist, and the
+// lifetime of a session under a simulated clock: absolute TTL, idle timeout, activity writes at most once a minute
+// and polling that never counts as activity.
+import { ALWAYS_GROUP, P, actLabel, chip, checkList, group, memberAccess, memberById, memberOptions, note, rightNames, save, scopeModel, secIds, secLabel, selectEl, startShell } from './common.js';
+import { projectCard } from './doc.js';
+import { button, card, field, t, textInput, toggle } from '../ui/app.js';
+import { $, h, lsGet, lsSet } from '../ui/dom.js';
+import {
+  IDLE_CHOICES, TTL_CHOICES, cleanIdleSec, cleanTtlDays, effectiveRights, isIdleSilent, normalizeScope, scopeAllowsGroup, scopeAllowsWrite,
+  scopeIntersect, scopeText, scopeWithin, sessionAlive, shouldTouchSeen,
+} from '../access/scope.js';
+
+// Simulator state (clock offset in minutes, last-seen, log, test request) is UI-only and stored apart from the project.
+// BASE is a fixed epoch so the simulation is reproducible and independent of the real clock.
+const UKEY = 'acd-ui-sessions';
+const BASE = Date.UTC(2026, 10, 1, 9, 0, 0);
+const U = { clock: 0, seen: 0, log: [], method: 'POST', path: '/api/items', ...lsGet(UKEY, {}) };
+const keep = () => lsSet(UKEY, U);
+const main = $('#main');
+main.classList.add('acd-page', 'acd-sessions');
+const changed = () => { save(); render(); };
+let S = P.sessions;
+const rightText = (r) => { const [s, a] = r.split('.'); return `${secLabel(s)} · ${actLabel(a)}`; };
+
+// Scope = panel groups (null = all), dropped rights, read-only flag. normalizeScope makes any stored value valid
+// against the current model (removed sections/rights disappear).
+function scopeEditor(key, rights, model) {
+  const sc = normalizeScope(S[key], model);
+  const set = (next) => { S[key] = next; changed(); };
+  const all = sc.panel === null;
+  const panel = checkList(secIds().map((s) => ({ v: s, l: secLabel(s) })), all ? secIds() : sc.panel, (v) => set({ ...sc, panel: v }), t('ad.s.panel'));
+  return h('div', { class: 'acd-scope', dataset: { scope: key } },
+    group('ad.s.panel', h('div', {}, h('label', { class: 'acd-check' }, toggle(all, (v) => set({ ...sc, panel: v ? null : [] })), h('span', {}, t('ad.s.allGroups'))), all ? null : panel,
+      h('div', { class: 'ed-hint' }, t('ad.s.always', { g: t('ad.s.profile') })))),
+    group('ad.s.drop', checkList(rights.map((r) => ({ v: r, l: rightText(r) })), sc.drop, (v) => set({ ...sc, drop: v }), t('ad.s.drop')), t('ad.s.dropHint')),
+    field('ad.s.readonly', toggle(sc.readonly, (v) => set({ ...sc, readonly: v }))));
+}
+
+// Effective rights = member rights, minus dropped, restricted to allowed groups, and read-only keeps only the read
+// action. Each removed right is labelled with the first rule that removed it, so the user sees why.
+function render() {
+  S = P.sessions;
+  main.textContent = '';
+  const model = scopeModel();
+  const m = memberById(S.memberId) || P.members[0] || null;
+  const acc = memberAccess(m);
+  const rights = rightNames(acc && acc.grants);
+  const scope = normalizeScope(S.scope, model);
+  const rightsObj = Object.fromEntries(rights.map((r) => [r, true]));
+  const afterDrop = new Set(effectiveRights(rightsObj, scope));
+  const rows = rights.map((r) => {
+    const sec = r.split('.')[0], act = r.split('.')[1];
+    const why = !afterDrop.has(r) ? 'drop' : !scopeAllowsGroup(scope, sec, model) ? 'panel' : scope.readonly && act !== P.readAction ? 'readonly' : '';
+    return { r, why };
+  });
+  const eff = rows.filter((x) => !x.why);
+  const result = h('div', { id: 'acd-effective', dataset: { rights: String(rights.length), effective: String(eff.length) } },
+    h('p', { class: 'acd-mt0' }, h('b', {}, t('ad.s.count', { n: eff.length, all: rights.length }))),
+    h('div', { class: 'acd-chips' }, rows.map((x) => chip(rightText(x.r) + (x.why ? ' · ' + t('ad.s.why.' + x.why) : ''), x.why ? 'muted acd-chip-cut' : 'ok', { dataset: { right: x.r, why: x.why } }))));
+
+  // A ticket (delegated session) is the intersection with the parent scope: it can never be wider. scopeWithin checks
+  // the requested ticket against the session - the one-way ratchet.
+  // Ticket.
+  const ticket = normalizeScope(S.ticket, model);
+  const issued = scopeIntersect(scope, ticket, model);
+  const within = scopeWithin(ticket, scope);
+  const ticketBox = h('div', {}, scopeEditor('ticket', rights, model),
+    note(within ? 'ok' : 'warn', within ? t('ad.s.within') : t('ad.s.clipped')),
+    h('p', { class: 'ed-hint' }, t('ad.s.issued'), ' ', h('code', {}, scopeText(issued) || t('ad.s.full'))));
+
+  // Read-only sessions refuse writes except allowlisted paths (e.g. logout, saving one's own preferences).
+  // Write check.
+  const allowed = scopeAllowsWrite(scope, U.method, U.path, model);
+  const writes = h('div', {},
+    h('div', { class: 'acd-grid2' }, field('ad.s.method', selectEl(['GET', 'POST', 'PUT', 'DELETE'].map((v) => ({ v, l: v })), U.method, (v) => { U.method = v; keep(); render(); })),
+      field('ad.s.path', textInput(U.path, (v) => { U.path = v; keep(); }, { onchange: () => render() }))),
+    note(allowed ? 'ok' : 'error', allowed ? t('ad.s.writeOk') : t('ad.s.writeNo')),
+    field('ad.s.allow', textInput((S.readonlyAllow || []).join('\n'), (v) => { S.readonlyAllow = v.split(/\n/).map((x) => x.trim()).filter(Boolean); save(); }, { multiline: true, rows: 3, onchange: () => render() }), 'ad.s.allowHint'));
+
+  // Session lifetime rules: an absolute TTL from creation and an idle timeout from last activity. "Seen" is written
+  // at most about once a minute (shouldTouchSeen) to avoid a storage write per request, and polling endpoints
+  // (idle paths / polls with a marker parameter) never count as activity - otherwise an open tab would keep a session
+  // alive forever.
+  // Lifetime with a simulated clock (minutes after creation).
+  const ttlSec = cleanTtlDays(S.ttl, 30) * 86400, idleSec = cleanIdleSec(S.idle);
+  const now = BASE + U.clock * 60000, seen = BASE + U.seen * 60000;
+  const alive = sessionAlive(now, BASE + ttlSec * 1000, idleSec, seen, BASE);
+  const reason = alive ? '' : now >= BASE + ttlSec * 1000 ? t('ad.s.deadTtl') : t('ad.s.deadIdle');
+  const act = (kind) => {
+    const q = (S.idlePolls || [])[0];
+    const path = kind === 'poll' ? (S.idlePaths || [])[0] || '/' : kind === 'pollq' && q ? String(q.path) : S.actionPath || '/';
+    const search = kind === 'pollq' && q ? '?' + q.param + '=' + (q.value ?? '1') : '';
+    const silent = isIdleSilent(path, search, model);
+    let entry;
+    if (!sessionAlive(now, BASE + ttlSec * 1000, idleSec, seen, BASE)) entry = t('ad.s.logDead', { p: path + search });
+    else if (silent) entry = t('ad.s.logSilent', { p: path + search });
+    else if (shouldTouchSeen(now, seen, idleSec)) { U.seen = U.clock; entry = t('ad.s.logTouch', { p: path + search }); }
+    else entry = t('ad.s.logSkip', { p: path + search });
+    U.log = [`+${U.clock} min · ${entry}`, ...U.log].slice(0, 8);
+    keep(); render();
+  };
+  const tick = (min) => { U.clock += min; keep(); render(); };
+  const sm = (l, fn) => { const b = button(l, null, fn); b.classList.add('ed-sm'); return b; };
+  const life = h('div', {},
+    h('div', { class: 'acd-grid2' },
+      field('ad.s.ttl', selectEl(TTL_CHOICES.map((c) => ({ v: c.k, l: t('ad.ttl.' + c.k) })), S.ttl, (v) => { S.ttl = v; changed(); })),
+      field('ad.s.idle', selectEl(IDLE_CHOICES.map((c) => ({ v: c.k, l: t('ad.idle.' + c.k) })), S.idle, (v) => { S.idle = v; changed(); }))),
+    h('div', { class: 'acd-grid2' },
+      field('ad.s.actionPath', textInput(S.actionPath || '/', (v) => { S.actionPath = v; save(); }), 'ad.s.actionPathHint'),
+      field('ad.s.idlePaths', textInput((S.idlePaths || []).join('\n'), (v) => { S.idlePaths = v.split('\n').map((x) => x.trim()).filter(Boolean); save(); }, { multiline: true, rows: 2 }), 'ad.s.idlePathsHint')),
+    h('p', {}, t('ad.s.clock', { n: U.clock, seen: U.seen })),
+    h('div', { class: 'ap-actions' }, sm('=+1 min', () => tick(1)), sm('=+10 min', () => tick(10)), sm('=+1 h', () => tick(60)), sm('=+1 d', () => tick(1440)), sm('ad.s.restart', () => { U.clock = 0; U.seen = 0; U.log = []; keep(); render(); })),
+    h('div', { class: 'ap-actions' }, sm('ad.s.doAction', () => act('user')), sm('ad.s.doPoll', () => act('poll')), (S.idlePolls || []).length ? sm('ad.s.doPollQ', () => act('pollq')) : null),
+    h('div', { id: 'acd-alive', dataset: { alive: String(alive) } }, note(alive ? 'ok' : 'error', alive ? t('ad.s.alive') : t('ad.s.dead') + ' ' + reason)),
+    U.log.length ? h('ul', { class: 'acd-log' }, U.log.map((x) => h('li', {}, x))) : null);
+
+  const side = h('div', { class: 'acd-col acd-side' },
+    card('ad.s.session', field('ad.p.subject', selectEl(memberOptions(), m ? m.id : '', (v) => { S.memberId = v; changed(); })), scopeEditor('scope', rights, model),
+      h('p', { class: 'ed-hint' }, t('ad.s.stored'), ' ', h('code', {}, scopeText(scope) || "''"))),
+    projectCard(render));
+  const stage = h('div', { class: 'acd-col acd-stage' },
+    card('ad.s.effective', h('p', { class: 'ed-hint acd-mt0' }, t('ad.s.formula')), result),
+    card('ad.s.ticket', ticketBox), card('ad.s.writes', writes), card('ad.s.life', life));
+  main.append(h('p', { class: 'ap-lead' }, t('ad.lead.sessions', { g: ALWAYS_GROUP })), h('div', { class: 'acd-work' }, side, stage));
+}
+
+startShell('sessions', () => render());
+render();

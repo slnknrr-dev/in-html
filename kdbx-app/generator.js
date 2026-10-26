@@ -1,0 +1,313 @@
+// kdbx-app/generator.js - the password generator of the vault and the strength line of passwords.
+//   - Generation (crypto/password.js): passwords from KeePassXC's character groups plus Latin-1 ("extended ASCII"),
+//     Cyrillic, Greek and emoji, own characters to add or leave out, look-alikes excluded, a character of every group
+//     (uniform, exact entropy); passphrases from the common English list, the short built-in list or an own list (kept in
+//     memory only), with a separator, letter case, a digit and a symbol.
+//   - The result is editable: an auto-growing text area over a coloured copy of the text (digits, symbols and other
+//     alphabets in their own colours, like KeePassXC); typing, IME, paste and the caret are the text area's own. Hidden,
+//     it becomes a password input. "Generate again" replaces the text and offers to undo a replaced manual edit.
+//   - The strength line describes the current text: the exact entropy of the generator while the text is its output, else
+//     the zxcvbn estimate of the actual string (crypto/strength.js, as KeePassXC) with its warning and advice.
+// Only the settings are remembered (localStorage), never a password.
+import { field, seg, select, t, textInput, toggle } from '../ui/app.js';
+import { debounce, h, lsGet, lsSet } from '../ui/dom.js';
+import { iconEl } from '../ui/icons.js';
+import { openDialog } from '../ui/overlays.js';
+import { ALPHABETS, LOOK_ALIKE, PASSPHRASE_SYMBOLS, WORDS, generatePassphrase, passwordGenerator } from '../crypto/password.js';
+import { passwordStrength, quality, wordList } from '../crypto/strength.js';
+import { copySecret } from './state.js';
+
+// --- settings -------------------------------------------------------------------------------------------------------
+
+const KEY = 'kdbx-vault-gen';
+const SPECIAL = ALPHABETS.filter((a) => a.special).map((a) => a.id);
+const MAX_LEN = 128, MAX_WORDS = 32;
+const DEF = {
+  mode: 'password', length: 20, alphabets: ['upper', 'lower', 'digits', ...SPECIAL], include: '', exclude: '', lookAlike: false, everyGroup: true,
+  words: 6, list: 'english', separator: '-', wordCase: 'lower', number: false, symbol: false, show: true,
+};
+const LABELS = {
+  upper: 'A–Z', lower: 'a–z', digits: '0–9', braces: '( ) [ ] { }', punctuation: '. , : ;', quotes: '" \'', dashes: '- / \\ _ |',
+  math: '! * + < = > ?', logograms: '# $ % & @ ^ ` ~', latin1: '¡ ¿ Ä ß ÿ', cyrillic: 'А–Я а–я', greek: 'Α–Ω α–ω', emoji: '😀 🐶',
+};
+
+let G = null;
+// The remembered settings (read on first use: this module is also loaded in the key derivation Worker).
+// Lazy read: the module is also evaluated inside the KDF Worker, where localStorage does not exist.
+export function genSettings() {
+  if (G) return G;
+  const saved = lsGet(KEY, {}) || {};
+  G = { ...DEF };
+  for (const k of Object.keys(DEF)) if (saved[k] !== undefined && typeof saved[k] === typeof DEF[k] && Array.isArray(saved[k]) === Array.isArray(DEF[k])) G[k] = saved[k];
+  G.alphabets = G.alphabets.filter((id) => ALPHABETS.some((a) => a.id === id));
+  if (G.mode !== 'passphrase') G.mode = 'password';
+  if (!['english', 'short'].includes(G.list)) G.list = 'english'; // an own list is never saved
+  G.length = Math.max(1, Math.min(MAX_LEN, Math.floor(G.length) || DEF.length));
+  G.words = Math.max(1, Math.min(MAX_WORDS, Math.floor(G.words) || DEF.words));
+  if (!['lower', 'title', 'upper', 'mixed'].includes(G.wordCase)) G.wordCase = 'lower';
+  return G;
+}
+const saveGen = () => lsSet(KEY, Object.fromEntries(Object.keys(DEF).map((k) => [k, k === 'list' && G.list === 'own' ? 'english' : G[k]])));
+
+// --- generation -----------------------------------------------------------------------------------------------------
+
+let ownWords = ''; // an own passphrase list: this page only
+let english = null;
+// Common English words of 4-9 letters, the 7776 most frequent (the size of a five-dice list), as on the crypto tools page.
+const englishList = () => english || (english = wordList('english').filter((w) => /^[a-z]{4,9}$/.test(w)).slice(0, 7776));
+const ownList = () => [...new Set(ownWords.split(/[\s,;]+/).map((w) => w.trim().toLowerCase()).filter(Boolean))];
+const listFor = (id) => (id === 'own' ? ownList() : id === 'short' ? WORDS : englishList());
+
+const fmtNum = (n, d = 0) => new Intl.NumberFormat(document.documentElement.lang || undefined, { maximumFractionDigits: d }).format(n);
+
+// The prepared generator (alphabet tables) is cached by a signature of the settings: regenerating with the same settings costs only the random draw.
+let cache = { sig: '', gen: null };
+// One password or passphrase with the settings: { password, entropy (exact, bits), info }. Throws (err.code 'short',
+// 'empty', 'length') when the settings allow none.
+export function generate(s = genSettings()) {
+  if (s.mode === 'passphrase') {
+    const r = generatePassphrase({ words: s.words, separator: s.separator, wordCase: s.wordCase, number: s.number, symbol: s.symbol, list: listFor(s.list) });
+    return { password: r.password, entropy: r.entropy, info: t('pw.passInfo', { n: fmtNum(r.size), bits: fmtNum(Math.log2(r.size), 2) }) };
+  }
+  const sig = JSON.stringify([s.length, s.alphabets, s.include, s.exclude, s.lookAlike, s.everyGroup]);
+  if (cache.sig !== sig) cache = { sig, gen: passwordGenerator({ length: s.length, alphabets: s.alphabets, include: s.include, exclude: s.exclude, lookAlike: s.lookAlike, everyGroup: s.everyGroup }) };
+  const g = cache.gen;
+  return { password: g.next(), entropy: g.entropy, info: `${t('pw.chars', { n: g.pool })} · ${t('pw.groupsN', { n: g.groups.length })}` };
+}
+
+export const generateError = (e, mode = genSettings().mode) => (e.code === 'short' ? t('pw.err.short', { n: e.min })
+  : e.code === 'empty' ? t(mode === 'passphrase' ? 'pw.err.words' : 'pw.err.empty') : e.message);
+
+// --- strength line ----------------------------------------------------------------------------------------------------
+
+// A KeePassXC-like meter (0..200 bits, marks at the quality thresholds 40 / 75 / 100) with the entropy, the quality
+// word and, for estimates, zxcvbn's warning and advice. set(text, { exact, edited }): exact = bits of the generator
+// for its untouched output; otherwise the text is estimated (long texts once typing pauses).
+export function strengthView({ compact = false } = {}) {
+  const fill = h('i');
+  const bar = h('div', { class: 'kx-sm-bar', role: 'meter', 'aria-valuemin': '0', 'aria-valuemax': '200', 'aria-label': t('pw.entropyL') },
+    fill, [40, 75, 100].map((b) => h('b', { style: { left: b / 2 + '%' } })));
+  const bits = h('span', { class: 'kx-sm-bits' }), q = h('span', { class: 'kx-sm-q' }), note = h('span', { class: 'kx-sm-note' });
+  const fb = h('div', { class: 'kx-sm-fb' });
+  const el = h('div', { class: 'kx-sm' + (compact ? ' kx-sm-compact' : ''), hidden: true }, bar, h('div', { class: 'kx-sm-text', 'aria-live': 'polite' }, bits, q, note), fb);
+  const paint = (b, qual, noteText, feedback) => {
+    el.hidden = false;
+    el.dataset.q = qual;
+    fill.style.width = Math.max(2, Math.min(100, (b / 200) * 100)) + '%';
+    bar.setAttribute('aria-valuenow', String(Math.round(b)));
+    bar.setAttribute('aria-valuetext', `${t('kx.bits', { bits: fmtNum(b, 1) })}, ${t('q.' + qual)}`);
+    bits.textContent = t('kx.bits', { bits: fmtNum(b, 1) });
+    q.textContent = t('q.' + qual);
+    note.textContent = noteText;
+    fb.textContent = '';
+    if (feedback && (feedback.warning || feedback.suggestions.length)) {
+      if (feedback.warning) fb.append(h('div', { class: 'kx-sm-warn' }, iconEl('warn'), t('fb.' + feedback.warning)));
+      if (feedback.suggestions.length) fb.append(h('div', { class: 'kx-sm-tips' }, feedback.suggestions.slice(0, compact ? 2 : 3).map((k) => t('fb.' + k)).join(' · ')));
+    }
+  };
+  const estimate = (text, edited) => {
+    const r = passwordStrength(text);
+    paint(r.entropy, r.quality, t(edited ? 'kx.gen.edited' : 'kx.gen.estimated'), r.feedback);
+  };
+  const later = debounce(estimate, 150);
+  return {
+    el,
+    set(text, { exact = null, edited = false } = {}) {
+      later.cancel();
+      if (!text) { el.hidden = true; return; }
+      if (exact != null) { paint(exact, quality(exact), t('kx.gen.exact'), null); return; }
+      if ([...text].length > 48) { later(text, edited); return; }
+      estimate(text, edited);
+    },
+  };
+}
+
+// --- the editable, coloured password box -------------------------------------------------------------------------------
+
+// Character class of the colouring: digits, ASCII symbols and spaces, other alphabets (letters stay plain).
+// Colour classes: digits, ASCII symbols/space, anything non-ASCII; ASCII letters stay plain.
+const classOf = (c) => (c >= '0' && c <= '9' ? 'd' : /[A-Za-z]/.test(c) ? '' : c >= ' ' && c <= '~' ? 's' : 'x');
+
+// { el, input (the text area), value, set(text), setShow(on), focus() }; onInput(text) after the user's changes.
+// Overlay editor (see app.css .kx-pwb-*): the textarea keeps native editing, the highlight layer repaints as coloured runs
+// (one span per run of the same class, not per character). A zero-width space keeps an empty box one line tall.
+export function passwordBox({ value = '', show = true, label = '', onInput = () => {} } = {}) {
+  const hl = h('div', { class: 'kx-pwb-hl', 'aria-hidden': 'true' });
+  const ta = h('textarea', {
+    class: 'kx-pwb-ta', rows: '1', wrap: 'soft', spellcheck: 'false', autocorrect: 'off', autocapitalize: 'off', autocomplete: 'off',
+    translate: 'no', 'data-gramm': 'false', 'aria-label': label, 'aria-multiline': 'false',
+  });
+  const pw = h('input', { type: 'password', class: 'ed-input kx-pwb-pw', spellcheck: 'false', autocomplete: 'off', 'aria-label': label, hidden: true });
+  const el = h('div', { class: 'kx-pwb' }, h('div', { class: 'kx-pwb-box' }, hl, ta), pw);
+  const paint = () => {
+    hl.textContent = '';
+    let run = '', cls = null;
+    const flush = () => { if (run) hl.append(cls ? h('span', { class: 'kx-c-' + cls }, run) : run); run = ''; };
+    for (const c of ta.value) { const k = classOf(c); if (k !== cls) { flush(); cls = k; } run += c; }
+    flush();
+    hl.append('​'); // an empty box keeps one line
+  };
+  // A password is one line: line breaks (typed or pasted) are dropped, the caret stays where it was.
+  // Line breaks are refused at input time; pasted multi-line text is flattened in the input handler with the caret preserved.
+  ta.addEventListener('beforeinput', (e) => { if (e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') e.preventDefault(); });
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+  ta.addEventListener('input', () => {
+    if (/[\r\n]/.test(ta.value)) {
+      const end = ta.selectionEnd, before = ta.value.slice(0, end).replace(/[\r\n]+/g, '').length;
+      ta.value = ta.value.replace(/[\r\n]+/g, '');
+      ta.setSelectionRange(before, before);
+    }
+    pw.value = ta.value;
+    paint();
+    onInput(ta.value);
+  });
+  ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; });
+  pw.addEventListener('input', () => { ta.value = pw.value; paint(); onInput(pw.value); });
+  pw.addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+  const api = {
+    el, input: ta,
+    get value() { return ta.value; },
+    set(text) { ta.value = pw.value = String(text ?? ''); paint(); },
+    setShow(on) {
+      const focused = document.activeElement === ta || document.activeElement === pw;
+      el.querySelector('.kx-pwb-box').hidden = !on;
+      pw.hidden = on;
+      el.classList.toggle('kx-pwb-hidden', !on);
+      if (focused) api.focus();
+    },
+    focus() { const f = pw.hidden ? ta : pw; try { f.focus({ preventScroll: true }); } catch { /* ignore */ } },
+  };
+  api.set(value);
+  api.setShow(show);
+  return api;
+}
+
+// --- options ------------------------------------------------------------------------------------------------------------
+
+// Slider and number box kept in step.
+function rangeNumber(value, min, max, onChange, label) {
+  const r = h('input', { type: 'range', class: 'ed-range', min, max, step: 1, value, 'aria-label': t(label) });
+  const num = h('input', { type: 'number', class: 'ed-input kx-num', min, max, step: 1, value, inputmode: 'numeric', 'aria-label': t(label) });
+  r.addEventListener('input', () => { num.value = r.value; onChange(+r.value); });
+  num.addEventListener('input', () => { const v = Math.floor(+num.value); if (v >= min && v <= max) { r.value = String(v); onChange(v); } });
+  num.addEventListener('change', () => { const v = Math.max(min, Math.min(max, Math.floor(+num.value) || min)); num.value = r.value = String(v); onChange(v); });
+  return h('div', { class: 'kx-rangenum' }, r, num);
+}
+
+function chip(label, on, onToggle, title) {
+  const b = h('button', { type: 'button', class: 'ed-chip kx-gchip' + (on ? ' ed-on' : ''), 'aria-pressed': String(on), title, 'aria-label': title }, label);
+  b.addEventListener('click', () => { const v = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', String(v)); b.classList.toggle('ed-on', v); onToggle(v); });
+  return b;
+}
+
+function options(s, set, repaint) {
+  if (s.mode === 'password') {
+    const chips = (ids) => h('div', { class: 'kx-chips' }, ids.map((id) => {
+      const a = ALPHABETS.find((x) => x.id === id);
+      return chip(LABELS[id], s.alphabets.includes(id), (on) => set('alphabets', on ? [...s.alphabets, id] : s.alphabets.filter((x) => x !== id)), `${t('pw.grp.' + id)} (${[...a.chars].length})`);
+    }));
+    return [
+      field('pw.length', rangeNumber(s.length, 1, MAX_LEN, (v) => set('length', v), 'pw.length')),
+      h('div', { class: 'ed-field' }, h('div', { class: 'ed-label' }, t('pw.groups')),
+        h('div', { class: 'kx-cgroup' }, h('span', { class: 'kx-cgroup-h' }, t('pw.basic')), chips(['upper', 'lower', 'digits'])),
+        h('div', { class: 'kx-cgroup' }, h('span', { class: 'kx-cgroup-h' }, t('pw.special')), chips(SPECIAL)),
+        h('div', { class: 'kx-cgroup' }, h('span', { class: 'kx-cgroup-h' }, t('pw.other')), chips(['latin1', 'cyrillic', 'greek', 'emoji']))),
+      h('div', { class: 'kx-grid2' },
+        field('pw.include', textInput(s.include, (v) => set('include', v), { placeholder: t('pw.includePh'), autocomplete: 'off', class: 'ed-input kx-mono-in' })),
+        field('pw.exclude', textInput(s.exclude, (v) => set('exclude', v), { placeholder: t('pw.excludePh'), autocomplete: 'off', class: 'ed-input kx-mono-in' }))),
+      field('pw.lookAlike', toggle(s.lookAlike, (v) => set('lookAlike', v)), '=' + t('pw.lookAlikeHint', { chars: [...LOOK_ALIKE].join(' ') })),
+      field('pw.everyGroup', toggle(s.everyGroup, (v) => set('everyGroup', v)), 'pw.everyGroupHint'),
+    ];
+  }
+  const ownInfo = h('div', { class: 'ed-hint' });
+  const paintOwn = () => { ownInfo.textContent = `${t('pw.ownInfo', { n: ownList().length })} ${t('pw.ownHint')}`; };
+  paintOwn();
+  return [
+    field('pw.words', rangeNumber(s.words, 1, MAX_WORDS, (v) => set('words', v), 'pw.words')),
+    field('pw.list', select([
+      { v: 'english', l: '=' + t('pw.list.english', { n: fmtNum(englishList().length) }) },
+      { v: 'short', l: '=' + t('pw.list.short', { n: fmtNum(WORDS.length) }) },
+      { v: 'own', l: 'pw.list.own' }], s.list, (v) => { set('list', v); repaint(); })),
+    s.list === 'own' ? h('div', { class: 'ed-field' },
+      textInput(ownWords, (v) => { ownWords = v; paintOwn(); set('list', 'own'); }, { multiline: true, class: 'ed-input ed-textarea kx-own', placeholder: t('pw.ownPh'), 'aria-label': t('pw.list.own') }),
+      ownInfo) : null,
+    h('div', { class: 'kx-grid2' },
+      field('pw.separator', textInput(s.separator, (v) => set('separator', v.slice(0, 8)), { maxlength: 8, autocomplete: 'off', class: 'ed-input kx-mono-in' }), 'pw.separatorHint'),
+      field('pw.case', seg([{ v: 'lower', l: 'pw.case.lower' }, { v: 'title', l: 'pw.case.title' }, { v: 'upper', l: 'pw.case.upper' }, { v: 'mixed', l: 'pw.case.mixed' }], s.wordCase, (v) => set('wordCase', v), 'pw.case'))),
+    h('div', { class: 'kx-grid2' }, field('pw.number', toggle(s.number, (v) => set('number', v))), field('pw.symbol', toggle(s.symbol, (v) => set('symbol', v)))),
+    h('div', { class: 'ed-hint' }, t('pw.symbolHint', { chars: PASSPHRASE_SYMBOLS })),
+  ].filter(Boolean);
+}
+
+// --- dialog ---------------------------------------------------------------------------------------------------------------
+
+// The generator. onUse(text) is offered when given (entry editor) and receives the text as edited; otherwise the dialog
+// copies and closes. Resolves with the used text or null.
+export async function generatorDialog(onUse) {
+  const s = genSettings();
+  let genValue = '', genBits = null, lastEdit = null;
+  const meter = strengthView();
+  const info = h('div', { class: 'ed-hint kx-gen-info' });
+  const err = h('div', { class: 'kx-error', role: 'alert' });
+  const undoBar = h('div', { class: 'kx-gen-undo', hidden: true, role: 'status' }, iconEl('info'), h('span', {}, t('kx.gen.replaced')),
+    h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => undo() }, iconEl('undo'), t('dlg.undo')));
+  const paint = () => {
+    const text = box.value, edited = text !== genValue;
+    meter.set(text, { exact: !edited && genBits != null ? genBits : null, edited: edited && !!genValue });
+  };
+  const box = passwordBox({ show: s.show, label: t('kx.f.password'), onInput: () => { undoBar.hidden = true; lastEdit = null; paint(); } });
+  const eye = h('button', { type: 'button', class: 'ed-iconbtn', title: t('kx.reveal'), 'aria-label': t('kx.reveal'), 'aria-pressed': String(s.show) });
+  const paintEye = () => { eye.setAttribute('aria-pressed', String(s.show)); eye.replaceChildren(iconEl(s.show ? 'eyeOff' : 'eye')); };
+  eye.addEventListener('click', () => { s.show = !s.show; saveGen(); box.setShow(s.show); paintEye(); });
+  paintEye();
+  function regen() {
+    const cur = box.value;
+    try {
+      const r = generate(s);
+      err.textContent = '';
+      // A manual edit that gets replaced can be brought back.
+      if (cur && genValue && cur !== genValue) { lastEdit = cur; undoBar.hidden = false; } else { lastEdit = null; undoBar.hidden = true; }
+      genValue = r.password;
+      genBits = r.entropy;
+      info.textContent = `${t('pw.exactNote')} ${r.info}`;
+      box.set(r.password);
+    } catch (e) { err.textContent = generateError(e, s.mode); info.textContent = ''; }
+    paint();
+  }
+  function undo() {
+    if (lastEdit == null) return;
+    box.set(lastEdit);
+    lastEdit = null;
+    undoBar.hidden = true;
+    paint();
+    box.focus();
+  }
+  const opts = h('div', { class: 'ed-fields kx-gen-opts' });
+  const paintOpts = () => { opts.textContent = ''; opts.append(...options(s, set, paintOpts)); };
+  function set(k, v) { s[k] = v; saveGen(); regen(); }
+  paintOpts();
+  regen();
+  const mode = seg([{ v: 'password', l: 'kx.gen.password' }, { v: 'passphrase', l: 'kx.gen.passphrase' }], s.mode, (v) => { s.mode = v; saveGen(); paintOpts(); regen(); }, 'kx.generator');
+  mode.classList.add('kx-wideseg');
+  const body = h('div', { class: 'ed-fields kx-gen' },
+    mode,
+    h('div', { class: 'kx-gen-row' }, box.el,
+      h('div', { class: 'kx-gen-btns' },
+        h('button', { type: 'button', class: 'ed-iconbtn', title: t('kx.gen.again'), 'aria-label': t('kx.gen.again'), onclick: () => regen() }, iconEl('refresh')),
+        eye,
+        h('button', { type: 'button', class: 'ed-iconbtn', title: t('ap.copy'), 'aria-label': t('ap.copy'), onclick: () => { if (box.value) copySecret(box.value, t('kx.f.password')); } }, iconEl('copy')))),
+    undoBar, err, meter.el,
+    h('div', { class: 'ed-hint kx-gen-hint' }, t('kx.gen.editHint')),
+    h('details', { class: 'kx-gen-more', open: true }, h('summary', {}, t('kx.gen.options')), opts),
+    info);
+  let used = null;
+  await openDialog({
+    title: t('kx.generator'), body, className: 'kx-gen-dlg',
+    onMount: () => setTimeout(() => box.focus(), 60),
+    buttons: onUse
+      ? [{ label: t('dlg.cancel'), value: null }, { label: t('kx.gen.use'), value: 'use', primary: true, onClick: () => { if (!box.value) return false; used = box.value; return true; } }]
+      : [{ label: t('dlg.close'), value: null }, { label: t('ap.copy'), icon: 'copy', value: 'copy', primary: true, onClick: () => { if (!box.value) return false; copySecret(box.value, t('kx.f.password')); return true; } }],
+  });
+  if (used != null && onUse) onUse(used);
+  return used;
+}

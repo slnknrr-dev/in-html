@@ -1,0 +1,34 @@
+<!doctype html>
+<!-- catalog-rules/index.html — schema page: category tree, field definitions, resolved schema, live form. A shell, not a document: the page script builds all UI into <main>.
+     Why an empty shell: one render path (JS) for content, i18n and state; static markup would duplicate it and drift.
+     Both pages (index = schema, rules = rule editor) share this head and anchor registry; only the script differs.
+     The build (singlefile.js) strips every comment of this file from the artifacts. -->
+<html lang="en">
+<!-- lang="en" is the static default; ui/i18n.js rewrites it on language switch (screen readers, hyphenation). -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: it must be inside the first 1024 bytes, before any non-ASCII text, or the parser re-decodes.
+     Without the viewport meta mobile browsers lay out at ~980px and no max-width media query in app.css fires. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Catalog Rules — Schema</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f46e5'/%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' d='M7 8h7v5H7zM7 19h7v5H7zM17 10h8M17 21h8M10.5 13v6'/%3E%3C/svg%3E">
+<!-- Icon as a data: URI: zero requests, works from file:// and in offline builds. '#' is written %23, otherwise it
+     would start a URL fragment and truncate the SVG. -->
+<!-- Cascade order is a contract (equal specificity: later file wins): ui/base.css tokens and primitives (.ed-*),
+     ui/app.css shell (.ap-*), then ./app.css of this app (.cr-*), which may override the first two. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- Page registry as hidden anchors, read by common.js pageHref(id). Anchors, not JS constants: the build rewrites
+     href attributes when it renames or inlines pages, and it cannot see URLs inside JS strings. -->
+<a id="pg-schema" href="index.html" hidden></a>
+<a id="pg-rules" href="rules.html" hidden></a>
+<!-- The single mount point; id="main" is what the page script queries. ap-wide lifts the shell max-width: the schema
+     page needs three columns. -->
+<main class="ap-main ap-wide" id="main"></main>
+<script type="module" src="./main.js"></script>
+<!-- type=module: deferred by default (runs after parsing, so #main exists), strict mode, ES imports of ../ libraries. -->
+</body>
+</html>

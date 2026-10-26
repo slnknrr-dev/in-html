@@ -1,0 +1,10 @@
+const asBytes=(b)=>(b instanceof Uint8Array?b:ArrayBuffer.isView(b)?new Uint8Array(b.buffer,b.byteOffset,b.byteLength):new Uint8Array(b));const fourcc=(b,o)=>String.fromCharCode(b[o],b[o+1],b[o+2],b[o+3]);const CONTAINERS=new Set(['moov','trak','mdia','minf','stbl','dinf','edts','udta','mvex','moof','traf','mfra','meta','ilst','sinf','schi','tref','wave','gmhd','tapt','iprp','ipco']);function readBoxes(input,start=0,end,depth=8,parent=''){const b=asBytes(input);const dv=new DataView(b.buffer,b.byteOffset,b.byteLength);const stop=end==null?b.length:Math.min(end,b.length);const out=[];let p=start;while(p+8<=stop){let size=dv.getUint32(p);const type=fourcc(b,p+4);let hdr=8;if(size===1){if(p+16>stop)break;size=dv.getUint32(p+8)*4294967296+dv.getUint32(p+12);hdr=16;}else if(size===0)size=stop-p;if(type==='uuid')hdr+=16;if(size<hdr)break;const boxEnd=Math.min(stop,p+size);const box={type,offset:p,size,headerSize:hdr,start:p+hdr,end:boxEnd,truncated:p+size>stop};if(depth>0){let cs=box.start;if(type==='meta'){if(fourcc(b,cs+4)!=='hdlr')cs+=4;}
+if(CONTAINERS.has(type)||parent==='ilst')box.children=readBoxes(b,cs,boxEnd,depth-1,type);}
+out.push(box);p+=size;}
+return out;}
+function findBox(boxes,path){let cur={children:boxes};for(const t of path.split('/')){cur=(cur.children||[]).find((x)=>x.type===t);if(!cur)return null;}
+return cur;}
+const findAll=(box,type)=>(box?.children||[]).filter((x)=>x.type===type);function u32(v){const o=new Uint8Array(4);new DataView(o.buffer).setUint32(0,v>>>0);return o;}
+function cat(...parts){const flat=[];const walk=(x)=>{if(x==null)return;if(Array.isArray(x))x.forEach(walk);else flat.push(asBytes(x));};walk(parts);let n=0;for(const x of flat)n+=x.length;const out=new Uint8Array(n);let o=0;for(const x of flat){out.set(x,o);o+=x.length;}
+return out;}
+const MATRIX=cat(u32(0x10000),u32(0),u32(0),u32(0),u32(0x10000),u32(0),u32(0),u32(0),u32(0x40000000));export{readBoxes,findBox,findAll};

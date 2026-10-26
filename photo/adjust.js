@@ -1,0 +1,409 @@
+// photo/adjust.js - colour adjustments (used as non-destructive adjustment layers) and filters of the photo editor on
+// RGBA images { width, height, data }, each with its ImageMagick 7 equivalent. Pure: pages, workers, Node.
+//
+//   ADJUSTMENTS[type]  { defaults, magick(params) -> step }      applyAdjustment(type, img, params) (in place, RGB only)
+//   FILTERS[type]      { defaults, magick(params, size) -> step } applyFilter(type, img, params) -> new image
+//   step: { args, fidelity: 'exact' | 'approx' | 'none', note? } (raster/magick.js conventions)
+//
+// The formulas follow ImageMagick where it has an operator, so the command reproduces the pixels: brightness /
+// contrast is -brightness-contrast (7.1), levels -level / +level, hue / saturation / lightness -modulate (HSL),
+// threshold and posterize their operators, curves an exact -fx of the same monotone cubic. Colour balance (tonal
+// ranges as GIMP) has no ImageMagick operator.
+
+// Design rules:
+// - Every formula works on the stored (sRGB-encoded) 8-bit values, not linear light. That is what ImageMagick does by
+//   default for these operators, and matching it is the point: a linear-light pipeline would look marginally better
+//   but the exported command would no longer reproduce the canvas.
+// - Point operations (one output from one input value) are built as 256-entry LUTs: the curve is evaluated 256 times
+//   instead of once per pixel, and the per-pixel loop is three table loads. Operations that mix channels (HSL, colour
+//   balance, luma) cannot be LUTs and pay the per-pixel cost.
+// - Adjustments mutate in place (the layer stack renders into a scratch buffer anyway); filters return a new image
+//   because neighbourhood operations must read unmodified neighbours.
+
+import { blur, blurIsExact, sharpen } from '../raster/ops.js';
+import { APPROX, EXACT, NONE, num } from '../raster/magick.js';
+
+const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+// Rec. 709 luma weights (green dominates because the eye is most sensitive to it). Applied to encoded values, so this
+// is luma Y', not luminance Y; it matches -color-matrix with the same rows.
+const LUMA = [0.2126, 0.7152, 0.0722];
+const LUMA_MATRIX = `${LUMA.join(' ')} ${LUMA.join(' ')} ${LUMA.join(' ')}`;
+
+// Per-channel lookup tables (Uint8ClampedArray[256] for r, g, b) applied to RGB, alpha untouched.
+function applyLuts(img, lr, lg = lr, lb = lr) {
+  const d = img.data;
+  for (let p = 0; p < d.length; p += 4) { d[p] = lr[d[p]]; d[p + 1] = lg[d[p + 1]]; d[p + 2] = lb[d[p + 2]]; }
+  return img;
+}
+const lutOf = (fn) => { const l = new Uint8ClampedArray(256); for (let v = 0; v < 256; v++) l[v] = Math.round(255 * fn(v / 255)); return l; };
+
+// --- brightness / contrast (ImageMagick 7.1 -brightness-contrast) ----------------------------------------------
+
+// Contrast slope: positive contrast steepens as 1 / (1 - c), negative flattens as 1 + c, pivoting on mid-grey (0.5).
+// The clamp at 0.995 keeps the slope finite (c = 1 would divide by zero, i.e. a pure threshold).
+function bcSlope(contrast) {
+  const c = Math.max(-1, Math.min(0.995, contrast / 100));
+  return c >= 0 ? 1 / (1 - c) : 1 + c;
+}
+
+// --- levels ---------------------------------------------------------------------------------------------------
+
+// Levels: normalise [inBlack, inWhite] to [0, 1], apply gamma as v ^ (1 / gamma) (gamma > 1 brightens midtones, the
+// -level convention), then stretch to [outBlack, outWhite]. inWhite is forced above inBlack so the range never
+// collapses to a division by zero.
+const levelFn = (p) => {
+  const b = p.inBlack / 255, w = Math.max(p.inBlack + 1, p.inWhite) / 255, g = p.gamma > 0 ? p.gamma : 1;
+  const ob = p.outBlack / 255, ow = p.outWhite / 255;
+  return (v) => ob + Math.pow(clamp01((v - b) / (w - b)), 1 / g) * (ow - ob);
+};
+
+// --- curves: monotone cubic (Fritsch-Carlson) through the points, flat beyond the ends ---------------------------
+
+// Why monotone cubic: a natural cubic spline through increasing points can overshoot and dip, so a curve dragged up
+// would locally darken some tones (and invert gradients). Fritsch-Carlson picks Hermite tangents that keep each
+// segment monotone where the data are, giving a smooth curve with no reversal.
+/** Spline of points [[x, y], …] (0..255): { xs, ys, ms } in 0..1 with Hermite tangents. */
+export function curveSpline(points) {
+  const pts = [...points].map(([x, y]) => [Math.max(0, Math.min(255, x)) / 255, Math.max(0, Math.min(255, y)) / 255]).sort((a, b) => a[0] - b[0]);
+  const xs = [], ys = [];
+  for (const [x, y] of pts) { if (xs.length && x - xs[xs.length - 1] < 1e-6) { ys[ys.length - 1] = y; continue; } xs.push(x); ys.push(y); }
+  const n = xs.length, ms = new Array(n).fill(0);
+  if (n >= 2) {
+    const d = [];
+    for (let i = 0; i < n - 1; i++) d.push((ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i]));
+    ms[0] = d[0]; ms[n - 1] = d[n - 2];
+    // Interior tangent: average of neighbouring secants, but 0 at a local extremum (secants of opposite sign) so the
+    // curve flattens there instead of overshooting.
+    for (let i = 1; i < n - 1; i++) ms[i] = d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2;
+    for (let i = 0; i < n - 1; i++) {
+      if (d[i] === 0) { ms[i] = 0; ms[i + 1] = 0; continue; }
+      const a = ms[i] / d[i], b = ms[i + 1] / d[i], s = a * a + b * b;
+      // Fritsch-Carlson sufficient condition for monotonicity: (a, b) inside the circle of radius 3. Outside it, both
+      // tangents are scaled back onto the circle.
+      if (s > 9) { const t = 3 / Math.sqrt(s); ms[i] = t * a * d[i]; ms[i + 1] = t * b * d[i]; }
+    }
+  }
+  return { xs, ys, ms };
+}
+
+/** Value of a spline at v (0..1). */
+export function curveAt(sp, v) {
+  const { xs, ys, ms } = sp, n = xs.length;
+  if (!n) return v;
+  if (n === 1 || v <= xs[0]) return ys[0];
+  if (v >= xs[n - 1]) return ys[n - 1];
+  // Linear segment search: curves have a handful of points and lutOf calls this 256 times, so binary search buys
+  // nothing measurable.
+  let i = 0;
+  while (i < n - 2 && v > xs[i + 1]) i++;
+  // Cubic Hermite basis: h00, h10, h01, h11 with tangents scaled by the segment width h.
+  const h = xs[i + 1] - xs[i], t = (v - xs[i]) / h, t2 = t * t, t3 = t2 * t;
+  return (2 * t3 - 3 * t2 + 1) * ys[i] + (t3 - 2 * t2 + t) * h * ms[i] + (-2 * t3 + 3 * t2) * ys[i + 1] + (t3 - t2) * h * ms[i + 1];
+}
+
+const identityCurve = (pts) => !pts || pts.every(([x, y]) => Math.abs(x - y) < 0.5);
+
+// The spline as an -fx expression (u = the channel value), segment by segment.
+// Built as a right-nested ternary chain from the last segment backwards, so evaluation picks the first segment whose
+// right end is at or above u. Same coefficients as curveAt (6 decimals), hence 'exact' within 8-bit rounding; -fx is
+// interpreted per pixel, hence the 'fxSlow' note.
+function curveFx(points) {
+  const { xs, ys, ms } = curveSpline(points);
+  const n = xs.length, f = (v) => num(v, 6);
+  if (n < 2) return f(ys[0] ?? 0);
+  const seg = (i) => {
+    const h = xs[i + 1] - xs[i], T = `((u-${f(xs[i])})/${f(h)})`;
+    return `(${f(ys[i])}*(2*${T}^3-3*${T}^2+1)+${f(h * ms[i])}*(${T}^3-2*${T}^2+${T})+${f(ys[i + 1])}*(3*${T}^2-2*${T}^3)+${f(h * ms[i + 1])}*(${T}^3-${T}^2))`;
+  };
+  let e = f(ys[n - 1]);
+  for (let i = n - 2; i >= 0; i--) e = `u<=${f(xs[i + 1])}?${seg(i)}:${e}`;
+  return `u<=${f(xs[0])}?${f(ys[0])}:${e}`;
+}
+
+// --- HSL as ImageMagick (ConvertRGBToHSL / ConvertHSLToRGB, hue in turns) ------------------------------------------
+
+// Hue in turns (0..1) rather than degrees, as ImageMagick stores it. Hexcone sector logic: which channel is max picks
+// the sector, the other two place the hue within it; g < b on a red max wraps the negative hue into [5/6, 1).
+function rgbToHsl(r, g, b) {
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), c = max - min, l = (max + min) / 2;
+  if (c <= 0) return [0, 0, l];
+  let h;
+  if (max === r) { h = (g - b) / c; if (g < b) h += 6; } else if (max === g) h = 2 + (b - r) / c; else h = 4 + (r - g) / c;
+  return [h / 6, l <= 0.5 ? c / (2 * l) : c / (2 - 2 * l), l];
+}
+function hslToRgb(h, s, l) {
+  const c = l <= 0.5 ? 2 * l * s : (2 - 2 * l) * s, min = l - 0.5 * c;
+  let hh = h * 360;
+  hh = (hh - 360 * Math.floor(hh / 360)) / 60;
+  const x = c * (1 - Math.abs(hh - 2 * Math.floor(hh / 2) - 1));
+  switch (Math.floor(hh)) {
+    case 0: return [min + c, min + x, min];
+    case 1: return [min + x, min + c, min];
+    case 2: return [min, min + c, min + x];
+    case 3: return [min, min + x, min + c];
+    case 4: return [min + x, min, min + c];
+    default: return [min + c, min, min + x];
+  }
+}
+
+// --- colour balance (GIMP's tonal-range masks) ------------------------------------------------------------------
+
+// GIMP's tonal weighting: three overlapping trapezoid masks over lightness (shadows below ~1/3, highlights above ~2/3,
+// midtones a bump between), slope 1/a with a = 0.25, the whole effect damped by 0.7. The masks overlap on purpose so a
+// lightness gradient shows no seams where one range hands over to the next.
+function balanceMap(v, l, sh, mid, hi) {
+  const a = 0.25, b = 0.333, scale = 0.7;
+  sh *= clamp01((l - b) / -a + 0.5) * scale;
+  mid *= clamp01((l - b) / a + 0.5) * clamp01((l + b - 1) / -a + 0.5) * scale;
+  hi *= clamp01((l + b - 1) / a + 0.5) * scale;
+  return clamp01(v + sh + mid + hi);
+}
+
+// The same as an -fx program (r, g, b: the pixel; channel() picks the result of the channel being computed). With
+// "preserve luminosity" the balanced colour keeps its HSL hue and saturation at the old lightness: in closed form
+// c' = l + (c - lx) * (1 - |2l - 1|) / (1 - |2lx - 1|), lx the balanced colour's lightness (grey: c' = l).
+function balanceFx(p) {
+  const k = (v) => num(v / 100, 4);
+  const cl = (e) => `min(max(${e},0),1)`;
+  const parts = [
+    'lo=min(min(r,g),b)', 'hi=max(max(r,g),b)', 'lum=(lo+hi)/2',
+    `ws=0.7*${cl('(lum-0.333)/-0.25+0.5')}`, `wm=0.7*${cl('(lum-0.333)/0.25+0.5')}*${cl('(lum+0.333-1)/-0.25+0.5')}`, `wh=0.7*${cl('(lum+0.333-1)/0.25+0.5')}`,
+  ];
+  const ch = ['r', 'g', 'b'].map((c, i) => {
+    const terms = [[p.shadows[i], 'ws'], [p.midtones[i], 'wm'], [p.highlights[i], 'wh']].filter(([v]) => v).map(([v, w]) => `${v < 0 ? '-' : '+'}${k(Math.abs(v))}*${w}`).join('');
+    return terms ? cl(c + terms) : c;
+  });
+  parts.push(`rr=${ch[0]}`, `gg=${ch[1]}`, `bb=${ch[2]}`);
+  if (p.preserve) {
+    parts.push('lx=(min(min(rr,gg),bb)+max(max(rr,gg),bb))/2', 'den=1-abs(2*lx-1)', 'kk=den>0?(1-abs(2*lum-1))/den:0');
+    parts.push('channel(lum+(rr-lx)*kk,lum+(gg-lx)*kk,lum+(bb-lx)*kk)');
+  } else parts.push('channel(rr,gg,bb)');
+  return parts.join(';');
+}
+
+// --- the adjustments ------------------------------------------------------------------------------------------
+
+/** Adjustment types: defaults, the apply function (in place on RGB) and the ImageMagick step. */
+export const ADJUSTMENTS = {
+  brightnessContrast: {
+    icon: 'sun', defaults: { brightness: 0, contrast: 0 },
+    apply(img, p) {
+      const k = bcSlope(p.contrast), B = p.brightness / 100;
+      return applyLuts(img, lutOf((v) => clamp01(k * (v + B - 0.5) + 0.5)));
+    },
+    magick: (p) => ({ args: [['-brightness-contrast', `${num(p.brightness, 3)}x${num(p.contrast, 3)}`]], fidelity: EXACT, note: 'im71' }),
+  },
+  levels: {
+    icon: 'levels', defaults: { inBlack: 0, inWhite: 255, gamma: 1, outBlack: 0, outWhite: 255 },
+    apply: (img, p) => applyLuts(img, lutOf(levelFn(p))),
+    magick(p) {
+      const pc = (v) => num((v / 255) * 100, 4) + '%';
+      const args = [];
+      if (p.inBlack !== 0 || p.inWhite !== 255 || p.gamma !== 1) args.push(['-level', `${pc(p.inBlack)},${pc(Math.max(p.inBlack + 1, p.inWhite))},${num(p.gamma, 4)}`]);
+      if (p.outBlack !== 0 || p.outWhite !== 255) args.push(['+level', `${pc(p.outBlack)},${pc(p.outWhite)}`]);
+      return { args, fidelity: EXACT };
+    },
+  },
+  curves: {
+    icon: 'curves', defaults: { rgb: [[0, 0], [255, 255]], r: [[0, 0], [255, 255]], g: [[0, 0], [255, 255]], b: [[0, 0], [255, 255]] },
+    apply(img, p) {
+      const m = curveSpline(p.rgb || [[0, 0], [255, 255]]);
+      const ch = ['r', 'g', 'b'].map((c) => curveSpline(p[c] || [[0, 0], [255, 255]]));
+      const luts = ch.map((sp) => lutOf((v) => clamp01(curveAt(sp, clamp01(curveAt(m, v))))));
+      return applyLuts(img, ...luts);
+    },
+    magick(p) {
+      const args = [];
+      if (!identityCurve(p.rgb)) args.push(['-fx', curveFx(p.rgb)]);
+      for (const c of ['r', 'g', 'b']) if (!identityCurve(p[c])) args.push(['-channel', c.toUpperCase(), '-fx', curveFx(p[c]), '+channel']);
+      return { args, fidelity: EXACT, note: 'fxSlow' };
+    },
+  },
+  hueSaturation: {
+    icon: 'palette', defaults: { hue: 0, saturation: 0, lightness: 0 },
+    apply(img, p) {
+      // Written via the -modulate hue argument (100 + hue / 1.8, where 200 is a full turn) so both sides visibly use
+      // the same number; it reduces to hue / 360 turns. Saturation and lightness scale multiplicatively, as -modulate.
+      const dh = ((((100 + p.hue / 1.8) - 100) % 200) / 200), ks = 1 + p.saturation / 100, kl = 1 + p.lightness / 100;
+      const d = img.data;
+      for (let q = 0; q < d.length; q += 4) {
+        const [h, s, l] = rgbToHsl(d[q] / 255, d[q + 1] / 255, d[q + 2] / 255);
+        const [r, g, b] = hslToRgb(h + dh, s * ks, l * kl);
+        d[q] = Math.round(255 * clamp01(r)); d[q + 1] = Math.round(255 * clamp01(g)); d[q + 2] = Math.round(255 * clamp01(b));
+      }
+      return img;
+    },
+    magick: (p) => ({ args: [['-modulate', `${num(100 + p.lightness, 3)},${num(100 + p.saturation, 3)},${num(100 + p.hue / 1.8, 4)}`]], fidelity: EXACT }),
+  },
+  colorBalance: {
+    icon: 'sliders', defaults: { shadows: [0, 0, 0], midtones: [0, 0, 0], highlights: [0, 0, 0], preserve: true },
+    apply(img, p) {
+      const d = img.data, S = p.shadows.map((v) => v / 100), M = p.midtones.map((v) => v / 100), H = p.highlights.map((v) => v / 100);
+      for (let q = 0; q < d.length; q += 4) {
+        const r = d[q] / 255, g = d[q + 1] / 255, b = d[q + 2] / 255;
+        const l = (Math.max(r, g, b) + Math.min(r, g, b)) / 2;
+        let rn = balanceMap(r, l, S[0], M[0], H[0]), gn = balanceMap(g, l, S[1], M[1], H[1]), bn = balanceMap(b, l, S[2], M[2], H[2]);
+        // Preserve luminosity: keep the new hue and saturation, restore the original HSL lightness, so the balance
+        // tints without brightening. balanceFx states the same in closed form for -fx.
+        if (p.preserve) { const [hh, ss] = rgbToHsl(rn, gn, bn); [rn, gn, bn] = hslToRgb(hh, ss, l); }
+        d[q] = Math.round(255 * clamp01(rn)); d[q + 1] = Math.round(255 * clamp01(gn)); d[q + 2] = Math.round(255 * clamp01(bn));
+      }
+      return img;
+    },
+    magick: (p) => ({ args: [['-fx', balanceFx(p)]], fidelity: EXACT, note: 'fxSlow' }),
+  },
+  invert: {
+    icon: 'contrast', defaults: {},
+    apply: (img) => applyLuts(img, lutOf((v) => 1 - v)),
+    magick: () => ({ args: [['-negate']], fidelity: EXACT }),
+  },
+  blackWhite: {
+    icon: 'drop', defaults: {},
+    apply(img) {
+      const d = img.data;
+      for (let q = 0; q < d.length; q += 4) d[q] = d[q + 1] = d[q + 2] = LUMA[0] * d[q] + LUMA[1] * d[q + 1] + LUMA[2] * d[q + 2];
+      return img;
+    },
+    magick: () => ({ args: [['-color-matrix', LUMA_MATRIX]], fidelity: EXACT }),
+  },
+  threshold: {
+    icon: 'contrast', defaults: { level: 128 },
+    apply(img, p) {
+      const d = img.data, th = p.level / 255;
+      for (let q = 0; q < d.length; q += 4) {
+        const v = (LUMA[0] * d[q] + LUMA[1] * d[q + 1] + LUMA[2] * d[q + 2]) / 255 <= th ? 0 : 255;
+        d[q] = d[q + 1] = d[q + 2] = v;
+      }
+      return img;
+    },
+    magick: (p) => ({ args: [['-color-matrix', LUMA_MATRIX, '-threshold', num((p.level / 255) * 100, 4) + '%']], fidelity: EXACT }),
+  },
+  posterize: {
+    icon: 'grid', defaults: { levels: 4 },
+    apply(img, p) {
+      const n = Math.max(2, Math.min(255, Math.round(p.levels)));
+      // n evenly spaced levels including 0 and 1, rounding to the nearest; +dither in the command disables the error
+      // diffusion ImageMagick would otherwise add, which this LUT does not do.
+      return applyLuts(img, lutOf((v) => Math.floor(v * (n - 1) + 0.5) / (n - 1)));
+    },
+    magick: (p) => ({ args: [['+dither', '-posterize', String(Math.max(2, Math.round(p.levels)))]], fidelity: EXACT }),
+  },
+};
+
+export const ADJUSTMENT_TYPES = Object.keys(ADJUSTMENTS);
+
+/** Applies an adjustment to an image in place (RGB; alpha untouched). */
+export function applyAdjustment(type, img, params) {
+  const a = ADJUSTMENTS[type];
+  if (!a) return img;
+  return a.apply(img, { ...a.defaults, ...(params || {}) });
+}
+
+/** Whether the parameters leave the image as it is. */
+// Lets the renderer skip a layer and the exporter emit no step. Types with no neutral setting (invert, threshold,
+// posterize, blackWhite) are never identity.
+export function isIdentity(type, p) {
+  const a = ADJUSTMENTS[type];
+  if (!a) return true;
+  const q = { ...a.defaults, ...(p || {}) };
+  if (type === 'brightnessContrast') return !q.brightness && !q.contrast;
+  if (type === 'levels') return q.inBlack === 0 && q.inWhite === 255 && q.gamma === 1 && q.outBlack === 0 && q.outWhite === 255;
+  if (type === 'curves') return ['rgb', 'r', 'g', 'b'].every((c) => identityCurve(q[c]));
+  if (type === 'hueSaturation') return !q.hue && !q.saturation && !q.lightness;
+  if (type === 'colorBalance') return [...q.shadows, ...q.midtones, ...q.highlights].every((v) => !v);
+  return false;
+}
+
+/** ImageMagick step of an adjustment (args empty for identity parameters). */
+export function adjustmentStep(type, params) {
+  const a = ADJUSTMENTS[type];
+  if (!a) return { args: [], fidelity: NONE };
+  const p = { ...a.defaults, ...(params || {}) };
+  if (isIdentity(type, p)) return { args: [], fidelity: EXACT };
+  return a.magick(p);
+}
+
+// --- filters ----------------------------------------------------------------------------------------------------
+
+// Small deterministic PRNG (mulberry32) and a gaussian from it.
+// Seeded, not Math.random: re-rendering the layer stack must give the same noise every frame, or the image would
+// shimmer on every edit. The ImageMagick noise uses its own generator, hence 'approx' fidelity for the command.
+function prng(seed) {
+  let s = seed >>> 0;
+  return () => { s = (s + 0x6d2b79f5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+}
+
+/** Filter types: defaults, the filter (new image) and the ImageMagick step. */
+export const FILTERS = {
+  gaussianBlur: {
+    icon: 'drop', defaults: { radius: 2 },
+    apply: (img, p) => blur(img, p.radius),
+    magick: (p) => (p.radius > 0.2 ? { args: [['-blur', `0x${num(p.radius, 3)}`]], fidelity: blurIsExact(p.radius) ? EXACT : APPROX, note: blurIsExact(p.radius) ? undefined : 'boxBlur' } : { args: [], fidelity: EXACT }),
+  },
+  unsharp: {
+    icon: 'sparkles', defaults: { amount: 100, radius: 1, threshold: 0 },
+    apply: (img, p) => sharpen({ width: img.width, height: img.height, data: new Uint8ClampedArray(img.data) }, p.amount / 100, p.radius, p.threshold / 255),
+    magick: (p) => ({ args: [['-unsharp', `0x${num(Math.max(0.3, p.radius), 3)}+${num(p.amount / 100, 3)}+${num(p.threshold / 255, 4)}`]], fidelity: blurIsExact(Math.max(0.3, p.radius)) ? EXACT : APPROX, note: blurIsExact(Math.max(0.3, p.radius)) ? undefined : 'boxBlur' }),
+  },
+  noise: {
+    icon: 'noise', defaults: { amount: 12, mono: false, seed: 1 },
+    apply(img, p) {
+      const out = { width: img.width, height: img.height, data: new Uint8ClampedArray(img.data) };
+      const d = out.data, rnd = prng(p.seed || 1), sd = (p.amount / 100) * 128;
+      // Box-Muller; u = 0 is rejected because log(0) is -Infinity. Only the cosine half is used (one normal per two
+      // uniforms): simpler than caching the sine twin, and cheap enough at this scale.
+      const gauss = () => { let u = 0; while (!u) u = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rnd()); };
+      for (let q = 0; q < d.length; q += 4) {
+        if (p.mono) { const n = gauss() * sd; d[q] += n; d[q + 1] += n; d[q + 2] += n; } else { d[q] += gauss() * sd; d[q + 1] += gauss() * sd; d[q + 2] += gauss() * sd; }
+      }
+      return out;
+    },
+    magick: (p) => ({ args: [['-seed', String(p.seed || 1), '-attenuate', num(p.amount / 25, 3), '+noise', 'Gaussian']], fidelity: APPROX, note: 'noiseRandom' }),
+  },
+  pixelate: {
+    icon: 'pixelate', defaults: { size: 8 },
+    apply(img, p) {
+      const n = Math.max(1, Math.round(p.size)), { width: w, height: h, data } = img;
+      const out = { width: w, height: h, data: new Uint8ClampedArray(data.length) }, o = out.data;
+      for (let by = 0; by < h; by += n) {
+        for (let bx = 0; bx < w; bx += n) {
+          const x1 = Math.min(w, bx + n), y1 = Math.min(h, by + n);
+          let r = 0, g = 0, b = 0, a = 0, c = 0;
+          // Alpha-weighted (premultiplied) average: a plain mean would bleed the colour of fully transparent pixels,
+          // usually black, into the block and darken edges of cut-out subjects.
+          for (let y = by; y < y1; y++) for (let x = bx; x < x1; x++) { const q = (y * w + x) * 4, al = data[q + 3]; r += data[q] * al; g += data[q + 1] * al; b += data[q + 2] * al; a += al; c++; }
+          const R = a ? r / a : 0, G = a ? g / a : 0, B = a ? b / a : 0, A = a / c;
+          for (let y = by; y < y1; y++) for (let x = bx; x < x1; x++) { const q = (y * w + x) * 4; o[q] = R; o[q + 1] = G; o[q + 2] = B; o[q + 3] = A; }
+        }
+      }
+      return out;
+    },
+    magick(p, size) {
+      const n = Math.max(1, Math.round(p.size));
+      if (n <= 1) return { args: [], fidelity: EXACT };
+      // -scale down then up is box averaging plus replication, the same as the loop above when blocks tile the image
+      // exactly. Partial edge blocks are averaged differently by -scale, hence 'approx' unless the size divides evenly.
+      if (size) {
+        const even = size.w % n === 0 && size.h % n === 0;
+        return { args: [['-scale', `${Math.ceil(size.w / n)}x${Math.ceil(size.h / n)}!`, '-scale', `${size.w}x${size.h}!`]], fidelity: even ? EXACT : APPROX, note: even ? undefined : 'pixelateEdge', sized: true };
+      }
+      return { args: [['-scale', `${num(100 / n, 4)}%`, '-scale', `${n * 100}%`]], fidelity: APPROX, note: 'pixelateEdge' };
+    },
+  },
+};
+
+export const FILTER_TYPES = Object.keys(FILTERS);
+
+/** Runs a filter: a new image (the input stays as it is). */
+export function applyFilter(type, img, params) {
+  const f = FILTERS[type];
+  if (!f) return img;
+  return f.apply(img, { ...f.defaults, ...(params || {}) });
+}
+
+/** ImageMagick step of a filter on an image of `size` ({ w, h } or null). */
+export function filterStep(type, params, size = null) {
+  const f = FILTERS[type];
+  if (!f) return { args: [], fidelity: NONE };
+  return f.magick({ ...f.defaults, ...(params || {}) }, size);
+}

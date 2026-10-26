@@ -1,0 +1,17 @@
+import{quote}from"../cmdline/quote.js";import{Graph}from"./graph.js";const GROUP=Symbol('group');const ref=(r,...items)=>({[GROUP]:true,ref:r,items});const CONT={bash:' \\',cmd:' ^'};const MARK='';function groups(argv,inherited=null){const out=[];for(const a of argv){if(a==null||a===false)continue;if(a&&a[GROUP])out.push({ref:a.ref,words:words(a.items,a.ref)});else if(Array.isArray(a))out.push({ref:inherited,words:words(a,inherited)});else out.push({ref:inherited,words:words([a],inherited)});}
+return out;}
+function words(items,r){const out=[];for(const x of items){if(x==null||x===false)continue;if(Array.isArray(x))out.push(...words(x,r));else if(x&&x[GROUP])out.push(...words(x.items,x.ref));else if(x instanceof Graph)out.push({graph:x,ref:r});else out.push({text:String(x),ref:r});}
+return out;}
+function quoteGraph(graph,r,shell,batch){const ps=graph.pieces();const plain=ps.map((p)=>p.text).join('');const q=quote(plain,shell,{batch});if(q===plain)return ps.map((p)=>({text:p.text,ref:p.ref??r}));if(ps.length>3800)return[{text:q,ref:r}];const marked=ps.map((p,i)=>MARK+String.fromCharCode(0xe100+i)+p.text).join('');const qm=quote(marked,shell,{batch});const out=[];let cur={text:'',ref:r};for(let i=0;i<qm.length;i++){if(qm[i]===MARK){if(cur.text)out.push(cur);const p=ps[qm.charCodeAt(i+1)-0xe100];cur={text:'',ref:p?.ref??r};i++;}else cur.text+=qm[i];}
+if(cur.text)out.push(cur);if(out.map((p)=>p.text).join('')!==q)return[{text:q,ref:r}];if(out.length>1&&out[0].text.length===1&&/['"]/.test(out[0].text)){out[1].text=out[0].text+out[1].text;out.shift();}
+return out;}
+function quoteWord(w,shell,batch){if(w.graph)return quoteGraph(w.graph,w.ref,shell,batch);return[{text:quote(w.text,shell,{batch}),ref:w.ref}];}
+function merge(pieces){const out=[];for(const p of pieces){if(!p.text)continue;const last=out[out.length-1];if(last&&last.ref===p.ref)last.text+=p.text;else out.push({text:p.text,ref:p.ref});}
+return out;}
+function renderCommand(argv,shell='bash',{width=0,batch=false}={}){const units=groups(argv).map((g)=>{const ps=[];g.words.forEach((w,i)=>{if(i)ps.push({text:' ',ref:g.ref});ps.push(...quoteWord(w,shell,batch));});return ps;}).filter((ps)=>ps.some((p)=>p.text));const len=(ps)=>ps.reduce((a,p)=>a+p.text.length,0);const pieces=[];if(!width){units.forEach((u,i)=>{if(i)pieces.push({text:' ',ref:null});pieces.push(...u);});}else{let lineLen=0,first=true;for(const u of units){const n=len(u);if(!first&&lineLen+1+n+CONT[shell].length>width){pieces.push({text:CONT[shell]+'\n  ',ref:null});lineLen=2+n;}else{if(!first)pieces.push({text:' ',ref:null});lineLen=first?n:lineLen+1+n;}
+pieces.push(...u);first=false;}}
+const out=merge(pieces);return{text:out.map((p)=>p.text).join(''),pieces:out};}
+function renderScript(steps,shell='bash',options={}){const pieces=[];for(const s of steps){if(s.comment){if(pieces.length)pieces.push({text:'\n',ref:null});pieces.push({text:(shell==='cmd'?'REM ':'# ')+s.comment,ref:s.ref??null});}
+if(s.argv){if(pieces.length)pieces.push({text:'\n',ref:null});pieces.push(...renderCommand(s.argv,shell,options).pieces);}}
+const out=merge(pieces);return{text:out.map((p)=>p.text).join(''),pieces:out};}
+export{ref,renderScript};

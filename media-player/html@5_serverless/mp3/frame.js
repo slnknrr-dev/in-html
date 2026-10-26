@@ -1,0 +1,16 @@
+import{BITRATES,SAMPLE_RATES}from"./tables.js";import"./id3.js";const asBytes=(b)=>(b instanceof Uint8Array?b:ArrayBuffer.isView(b)?new Uint8Array(b.buffer,b.byteOffset,b.byteLength):new Uint8Array(b));const MODES=['stereo','joint stereo','dual channel','mono'];function parseFrameHeader(input,p=0){const b=asBytes(input);if(p+4>b.length||b[p]!==0xff||(b[p+1]&0xe0)!==0xe0)return null;const vbits=(b[p+1]>>3)&3,lbits=(b[p+1]>>1)&3;if(vbits===1||lbits===0)return null;const version=vbits===3?1:vbits===2?2:2.5;const layer=4-lbits;const bi=b[p+2]>>4,si=(b[p+2]>>2)&3;if(bi===0||bi===15||si===3)return null;const bitrate=BITRATES[version===1?0:1][layer-1][bi];const sampleRate=SAMPLE_RATES[version][si];const padding=(b[p+2]>>1)&1;const modeBits=b[p+3]>>6;let samples,frameSize;if(layer===1){samples=384;frameSize=(Math.floor((12000*bitrate)/sampleRate)+padding)*4;}
+else if(layer===2||version===1){samples=1152;frameSize=Math.floor((144000*bitrate)/sampleRate)+padding;}
+else{samples=576;frameSize=Math.floor((72000*bitrate)/sampleRate)+padding;}
+return{version,layer,crc:!(b[p+1]&1),bitrate,sampleRate,padding,mode:MODES[modeBits],channels:modeBits===3?1:2,modeExtension:(b[p+3]>>4)&3,copyright:!!(b[p+3]&8),original:!!(b[p+3]&4),emphasis:b[p+3]&3,frameSize,samples,};}
+const sameStream=(a,b)=>a&&b&&a.version===b.version&&a.layer===b.layer&&a.sampleRate===b.sampleRate;function findFrame(input,start=0,end){const b=asBytes(input);const stop=end==null?b.length:end;for(let p=start;p+4<=stop;p++){if(b[p]!==0xff)continue;const h=parseFrameHeader(b,p);if(!h)continue;const q=p+h.frameSize;if(q===stop||(q+4<=stop&&sameStream(h,parseFrameHeader(b,q))))return p;}
+return-1;}
+function sideInfoEnd(h){const side=h.version===1?(h.channels===1?17:32):(h.channels===1?9:17);return 4+(h.crc?2:0)+side;}
+function readVbrHeader(input,p,h=parseFrameHeader(input,p)){const b=asBytes(input);if(!h||h.layer!==3)return null;const dv=new DataView(b.buffer,b.byteOffset,b.byteLength);const x=p+sideInfoEnd(h);const tag=String.fromCharCode(b[x],b[x+1],b[x+2],b[x+3]);if((tag==='Xing'||tag==='Info')&&x+8<=b.length){const flags=dv.getUint32(x+4);let q=x+8;const out={type:tag,frames:null,bytes:null,toc:null,quality:null};if(flags&1){out.frames=dv.getUint32(q);q+=4;}
+if(flags&2){out.bytes=dv.getUint32(q);q+=4;}
+if(flags&4){out.toc=Array.from(b.subarray(q,q+100));q+=100;}
+if(flags&8){out.quality=dv.getUint32(q);q+=4;}
+if(q+36<=b.length){const enc=String.fromCharCode(...b.subarray(q,q+9)).replace(/[^\x20-\x7e]/g,'').trim();if(/^(LAME|Lavf|Lavc|GOGO|L3.99)/.test(enc)){const d=(b[q+21]<<16)|(b[q+22]<<8)|b[q+23];out.encoder=enc;out.encoderDelay=d>>12;out.encoderPadding=d&0xfff;out.lowpass=b[q+10]*100;}}
+return out;}
+const v=p+36;if(v+26<=b.length&&b[v]===0x56&&b[v+1]===0x42&&b[v+2]===0x52&&b[v+3]===0x49){return{type:'VBRI',version:dv.getUint16(v+4),delay:dv.getUint16(v+6),quality:dv.getUint16(v+8),bytes:dv.getUint32(v+10),frames:dv.getUint32(v+14)};}
+return null;}
+export{parseFrameHeader,findFrame,readVbrHeader};

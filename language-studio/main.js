@@ -1,0 +1,337 @@
+// language-studio/main.js - Language Studio: six courses (Vedic Sanskrit, Georgian, Japanese, Chinese, Russian,
+// English), each with lessons, its scripts, constructors and analysers, mini-games and a dictionary; progress with
+// spaced repetition in the browser (IndexedDB) and, in the BACKEND build, in an account on the server.
+//
+// Routes (location.hash): '' home · #<course> · #<course>/learn/<section> · #<course>/letters/<script> ·
+// #<course>/tools/<tool> · #<course>/games/<game> · #<course>/dict · #progress
+//
+// (The opening list predates Mingrelian and Korean: courses/index.js COURSES now holds eight courses.)
+//
+// Design rules of this module:
+// - Hash routing: every view is addressable (shareable links, Back works, no server routing needed, works from
+//   file://). route() rebuilds <main> from the hash; hashchange is the only navigation mechanism, so links are plain
+//   <a href="#...">.
+// - One progress document S.doc (progress.js) for everything learned; views receive it through ctx() and call save().
+//   Local first: the browser copy is authoritative for the session, the server copy is merged in at boot and after
+//   saves (account builds only). Learning never waits on the network.
+// - The explanation language is per course: a course is explained in a few languages (course.explain); the choice
+//   falls back from the learner's preference to the UI language to a sensible neighbour (ru for uk/ka speakers).
+// Side-effect import first: registers the UI strings before any t() call.
+import './strings.js';
+import { startApp, t, toast } from '../ui/app.js';
+import { h } from '../ui/dom.js';
+import { addIcons, iconEl } from '../ui/icons.js';
+import { confirmDialog } from '../ui/overlays.js';
+import { UI_STATE } from '../ui/i18n.js';
+import { strength, validCard } from '../lingua/srs.js';
+import { startAccount } from './account.js';
+import { COURSES, courseById, dictionary, letterId, pick, srsItems } from './courses/index.js';
+import { gameList, playGame } from './games.js';
+import { cleanProgress, emptyProgress, mergeProgress } from './progress.js';
+import { canSpeak, speak, voicesReady } from './speech.js';
+import { openStore } from './store.js';
+import { TOOLS } from './tools.js';
+import { renderSection, speakBtn, wordRow, X } from './views.js';
+import { FONTS } from './draw.js';
+import { wordLabels, labelFilter } from './morph-tools.js';
+import { lexById } from '../lingua/kartuli-lexicon.js';
+import { matchLabels, labelText } from '../lingua/morph.js';
+import { equivChips } from './xl-tools.js';
+
+addIcons({
+  book: 'M4 4h6a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H4zM20 4h-6a3 3 0 0 0-3 3v13a2 2 0 0 1 2-2h7z',
+  letters: 'M4 20 9 4l5 16M6 14h6M15 10h5v10h-5z',
+  tool: 'M14.7 6.3a4 4 0 0 0 5 5L22 14l-8 8-2.3-2.3a4 4 0 0 0-5-5L4 12l8-8zM2 22l5-5',
+  game: 'M6 11h4M8 9v4M15 12h.01M18 10h.01M17 6H7a5 5 0 0 0-5 5v1a4 4 0 0 0 7 2.6h6A4 4 0 0 0 22 12v-1a5 5 0 0 0-5-5z',
+  dict: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5zM8 7h8M8 11h6',
+  chart2: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
+});
+
+const LOGO = 'M4 5h7v14H4zM13 5h7M13 9h7M13 13h5M13 17h7';
+const ART = globalThis.IN_HTML_ARTIFACT || { mode: 'dev' };
+const S = { account: null, store: null, doc: emptyProgress(), syncing: false };
+const E = { main: null };
+let saveTimer = null;
+
+const coursePref = (c) => S.doc.prefs['explain.' + c.id];
+const explainLang = (c) => {
+  const p = coursePref(c);
+  if (p && c.explain.includes(p)) return p;
+  const ui = UI_STATE.lang;
+  return c.explain.includes(ui) ? ui : c.explain.includes('ru') && ['ru', 'uk', 'ka'].includes(ui) ? 'ru' : c.explain.includes('en') && !['ru', 'uk'].includes(ui) ? 'en' : c.explain[0];
+};
+
+// Debounced save (400 ms trailing): a game round may change many cards in quick succession; one write and one sync
+// per burst instead of one per answer. doc.t is stamped immediately so a merge in between already sees the change.
+function save() {
+  S.doc.t = Date.now();
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    await S.store.save(S.doc);
+    if (S.account && S.account.user) sync(false);
+  }, 400);
+}
+
+// Push the local doc; the server merges and returns its result, which is merged back. Object.assign into the same
+// S.doc object (not reassignment): open views hold a reference to the doc through ctx(), and must keep seeing the
+// live one. The S.syncing guard drops overlapping syncs; a change saved during a sync is pushed by the next save.
+async function sync(manual) {
+  if (!S.account || !S.account.user || S.syncing) return;
+  S.syncing = true;
+  try {
+    const merged = await S.account.push(S.doc);
+    if (merged) { Object.assign(S.doc, mergeProgress(S.doc, merged)); await S.store.save(S.doc); if (manual) toast(t('ls.acc.synced'), 'ok'); }
+    else if (manual) toast(t('ls.acc.syncFailed'), 'warn');
+  } finally { S.syncing = false; }
+}
+
+function ctx(course) {
+  const lang = explainLang(course);
+  return {
+    course, lang, doc: S.doc, save, canSpeak: canSpeak(course.speech),
+    speak: (text) => speak(text, course.speech),
+    onLearn: (section) => { location.hash = `${course.id}/games/cards@${section.id}`; },
+  };
+}
+
+// --- home ---------------------------------------------------------------------------------------------------------------
+function courseStats(c) {
+  const items = srsItems(c);
+  let learned = 0, due = 0, sum = 0;
+  const now = Date.now();
+  for (const it of items) {
+    const card = S.doc.cards[it.id];
+    if (!card) continue;
+    if (card.n > 0) learned++;
+    if (card.d <= now) due++;
+    sum += strength(card, now);
+  }
+  return { total: items.length, learned, due, strength: items.length ? sum / items.length : 0 };
+}
+
+function home() {
+  return h('div', { class: 'ls-home' },
+    h('section', { class: 'ls-hero' }, h('h2', null, t('ls.home.title')), h('p', { class: 'ap-lead' }, t('ls.home.lead')), accountBox()),
+    h('div', { class: 'ls-courses' }, COURSES.map((c) => {
+      const st = courseStats(c);
+      return h('a', { class: 'ls-course', href: '#' + c.id, dataset: { course: c.id } },
+        h('span', { class: 'ls-course-native', lang: c.id, style: { fontFamily: FONTS[c.script] } }, c.native),
+        h('b', null, pick(c.name, UI_STATE.lang) || c.name.en),
+        h('small', null, t('ls.explainIn', { l: c.explain.map((l) => t('ls.lang.' + l)).join(', ') })),
+        h('span', { class: 'ap-progress' }, h('span', { style: { width: Math.round((st.learned / Math.max(1, st.total)) * 100) + '%' } })),
+        h('small', null, t('ls.home.stat', { l: st.learned, n: st.total, d: st.due })));
+    })));
+}
+
+function accountBox() {
+  const a = S.account;
+  if (!a) return h('p', { class: 'ed-hint ls-acc-note' }, iconEl('shield'), ' ', t(ART.mode === 'backend' ? 'ls.acc.noServer' : 'ls.acc.local'));
+  if (!a.user) {
+    return h('div', { class: 'ls-acc' }, h('p', { class: 'ed-hint' }, t('ls.acc.lead')),
+      h('div', { class: 'ap-actions' }, h('button', { type: 'button', class: 'ed-btn ed-primary', onclick: () => signIn('login') }, iconEl('user'), t('ls.acc.signIn')),
+        a.info.registration ? h('button', { type: 'button', class: 'ed-btn', onclick: () => signIn('register') }, t('ls.acc.register')) : null));
+  }
+  return h('div', { class: 'ls-acc' }, h('p', null, iconEl('user'), ' ', t('ls.acc.signedAs', { u: a.user })),
+    h('div', { class: 'ap-actions' }, h('button', { type: 'button', class: 'ed-btn', onclick: () => sync(true) }, iconEl('refresh'), t('ls.acc.sync')),
+      h('button', { type: 'button', class: 'ed-btn', onclick: async () => { await a.signOut(); await openLocal(); route(); } }, t('ls.acc.signOut'))));
+}
+
+async function signIn(kind) {
+  if (!(await S.account.signIn(kind))) return;
+  // the browser's anonymous progress joins the account
+  const anon = S.doc;
+  S.store = await openStore(S.account.dbName);
+  const mine = await S.store.load();
+  const remote = cleanProgress(await S.account.pull());
+  S.doc = mergeProgress(mergeProgress(mine, remote), anon);
+  await S.store.save(S.doc);
+  await sync(false);
+  toast(t('ls.acc.signedAs', { u: S.account.user }), 'ok');
+  route();
+}
+
+async function openLocal() {
+  S.store = await openStore(S.account && S.account.user ? S.account.dbName : 'language-studio');
+  S.doc = await S.store.load();
+}
+
+// --- course pages -------------------------------------------------------------------------------------------------------
+const TABS = [['learn', 'book', 'ls.tab.learn'], ['letters', 'letters', 'ls.tab.letters'], ['tools', 'tool', 'ls.tab.tools'], ['games', 'game', 'ls.tab.games'], ['dict', 'dict', 'ls.tab.dict']];
+
+function courseHead(C, tab) {
+  const c = C.course;
+  const langSel = c.explain.length > 1 ? h('label', { class: 'ls-explain-sel' }, t('ls.explain'), h('select', { class: 'ed-input ed-select', onchange: (e) => { S.doc.prefs['explain.' + c.id] = e.target.value; S.doc.prefs.t = Date.now(); save(); route(); } },
+    c.explain.map((l) => h('option', { value: l, selected: l === C.lang }, t('ls.lang.' + l))))) : null;
+  return h('header', { class: 'ls-chead' },
+    h('div', { class: 'ls-ctitle' }, h('a', { href: '#', class: 'ed-btn ls-home-btn', title: t('ls.allCourses') }, iconEl('chevLeft')),
+      h('h2', null, h('span', { lang: c.id, style: { fontFamily: FONTS[c.script] } }, c.native), ' ', h('small', null, pick(c.name, UI_STATE.lang) || c.name.en)), langSel,
+      !C.canSpeak ? h('span', { class: 'ed-hint ls-novoice', title: t('ls.noVoiceHint') }, t('ls.noVoice')) : null),
+    h('nav', { class: 'ls-tabs', 'aria-label': t('ls.sections') }, TABS.map(([id, ic, label]) => h('a', { href: `#${c.id}/${id}`, class: 'ls-tab' + (tab === id ? ' ed-on' : ''), 'aria-current': tab === id ? 'page' : null }, iconEl(ic), h('span', null, t(label))))));
+}
+
+const TOPIC_ORDER = ['rules', 'situation', 'objects', 'abstract', 'speech', 'grammar', 'poetry', 'culture'];
+function learnList(C) {
+  const groups = {};
+  for (const s of C.course.sections) (groups[s.topic || 'rules'] ||= []).push(s);
+  return h('div', { class: 'ls-learn' }, TOPIC_ORDER.filter((k) => groups[k]).map((k) => h('section', { class: 'ls-topic' }, h('h3', null, t('ls.topic.' + k)),
+    h('div', { class: 'ls-sec-list' }, groups[k].map((s) => {
+      const words = s.words || [];
+      const learned = words.filter((w) => { const c = S.doc.cards[`${C.course.id}:${s.id}:${w.w}`]; return c && c.n > 0; }).length;
+      return h('a', { class: 'ls-sec-link', href: `#${C.course.id}/learn/${s.id}` }, h('b', null, X(C, s.title)), h('span', { class: 'ed-tag' }, s.level || ''),
+        words.length ? h('small', null, t('ls.wordsLearned', { l: learned, n: words.length })) : null);
+    })))));
+}
+
+function lettersPage(C, scriptId) {
+  const c = C.course;
+  const sc = c.scripts.find((s) => s.id === scriptId) || c.scripts[0];
+  const detail = h('div', { class: 'ls-letter-detail', 'aria-live': 'polite' });
+  const show = (l) => {
+    const id = letterId(c, sc, l);
+    const card = S.doc.cards[id];
+    detail.replaceChildren(...[h('div', { class: 'ls-glyph', lang: c.id, style: { fontFamily: FONTS[c.script] } }, l.ch),
+      h('div', null, h('b', { class: 'ls-qtr' }, l.tr), l.ipa ? h('span', { class: 'ls-tr' }, ' /' + l.ipa + '/') : null, speakBtn(C, l.say || l.ch)),
+      l.name ? h('div', { class: 'ls-note' }, l.name) : null, l.reading ? h('div', { class: 'ls-tr' }, l.reading) : null, l.trad && l.trad !== l.ch ? h('div', { class: 'ls-note' }, t('ls.cjk.trad') + ': ' + l.trad) : null,
+      l.hint ? h('p', null, X(C, l.hint)) : null, l.m ? h('p', null, X(C, l.m)) : null,
+      h('p', { class: 'ed-hint' }, card ? t('ls.strength', { n: Math.round(strength(card) * 100) }) : t('ls.notYet')),
+      h('div', { class: 'ap-actions' }, h('a', { class: 'ed-btn', href: `#${c.id}/games/draw:${sc.id}` }, t('ls.game.draw')), h('a', { class: 'ed-btn', href: `#${c.id}/games/sym2sound:${sc.id}` }, t('ls.game.sym2sound')))].filter(Boolean));
+  };
+  const grid = h('div', { class: 'ls-letters' }, sc.letters.map((l) => {
+    const card = S.doc.cards[letterId(c, sc, l)];
+    const st = card ? strength(card) : 0;
+    return h('button', { type: 'button', class: 'ls-letter', style: { '--st': st.toFixed(2) }, onclick: () => show(l), title: l.tr },
+      h('span', { class: 'ls-letter-ch', lang: c.id, style: { fontFamily: FONTS[c.script] } }, l.ch), h('small', null, l.tr));
+  }));
+  show(sc.letters[0]);
+  return h('div', null,
+    c.scripts.length > 1 ? h('nav', { class: 'ls-subtabs' }, c.scripts.map((s) => h('a', { href: `#${c.id}/letters/${s.id}`, class: 'ls-subtab' + (s === sc ? ' ed-on' : '') }, X(C, s.name)))) : null,
+    h('div', { class: 'ls-letters-wrap' }, grid, detail));
+}
+
+function toolsPage(C, toolArg) {
+  // #ka/tools/ka-forms/<word>: a tool may take an argument after its id.
+  const [toolId, ...more] = String(toolArg || '').split('/');
+  const ids = C.course.tools;
+  const id = ids.includes(toolId) ? toolId : ids[0];
+  return h('div', null, h('nav', { class: 'ls-subtabs' }, ids.map((x) => h('a', { href: `#${C.course.id}/tools/${x}`, class: 'ls-subtab' + (x === id ? ' ed-on' : '') }, t(TOOLS[x].title)))),
+    TOOLS[id].render(C, more.join('/') || null));
+}
+
+function gamesPage(C, gameId) {
+  const host = h('div', { class: 'ls-game' });
+  const back = () => { location.hash = `${C.course.id}/games`; };
+  if (gameId) {
+    const [g, sec] = gameId.split('@');
+    if (g === 'cards' && sec) {
+      // learning a word list: its words become due now, so the cards game asks them first
+      const s = C.course.sections.find((x) => x.id === sec);
+      for (const w of (s && s.words) || []) { const id = `${C.course.id}:${s.id}:${w.w}`; if (!S.doc.cards[id]) S.doc.cards[id] = { e: 2.5, i: 0, n: 0, l: 0, d: Date.now() - 1, t: Date.now() }; }
+    }
+    requestAnimationFrame(() => playGame(C, g, host, back));
+    return host;
+  }
+  const list = gameList(C);
+  host.append(h('div', { class: 'ls-game-list' }, list.map((g) => {
+    const sc = S.doc.scores[`${C.course.id}:${g.game}${g.script ? ':' + g.script : ''}`] || S.doc.scores[g.game.replace('-', ':')];
+    return h('a', { class: 'ls-game-card', href: `#${C.course.id}/games/${g.id}`, dataset: { game: g.id } },
+      h('b', null, g.title), g.sub ? h('span', { class: 'ed-tag' }, g.sub) : null, h('small', null, g.hint), sc ? h('small', { class: 'ls-best' }, t('ls.game.best', { n: sc.best })) : null);
+  })));
+  return host;
+}
+
+function dictPage(C) {
+  const all = dictionary(C.course);
+  const list = h('div', { class: 'ls-words' });
+  // Labels (everyday use, correctness, literariness) for the courses with a morpheme workbench.
+  const labelled = C.course.tools.includes('morph');
+  let F = null;
+  const labelsOf = (w) => w.labels || (w.labels = wordLabels(C.course, w.w, w.lex ? (lexById(w.lex) || {}).tier : 1) || { use: 'common', norm: 'norm', lit: 'neutral' });
+  const draw = (q) => {
+    q = q.trim().toLowerCase();
+    const hits = all.filter((w) => (!q || w.w.toLowerCase().includes(q) || (w.tr || '').toLowerCase().includes(q) || X(C, w.m).toLowerCase().includes(q)) && (!F || matchLabels(labelsOf(w), F)));
+    // Georgian words open in the word-form explorer.
+    const forms = C.course.tools.includes('ka-forms');
+    list.replaceChildren(...hits.slice(0, 300).map((w) => { const row = wordRow(C, w, { id: w.id, deva: !!w.section.deva }); if (labelled) row.append(h('div', { class: 'mo-wl' }, labelText(labelsOf(w), C.lang === 'ru' ? 'ru' : 'en'))); if (forms) row.querySelector('.ls-word-main').append(h('a', { class: 'ed-chip lx-formslink', href: `#${C.course.id}/tools/ka-forms/${encodeURIComponent(w.w)}` }, t('lx.t.forms'))); const eq = equivChips(C, w, { skip: [C.lang], max: 3 }); if (eq) row.append(eq); return row; }), hits.length ? '' : h('p', { class: 'ed-hint' }, t('ls.nothing')));
+  };
+  const inp = h('input', { type: 'search', class: 'ed-input ls-search', placeholder: t('ls.search'), 'aria-label': t('ls.search') });
+  inp.addEventListener('input', () => draw(inp.value));
+  draw('');
+  return h('div', null, h('p', { class: 'ed-hint' }, t('ls.dictCount', { n: all.length })), inp, labelled ? labelFilter((f) => { F = ['use', 'norm', 'lit'].some((k) => f[k].length) ? f : null; draw(inp.value); }) : null, list);
+}
+
+function progressPage() {
+  const rows = COURSES.map((c) => { const st = courseStats(c); return h('tr', null, h('th', null, pick(c.name, UI_STATE.lang) || c.name.en), h('td', null, `${st.learned} / ${st.total}`), h('td', null, String(st.due)), h('td', null, Math.round(st.strength * 100) + ' %')); });
+  const scores = Object.entries(S.doc.scores).sort((a, b) => b[1].t - a[1].t).slice(0, 40);
+  const file = h('input', { type: 'file', accept: 'application/json,.json', hidden: true });
+  file.addEventListener('change', async () => {
+    const f = file.files[0];
+    if (!f) return;
+    try { S.doc = mergeProgress(S.doc, JSON.parse(await f.text())); save(); toast(t('ls.prog.imported'), 'ok'); route(); } catch { toast(t('ls.prog.badFile'), 'error'); }
+  });
+  return h('div', { class: 'ls-progress' },
+    h('div', { class: 'ls-ctitle' }, h('a', { href: '#', class: 'ed-btn ls-home-btn' }, iconEl('chevLeft')), h('h2', null, t('ls.prog.title'))),
+    accountBox(),
+    h('div', { class: 'ap-table-wrap' }, h('table', { class: 'ap-table ls-table' }, h('thead', null, h('tr', null, h('th', null, ''), h('th', null, t('ls.prog.learned')), h('th', null, t('ls.prog.due')), h('th', null, t('ls.prog.strength')))), h('tbody', null, rows))),
+    scores.length ? h('div', { class: 'ap-table-wrap' }, h('table', { class: 'ap-table ls-table' }, h('thead', null, h('tr', null, h('th', null, t('ls.prog.game')), h('th', null, t('ls.prog.best')), h('th', null, t('ls.prog.plays')))),
+      h('tbody', null, scores.map(([k, s]) => h('tr', null, h('td', null, k), h('td', null, s.best + ' %'), h('td', null, String(s.plays))))))) : null,
+    h('div', { class: 'ap-actions' },
+      h('button', { type: 'button', class: 'ed-btn', onclick: () => { const blob = new Blob([JSON.stringify(S.doc)], { type: 'application/json' }); const a = h('a', { href: URL.createObjectURL(blob), download: 'language-studio-progress.json' }); document.body.append(a); a.click(); a.remove(); } }, iconEl('download'), t('ls.prog.export')),
+      h('button', { type: 'button', class: 'ed-btn', onclick: () => file.click() }, iconEl('upload'), t('ls.prog.import')), file,
+      h('button', { type: 'button', class: 'ed-btn ed-danger', onclick: async () => { if (await confirmDialog(t('ls.prog.reset'), t('ls.prog.resetQ'), t('ls.prog.reset'), true)) { S.doc = emptyProgress(); S.doc.t = Date.now(); await S.store.save(S.doc); route(); } } }, iconEl('trash'), t('ls.prog.reset')),
+      S.account && S.account.user ? h('button', { type: 'button', class: 'ed-btn', onclick: () => S.account.changePassword() }, t('ls.acc.password')) : null,
+      S.account && S.account.user ? h('button', { type: 'button', class: 'ed-btn ed-danger', onclick: async () => { if (await S.account.deleteAccount()) { await openLocal(); route(); } } }, t('ls.acc.delete')) : null,
+      S.account && S.account.owner && !S.account.info.locked ? h('button', { type: 'button', class: 'ed-btn', onclick: async () => { await S.account.setRegistration(!S.account.info.registration); route(); } }, t(S.account.info.registration ? 'ls.acc.closeReg' : 'ls.acc.openReg')) : null));
+}
+
+// --- routing ------------------------------------------------------------------------------------------------------------
+// The router: "<course>/<tab>/<arg...>"; the arg may itself contain slashes (tool panels), hence rest.join('/').
+// decodeURIComponent because course args can be non-Latin words. Unknown course -> home, unknown tab -> lessons:
+// a stale or mistyped link degrades to a useful page instead of an error.
+function route() {
+  const [cid, tab = 'learn', ...rest] = decodeURIComponent(location.hash.slice(1)).split('/');
+  const arg = rest.join('/');
+  E.main.textContent = '';
+  if (cid === 'progress') { E.main.append(progressPage()); return; }
+  const course = courseById(cid);
+  if (!course) { E.main.append(home()); document.title = t('ls.name'); return; }
+  const C = ctx(course);
+  document.title = `${pick(course.name, UI_STATE.lang) || course.name.en} · ${t('ls.name')}`;
+  let body;
+  if (tab === 'learn') {
+    const s = course.sections.find((x) => x.id === arg);
+    body = s ? h('div', null, h('a', { class: 'ed-btn ls-back', href: `#${course.id}/learn` }, iconEl('chevLeft'), t('ls.allLessons')), renderSection(C, s)) : learnList(C);
+  } else if (tab === 'letters') body = lettersPage(C, arg);
+  else if (tab === 'tools') body = toolsPage(C, arg);
+  else if (tab === 'games') body = gamesPage(C, arg);
+  else if (tab === 'dict') body = dictPage(C);
+  else body = learnList(C);
+  E.main.append(courseHead(C, tab), h('div', { class: 'ls-body' }, body));
+  window.scrollTo(0, 0);
+}
+
+// Boot order matters: account first (it decides the local database name), then the local store, then the remote
+// merge, then speech voices (some browsers load them asynchronously, and lesson views ask canSpeak() at render),
+// and only then the first route. data-ready on <body> tells the e2e scenario that the app is interactive.
+async function boot() {
+  E.main = document.getElementById('main');
+  E.main.classList.add('ls-main');
+  startApp({
+    key: 'language-studio', name: 'ls.name', logo: LOGO, offline: ART.mode === 'backend' || ART.mode === 'dev' ? false : ART.mode === 'serverless' ? 'serverless' : true, onLang: route,
+    footer: () => h('a', { href: '#progress', class: 'ls-foot-link' }, iconEl('chart2'), t('ls.prog.title')),
+  });
+  S.account = await startAccount(ART.mode).catch(() => null);
+  await openLocal();
+  if (S.account && S.account.user) {
+    const remote = await S.account.pull();
+    if (remote) { S.doc = mergeProgress(S.doc, remote); await S.store.save(S.doc); }
+  }
+  await voicesReady();
+  window.addEventListener('hashchange', route);
+  route();
+  document.body.dataset.ready = '1';
+}
+
+// exposed for checks: the progress document as stored
+globalThis.__languageStudio = { get doc() { return S.doc; }, validCard };
+// (imported without a page — module checks under Node — it does nothing)
+if (typeof document !== 'undefined') boot();

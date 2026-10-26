@@ -1,0 +1,11 @@
+import{b64encode,b64decode}from"../codec/base64.js";const enc=new TextEncoder();const dec=new TextDecoder('utf-8');const decStrict=new TextDecoder('utf-8',{fatal:true});const utf8ToBytes=(s)=>enc.encode(String(s));const bytesToUtf8=(b,fatal=false)=>(fatal?decStrict:dec).decode(b);function toBytes(data){if(data instanceof Uint8Array)return data.constructor===Uint8Array?data:new Uint8Array(data.buffer,data.byteOffset,data.byteLength);if(typeof data==='string')return enc.encode(data);if(data instanceof ArrayBuffer)return new Uint8Array(data);if(ArrayBuffer.isView(data))return new Uint8Array(data.buffer,data.byteOffset,data.byteLength);if(data==null)return new Uint8Array(0);throw new TypeError('bytes expected');}
+const HEX=Array.from({length:256},(_,i)=>i.toString(16).padStart(2,'0'));function bytesToHex(b){let s='';for(let i=0;i<b.length;i++)s+=HEX[b[i]];return s;}
+function hexToBytes(hex){const s=String(hex).replace(/[\s:-]+/g,'');if(s.length%2||/[^0-9a-f]/i.test(s))throw new Error('invalid hex');const out=new Uint8Array(s.length/2);for(let i=0;i<out.length;i++)out[i]=parseInt(s.substr(i*2,2),16);return out;}
+const bytesToBase64=(b)=>b64encode(b);function base64ToBytes(s){const t=String(s).replace(/\s+/g,'');if(!/^[A-Za-z0-9+/_-]*={0,2}$/.test(t)||t.replace(/=+$/,'').length%4===1)throw new Error('invalid base64');return b64decode(t);}
+function concatBytes(...parts){let n=0;for(const p of parts)n+=p.length;const out=new Uint8Array(n);let o=0;for(const p of parts){out.set(p,o);o+=p.length;}
+return out;}
+function equalBytes(a,b){if(!a||!b||a.length!==b.length)return false;let d=0;for(let i=0;i<a.length;i++)d|=a[i]^b[i];return d===0;}
+function wipe(...arrays){for(const a of arrays)if(a&&typeof a.fill==='function')a.fill(0);}
+const readU32BE=(b,o)=>((b[o]<<24)|(b[o+1]<<16)|(b[o+2]<<8)|b[o+3])>>>0;function writeU32LE(b,o,v){b[o]=v;b[o+1]=v>>>8;b[o+2]=v>>>16;b[o+3]=v>>>24;}
+function writeU32BE(b,o,v){b[o]=v>>>24;b[o+1]=v>>>16;b[o+2]=v>>>8;b[o+3]=v;}
+export{toBytes,concatBytes,wipe,equalBytes,writeU32LE,utf8ToBytes,writeU32BE,readU32BE,bytesToUtf8,bytesToBase64,base64ToBytes,bytesToHex,hexToBytes};

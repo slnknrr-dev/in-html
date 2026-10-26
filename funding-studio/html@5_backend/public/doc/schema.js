@@ -1,0 +1,1 @@
+const optList=(...vals)=>vals.map((v)=>({v,l:'o.'+v}));export{optList};

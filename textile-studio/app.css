@@ -1,0 +1,262 @@
+/* textile-studio/app.css - Textile Studio: the toolbar, the step panel on the left, the stage with the 2D view and
+   the 3D view side by side (tabs on phones), the panels' own controls (measurements, outfit, garment gallery, layered
+   details, colour orders, colourways, placement prints). Loaded third, after ui/base.css and ui/app.css.
+
+   CONTRACT
+   - Namespace: every class starts with tx-. Shared primitives are ed- (ui/base.css), the shell is ap- (ui/app.css).
+     Rules here may ADJUST shared classes only inside a tx- context (.tx-card .ap-card-h), never globally.
+   - Specificity budget: one class (0,1,0); two for state or context (.tx-step.tx-on, .tx-card .ed-seg). Overrides of
+     shared rules rely on equal specificity + later source order (this file loads last), e.g.
+     .tx-card .ed-field + .ed-field (0,3,0) vs .ap-card .ed-field + .ed-field (0,3,0) in ui/app.css: same weight, ours
+     wins by order. No ids, no !important in this file.
+   - Tokens: --tx-* for the app's own colours (accent, ink, paper, stage), defined per theme below; everything else uses
+     the shared --ed-* tokens so the app follows the shell theme. State class: .tx-on (selected / current).
+   - Drawings (patterns, flats, drafts) are documents: they stay on light paper in both themes (see .tx-svg).
+
+   LAYOUT PRIMITIVES USED
+   - The app is a full-height column: toolbar + work area; the work area is a grid aside | stage. Every flex / grid
+     child that scrolls or holds a canvas gets min-height: 0 (the default min-height: auto = content height would
+     let the panel push the page taller instead of scrolling inside).
+   - minmax(0, 1fr) instead of 1fr (1fr = minmax(auto, 1fr) would let a wide SVG blow the column up).
+   - tabular-nums wherever numbers are compared in columns (measurements, usage table). */
+
+/* App tokens. --tx-aside-w is a token (not a literal in the grid) so media queries and the mockup mode can change
+   the panel width in one place. */
+:root {
+  --tx-accent: #d0425b; --tx-ink: #1d2330; --tx-muted: #6b7280; --tx-body: #ead9c6; --tx-paper: #ffffff;
+  --tx-stage: #e9ecf1; --tx-cell: #eef0f3; --tx-line: rgba(0, 0, 0, .25); --tx-aside-w: 360px;
+}
+/* Dark theme twice: once for the OS preference unless the user forced light, once for an explicit dark choice.
+   The same pattern as ui/base.css; :root:not([data-theme="light"]) (0,2,0) beats the plain :root (0,1,0) above. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --tx-accent: #ff6f8a; --tx-ink: #e6e9ef; --tx-muted: #9aa3b2; --tx-body: #6b5a4a; --tx-paper: #1b1f26; --tx-stage: #11141a; --tx-cell: #2a2f38; --tx-line: rgba(255, 255, 255, .2); }
+}
+:root[data-theme="dark"] { --tx-accent: #ff6f8a; --tx-ink: #e6e9ef; --tx-muted: #9aa3b2; --tx-body: #6b5a4a; --tx-paper: #1b1f26; --tx-stage: #11141a; --tx-cell: #2a2f38; --tx-line: rgba(255, 255, 255, .2); }
+
+/* The wide shell variant (main.js adds ap-wide): ui/app.css removes the max-width; tighter padding here gives the
+   two panes more room. */
+.ap-main.ap-wide { padding: 10px 12px 14px; }
+/* Full viewport height minus the shell header (--ed-top-h) and the space reserved for its footer and paddings (84px), so the panes
+   scroll internally instead of the page. dvh, not vh: on mobile vh includes the area under the collapsing URL bar.
+   min-height 520px: below that the 3D view becomes unusable, the page scrolls instead. */
+.tx-app { display: flex; flex-direction: column; gap: 10px; height: calc(100dvh - var(--ed-top-h) - 84px); min-height: 520px; }
+
+/* ===== toolbar ============================================================================================== */
+.tx-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* flex: 0 1 220px - the name field may shrink to 110px before the toolbar wraps. */
+.tx-toolbar > .ed-spacer { flex: 1 1 auto; }
+.tx-name { flex: 0 1 220px; width: 220px; min-width: 110px; font-weight: 600; }
+.tx-toolbar .ed-iconbtn:disabled { opacity: .4; }
+
+/* ===== work area ============================================================================================ */
+/* Fixed-width aside + fluid stage. overflow: hidden on the aside: only .tx-panel inside scrolls, the step nav stays. */
+.tx-work { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: var(--tx-aside-w) minmax(0, 1fr); gap: 12px; }
+.tx-aside { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--ed-border); border-radius: var(--ed-radius); background: var(--ed-panel); overflow: hidden; }
+/* Steps as a 3-column grid: six steps become two even rows, no orphan button. */
+.tx-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 6px; border-bottom: 1px solid var(--ed-border); }
+/* Mockup mode renders no steps; :empty hides the bordered strip instead of leaving an empty bar. */
+.tx-steps:empty { display: none; }
+.tx-step {
+  display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 4px 8px; border: 1px solid transparent; border-radius: var(--ed-radius-sm);
+  background: transparent; color: var(--ed-text); font: inherit; font-size: 13px; cursor: pointer; text-align: start;
+}
+.tx-step:hover { background: var(--ed-hover); }
+.tx-step.tx-on { background: var(--ed-accent-weak); border-color: var(--ed-accent); color: var(--ed-accent); font-weight: 600; }
+.tx-step .ed-ic { flex: none; }
+/* Labels ellipsize on narrow asides; the icon is flex: none so it never shrinks. */
+.tx-step span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The only scroller of the aside. overscroll-behavior: contain stops scroll chaining to the page at the panel's ends. */
+.tx-panel { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; overscroll-behavior: contain; }
+.tx-panel-h { margin: 2px 2px 0; font-size: 17px; font-weight: 700; }
+.tx-panel-h small { font-weight: 500; color: var(--ed-muted); }
+.tx-card { padding: 12px; margin: 0; }
+.tx-card .ap-card-h { margin-bottom: 8px; }
+/* Vertical rhythm between fields and colour-order rows inside cards (8px, tighter than the shell's 10px). */
+.tx-card .ed-field + .ed-field, .tx-card .ed-field + .tx-order, .tx-card .tx-order + .tx-order, .tx-card .tx-order + .ed-field { margin-top: 8px; }
+.tx-card .ed-seg { flex-wrap: wrap; }
+.tx-sub { margin: 0 0 6px; font-weight: 600; }
+.tx-warn { color: var(--ed-warn); }
+
+/* ===== stage ================================================================================================ */
+/* Stage: two equal panes; one row of minmax(0, 1fr) so both panes take the full height and canvases can size to it.
+   The tabs exist in the DOM but are hidden until the narrow breakpoint. */
+.tx-stage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 12px; min-height: 0; }
+.tx-stage-tabs { display: none; }
+/* position: relative anchors the absolute status line and 3D tools. overflow: hidden clips the panned 2D content. */
+.tx-pane { position: relative; min-height: 0; border: 1px solid var(--ed-border); border-radius: var(--ed-radius); background: var(--tx-stage); overflow: hidden; display: flex; flex-direction: column; }
+/* Status overlay: pointer-events: none so it never blocks drags on the canvas; the text-shadow in the stage colour
+   keeps it legible over the drawing. */
+.tx-status { position: absolute; left: 10px; bottom: 8px; right: 10px; font-size: 12px; color: var(--ed-muted); pointer-events: none; text-shadow: 0 0 4px var(--tx-stage); }
+.tx-3d-host { position: relative; flex: 1 1 auto; min-height: 0; }
+/* The canvas is absolutely filled into its host: its size comes from the host box, not from its own width / height
+   attributes (which the viewer sets to device pixels). outline: none + inset focus ring: the ring stays visible
+   inside the clipped pane. */
+.tx-3d-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; outline: none; }
+.tx-3d-canvas:active { cursor: grabbing; }
+.tx-3d-canvas:focus-visible { box-shadow: inset var(--ed-focus); }
+/* Floating 3D toolbar: color-mix gives a translucent panel colour from the theme token (no extra token needed). */
+.tx-3d-tools { position: absolute; top: 8px; right: 8px; z-index: 2; display: flex; gap: 4px; padding: 3px; border-radius: var(--ed-radius); background: color-mix(in srgb, var(--ed-panel) 85%, transparent); box-shadow: var(--ed-shadow-sm); }
+/* While draping, the status uses the accent: progress is the one thing worth noticing then. */
+.tx-pane-3d[data-state="draping"] .tx-status { color: var(--tx-accent); }
+/* A compact select beside 32px icon buttons: overrides the shared input height. */
+.tx-quality { width: auto; min-height: 0; height: 32px; padding-block: 0; font-size: 12.5px; }
+
+/* 2D view */
+.tx-2d { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.tx-2d-bar { display: flex; align-items: center; gap: 6px; padding: 6px; border-bottom: 1px solid var(--ed-border); background: var(--ed-panel); flex-wrap: wrap; }
+/* .tx-2d-modes is set twice (wrap here, flex: none below); both apply, kept as written. */
+.tx-2d-modes { flex-wrap: wrap; }
+.tx-2d-bar > .ed-spacer { flex: 1 1 auto; }
+.tx-2d-modes { flex: none; }
+.tx-2d-modes .ed-seg-btn { padding-inline: 8px; font-size: 12.5px; }
+.tx-2d-tools { display: flex; gap: 2px; flex: none; }
+/* touch-action: none: the stage handles pan and pinch itself; without it the browser would scroll / zoom the page
+   and fire pointercancel mid-gesture. */
+.tx-2d-stage { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; touch-action: none; cursor: grab; outline: none; }
+.tx-2d-stage:focus-visible { box-shadow: inset var(--ed-focus); }
+/* Pan / zoom wrapper: transform-origin 0 0 matches the math in view2d.js (pan is the top-left offset). */
+.tx-2d-inner { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.tx-2d-inner > * { display: block; }
+/* Drawings stay on light paper in both colour schemes (patterns, flats and drafts read as printed documents).
+   The --tx-* tokens are re-declared on these containers: custom properties inherit, so everything inside resolves
+   the light values even when :root carries the dark ones. */
+/* Drawings stay on light paper in both colour schemes (patterns, flats and drafts read as printed documents). */
+.tx-svg, .tx-flats, .tx-fabric-view, .tx-print-view { --tx-ink: #1d2330; --tx-muted: #6b7280; --tx-paper: #ffffff; --tx-cell: #eef0f3; --tx-line: rgba(0, 0, 0, .25); --tx-body: #ead9c6; }
+.tx-svg { background: var(--tx-paper); border-radius: 4px; box-shadow: var(--ed-shadow-sm); color: var(--tx-ink); }
+.tx-pattern text { fill: var(--tx-ink); }
+/* Tiny stroke widths: the pattern SVG is in centimetre units, 0.3 = 3 mm at 1:1. */
+.tx-pl:hover rect { stroke-width: .3; }
+.tx-flats { display: flex; gap: 24px; padding: 12px; background: var(--tx-paper); border-radius: 6px; color: var(--tx-ink); }
+.tx-flats figure, .tx-print-view figure, .tx-fabric-view figure { margin: 0; text-align: center; }
+.tx-flats figcaption, .tx-print-view figcaption, .tx-fabric-view figcaption { font-size: 12px; color: var(--tx-muted); margin-top: 4px; }
+.tx-flats svg { display: block; width: 360px; height: auto; }
+.tx-fabric-view, .tx-print-view { display: flex; gap: 18px; padding: 12px; background: var(--tx-paper); border-radius: 6px; color: var(--tx-ink); align-items: flex-start; }
+/* pixelated: textures and separations are small bitmaps shown enlarged; smoothing would blur the thread structure. */
+.tx-fabric-view img, .tx-print-view img { display: block; image-rendering: pixelated; border: 1px solid var(--ed-border); }
+.tx-swatch, .tx-repeat { width: 320px; height: 320px; border: 1px solid var(--ed-border); border-radius: 4px; background-repeat: repeat; }
+.tx-draft { display: block; }
+/* Drawdown cells are clickable (they toggle the weave). */
+.tx-draft rect { cursor: pointer; }
+.tx-draft .tx-dd:hover { stroke: var(--tx-accent); stroke-width: 1.5; }
+.tx-seps { display: grid; grid-template-columns: repeat(2, 120px); gap: 8px; }
+.tx-sep img { width: 120px; height: auto; }
+.tx-chip { display: inline-block; width: 11px; height: 11px; border-radius: 3px; vertical-align: -1px; border: 1px solid var(--ed-border-strong); }
+
+/* ===== panels =============================================================================================== */
+.tx-bmi { margin: 4px 0 0; }
+/* Measurements table: name | value | unit | reset. Rows use display: contents so their cells join this one grid and
+   all rows share column widths (a flex row per line could not align the columns). */
+.tx-meas { display: grid; grid-template-columns: minmax(0, 1fr) 84px 22px 30px; gap: 3px 6px; align-items: center; }
+.tx-meas-h { grid-column: 1 / -1; margin-top: 8px; font-size: 11.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-muted); }
+.tx-meas-h:first-child { margin-top: 0; }
+/* display: contents removes the row box: the title attribute still gives a tooltip on the cells, but the row
+   itself cannot be styled (no border / background), hence styling goes on the cells. */
+.tx-meas-row { display: contents; }
+.tx-meas-n { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* An overridden measurement is marked in the accent (e2e.js also checks .tx-over). */
+.tx-meas-row.tx-over .tx-meas-n { color: var(--tx-accent); font-weight: 600; }
+.tx-num { width: 100%; min-width: 0; padding-inline: 6px; text-align: end; font-variant-numeric: tabular-nums; }
+.tx-num.tx-small { width: 58px; }
+.tx-ro { text-align: end; font-variant-numeric: tabular-nums; color: var(--ed-muted); padding-inline: 6px; }
+.tx-unit { font-size: 12px; color: var(--ed-muted); }
+.tx-meas .ed-iconbtn { width: 28px; height: 28px; }
+.tx-size { margin: 8px 0 4px; }
+
+.tx-outfit { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.tx-outfit-row { display: flex; align-items: center; gap: 2px; padding: 2px 4px 2px 8px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); }
+.tx-outfit-row.tx-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.tx-link { border: 0; background: none; color: inherit; font: inherit; padding: 4px 0; cursor: pointer; text-align: start; }
+.tx-outfit-row.tx-on .tx-link { font-weight: 600; }
+.tx-gallery-groups { display: flex; flex-direction: column; gap: 10px; }
+.tx-ggroup-h { margin: 0 0 4px; font-size: 12px; font-weight: 600; letter-spacing: .02em; color: var(--ed-muted); text-transform: uppercase; }
+.tx-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 6px; }
+.tx-gcard {
+  display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 4px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm);
+  background: var(--ed-panel); color: var(--ed-text); font: inherit; font-size: 12.5px; cursor: pointer; text-align: center;
+}
+.tx-gcard:hover { background: var(--ed-hover); }
+.tx-gcard.tx-on { border-color: var(--ed-accent); box-shadow: 0 0 0 1px var(--ed-accent); }
+.tx-gcard small { color: var(--ed-muted); font-size: 11px; }
+.tx-gicon { display: block; width: 64px; height: 64px; color: var(--ed-text); }
+.tx-gicon svg { width: 100%; height: 100%; display: block; }
+
+/* Stacking order chips. counter-reset: st is unused (no counter() reads it): a leftover, harmless. */
+.tx-stack { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px; counter-reset: st; }
+.tx-stack li { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--ed-border); color: var(--ed-faint); }
+.tx-stack li.tx-on { color: var(--ed-text); border-color: var(--ed-border-strong); background: var(--ed-hover); }
+.tx-dets, .tx-layers, .tx-pls { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.tx-det, .tx-layer-row, .tx-pl-row { border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); padding: 6px 8px; }
+.tx-det-h { display: flex; align-items: center; gap: 8px; }
+.tx-det-h > .ed-spacer { flex: 1 1 auto; }
+.tx-det-b { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.tx-layer { font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--ed-accent-weak); color: var(--ed-accent); white-space: nowrap; }
+/* Inner layers (lining, canvas, interfacing, pocketing) get a muted chip: the visible shell details stand out. */
+.tx-det[data-layer="lining"] .tx-layer, .tx-det[data-layer="canvas"] .tx-layer, .tx-det[data-layer="interfacing"] .tx-layer, .tx-det[data-layer="pocketing"] .tx-layer { background: var(--ed-hover); color: var(--ed-muted); }
+.tx-layer-row .ed-field, .tx-pl-row .ed-field { margin-top: 6px; }
+.tx-layer-row .ap-row .ed-select { flex: 1 1 100px; min-width: 0; }
+
+.tx-order { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tx-order-l { font-size: 13px; min-width: 52px; color: var(--ed-muted); }
+.tx-order-i { display: inline-flex; align-items: center; gap: 2px; }
+.tx-cw { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; align-items: flex-end; }
+.tx-cw-i { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px; color: var(--ed-muted); }
+.tx-check { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+.tx-seamless[data-ok="false"] { color: var(--ed-warn); }
+
+/* ===== mockup mode ========================================================================================== */
+/* Mockup mode: main.js sets body[data-mode]; redefining the token on body re-sizes the aside without touching the
+   grid rule. */
+body[data-mode="mockup"] { --tx-aside-w: 320px; }
+/* Blanks: 3 columns (6 blanks, two rows); same specificity as .tx-gallery, wins by source order. */
+.tx-blanks { grid-template-columns: repeat(3, 1fr); }
+
+/* Below 1180px the two panes no longer fit side by side: one pane at a time, switched by tabs (data-tab on the
+   stage, set by main.js). The hidden pane gets display: none; view2d / the viewer re-fit when shown again. */
+/* ===== narrower screens ===================================================================================== */
+@media (max-width: 1180px) {
+  :root { --tx-aside-w: 320px; }
+  .tx-stage { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .tx-stage-tabs { display: inline-flex; justify-self: start; }
+  .tx-stage[data-tab="3d"] .tx-pane-2d, .tx-stage[data-tab="2d"] .tx-pane-3d { display: none; }
+}
+/* Phones: the page scrolls as a whole (fixed heights trap the user). column-reverse puts the stage ABOVE the panel
+   visually while the DOM (and tab order) keeps the panel first: keyboard users reach the controls first, touch users
+   see the result first. The step nav sticks to the top while the long panel scrolls under it. */
+@media (max-width: 760px) {
+  .ap-main.ap-wide { padding: 8px 8px 12px; }
+  .tx-app { height: auto; min-height: 0; }
+  .tx-work { display: flex; flex-direction: column-reverse; gap: 10px; }
+  .tx-stage { height: min(62vh, 540px); flex: none; }
+  .tx-aside { overflow: visible; }
+  .tx-panel { overflow: visible; }
+  .tx-steps { grid-template-columns: repeat(3, 1fr); position: sticky; top: 0; z-index: 3; background: var(--ed-panel); }
+  .tx-name { flex: 1 1 120px; width: auto; }
+  .tx-hide-s { display: none; }
+  .tx-flats svg { width: 240px; }
+  .tx-swatch, .tx-repeat { width: 220px; height: 220px; }
+  .tx-fabric-view, .tx-print-view { flex-direction: column; }
+}
+/* Very small phones: the mode switch shows icons only. font-size: 0 hides the text but keeps it in the DOM, so the
+   buttons keep their accessible names. */
+@media (max-width: 420px) {
+  .tx-mode .ed-seg-btn { font-size: 0; gap: 0; }
+  .tx-step { font-size: 12px; padding: 4px 5px; gap: 4px; }
+  .tx-meas { grid-template-columns: minmax(0, 1fr) 72px 20px 28px; }
+}
+
+/* material usage. .tx-num is declared a second time here (adds nowrap): the two rules merge, both apply. */
+/* material usage */
+.tx-usage { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.tx-usage th { text-align: start; font-weight: 600; color: var(--ed-muted); padding: 4px 6px; border-bottom: 1px solid var(--ed-border); }
+.tx-usage td { padding: 4px 6px; border-bottom: 1px solid var(--ed-border); }
+.tx-num { text-align: end; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tx-notions { margin: 8px 0; padding-inline-start: 18px; font-size: 12.5px; }
+.tx-layer-t { font-weight: 600; margin: 4px 0; }
+.tx-layer-under, .tx-layer-room { font-size: 12.5px; margin: 4px 0; }
+/* pattern edits: the selected piece and layer.
+   Stacked tiny drop-shadows draw an outline that follows the piece shape (a box-shadow would follow the box); sizes
+   are in the SVG's cm units (0.35 = 3.5 mm). */
+/* pattern edits: the selected piece and layer */
+.tx-pattern .tx-pc.tx-sel { filter: drop-shadow(0 0 0.35px var(--tx-accent)) drop-shadow(0 0 0.35px var(--tx-accent)) drop-shadow(0 0 0.35px var(--tx-accent)); }
+.tx-pattern .tx-layer.tx-sel { stroke-dasharray: 0.8 0.4; }
+.tx-pe-add { flex-wrap: wrap; }

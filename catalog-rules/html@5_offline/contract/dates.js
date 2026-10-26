@@ -1,0 +1,4 @@
+const isLeap=(y)=>(y%4===0&&y%100!==0)||y%400===0;const MONTH_DAYS=[31,28,31,30,31,30,31,31,30,31,30,31];const daysInMonth=(y,m)=>(m===2&&isLeap(y)?29:MONTH_DAYS[m-1]);const pad=(n,w=2)=>String(n).padStart(w,'0');const fmtISO=(dt)=>(dt?`${pad(dt.y,4)}-${pad(dt.m)}-${pad(dt.d)}`:'');function parseDate(s){if(s&&typeof s==='object'&&Number.isInteger(s.y))s=fmtISO(s);if(typeof s!=='string')return null;const t=s.trim();let m=/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s].*)?$/.exec(t);let y,mo,d;if(m){y=+m[1];mo=+m[2];d=+m[3];}
+else if((m=/^(\d{1,2})[./](\d{1,2})[./](\d{4})$/.exec(t))){d=+m[1];mo=+m[2];y=+m[3];}
+else return null;if(y<1000||y>9999||mo<1||mo>12||d<1||d>daysInMonth(y,mo))return null;return{y,m:mo,d};}
+const isoDate=(s)=>fmtISO(parseDate(s));export{isoDate};

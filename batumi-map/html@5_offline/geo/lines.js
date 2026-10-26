@@ -1,0 +1,19 @@
+const insideBBox=(p,b)=>p[0]>=b.south&&p[0]<=b.north&&p[1]>=b.west&&p[1]<=b.east;function clipSegment(a,b,box){const dx=b[1]-a[1],dy=b[0]-a[0];let t0=0,t1=1;const edges=[[-dx,a[1]-box.west],[dx,box.east-a[1]],[-dy,a[0]-box.south],[dy,box.north-a[0]]];for(const[p,q]of edges){if(p===0){if(q<0)return null;continue;}
+const r=q/p;if(p<0){if(r>t1)return null;if(r>t0)t0=r;}else{if(r<t0)return null;if(r<t1)t1=r;}}
+const at=(t)=>[a[0]+dy*t,a[1]+dx*t];return[at(t0),at(t1)];}
+function clipToBBox(pts,box){const runs=[];let cur=[];for(let i=1;i<pts.length;i++){const seg=clipSegment(pts[i-1],pts[i],box);if(!seg){if(cur.length>1)runs.push(cur);cur=[];continue;}
+if(!cur.length)cur.push(seg[0]);cur.push(seg[1]);if(!insideBBox(pts[i],box)){if(cur.length>1)runs.push(cur);cur=[];}}
+if(cur.length>1)runs.push(cur);return runs;}
+function chainWays(ways,{reverse=false}={}){const key=(p)=>p[0].toFixed(7)+','+p[1].toFixed(7);const list=(ways||[]).filter((w)=>w&&w.length>1).map((w)=>w.slice());const byStart=new Map(),byEnd=new Map();const endKeys=new Set();const add=(m,k,w)=>{if(!m.has(k))m.set(k,[]);m.get(k).push(w);};for(const w of list){add(byStart,key(w[0]),w);add(byEnd,key(w[w.length-1]),w);endKeys.add(key(w[w.length-1]));}
+const used=new Set();const grow=(w)=>{used.add(w);const chain=w.slice();for(;;){const k=key(chain[chain.length-1]);let next=(byStart.get(k)||[]).find((c)=>!used.has(c)),flip=false;if(!next&&reverse){next=(byEnd.get(k)||[]).find((c)=>!used.has(c));flip=!!next;}
+if(!next)return chain;used.add(next);const seq=flip?next.slice().reverse():next;for(let i=1;i<seq.length;i++)chain.push(seq[i]);if(chain.length>200000)return chain;}};const out=[];for(const w of list)if(!used.has(w)&&!endKeys.has(key(w[0])))out.push(grow(w));for(const w of list)if(!used.has(w))out.push(grow(w));return out;}
+function perimeterT(p,b){const h=b.east-b.west||1,v=b.north-b.south||1;const d=[Math.abs(p[0]-b.south),Math.abs(p[1]-b.east),Math.abs(p[0]-b.north),Math.abs(p[1]-b.west)];const side=d.indexOf(Math.min(...d));if(side===0)return(p[1]-b.west)/h;if(side===1)return 1+(p[0]-b.south)/v;if(side===2)return 2+(b.east-p[1])/h;return 3+(b.north-p[0])/v;}
+const corners=(b)=>[[b.south,b.west],[b.south,b.east],[b.north,b.east],[b.north,b.west]];function boundaryWalk(t0,t1,b,forward){const cs=corners(b);const out=[];const dist=forward?(t1-t0+4)%4:(t0-t1+4)%4;for(let step=1;step<=4;step++){const k=forward?Math.floor(t0)+step:Math.ceil(t0)-step;const kk=((k%4)+4)%4;const travelled=forward?(k-t0+4)%4:(t0-k+4)%4;if(travelled>=dist||travelled<=0)continue;out.push(cs[kk]);}
+return out;}
+function strictlyInside(p,b){const ev=(b.north-b.south)/1000,eh=(b.east-b.west)/1000;return p[0]>b.south+ev&&p[0]<b.north-ev&&p[1]>b.west+eh&&p[1]<b.east-eh;}
+function coastlineWaterRings(chains,box){const runs=[];for(const chain of chains){for(const r of clipToBBox(chain,box)){if(r.length<2||strictlyInside(r[0],box)||strictlyInside(r[r.length-1],box))continue;runs.push({pts:r,tIn:perimeterT(r[0],box),tOut:perimeterT(r[r.length-1],box)});}}
+if(!runs.length)return[];const back=(t0,t1)=>{const d=(t0-t1+4)%4;return d||4;};const used=new Set();const rings=[];for(let start=0;start<runs.length;start++){if(used.has(start))continue;const ring=[];let cur=start;for(let guard=0;guard<=runs.length;guard++){used.add(cur);for(const p of runs[cur].pts)ring.push(p);let next=-1,best=Infinity;for(let j=0;j<runs.length;j++){if(used.has(j)&&j!==start)continue;const d=back(runs[cur].tOut,runs[j].tIn);if(d<best){best=d;next=j;}}
+if(next<0)break;for(const p of boundaryWalk(runs[cur].tOut,runs[next].tIn,box,false))ring.push(p);if(next===start)break;cur=next;}
+if(ring.length>=3)rings.push(ring);}
+return rings;}
+export{coastlineWaterRings,chainWays};

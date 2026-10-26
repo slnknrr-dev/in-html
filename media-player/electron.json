@@ -1,0 +1,15 @@
+{
+  "productName": "Media Player",
+  "description": "The in-html media player as a desktop application.",
+  "page": "index.html",
+  "title": "Media Player",
+  "window": { "width": 1280, "height": 820, "minWidth": 360, "minHeight": 480, "backgroundColor": "#141218" },
+  "mini": { "hash": "mini", "width": 400, "height": 132 },
+  "external": ["https:", "http:", "mailto:"],
+  "probes": [
+    { "path": "api/info", "status": 200, "type": "application/json", "json": { "app": "media-player", "mode": "electron", "auth": false } },
+    { "path": "api/db", "status": 200, "type": "application/json" },
+    { "path": "api/fs/mounts", "status": 200, "type": "application/json" },
+    { "path": "api/tools", "status": 200, "type": "application/json" }
+  ]
+}

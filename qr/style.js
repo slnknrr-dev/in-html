@@ -1,0 +1,211 @@
+// qr/style.js - styled SVG of a QR matrix (qr.js qrMatrix): module shapes (square, rounded with neighbour-aware
+// corners and concave fillets, dots, diamonds, vertical bars), finder ring and eye shapes, solid or gradient fill, a
+// centred logo with cleared modules, and the analysis of what the logo covers against the error-correction budget.
+// One compact path per layer (modules, finder rings, eyes): abutting shapes inside one path render without seams.
+// Pure functions, no DOM.
+import { EC_RECOVERY, blockLayout, codewordOrder, dataModulePositions, functionModules, versionOfSize } from './spec.js';
+
+export const MODULE_STYLES = ['square', 'rounded', 'dots', 'diamond', 'bars'];
+export const FINDER_STYLES = ['square', 'rounded', 'circle'];
+export const EYE_STYLES = ['square', 'rounded', 'circle'];
+
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => '&#' + c.charCodeAt(0) + ';');
+const num = (v) => String(Math.round(v * 1000) / 1000);
+const isNone = (c) => !c || c === 'transparent' || c === 'none';
+
+// Logo box in matrix coordinates (modules, without the quiet zone). The cleared square is kept clear of the finder,
+// separator, format and version areas (9 modules from each finder corner), so `size` is clamped for small versions.
+//   -> { x, y, side (logo image), r0, c0, r1, c1 (cleared modules, inclusive), size (effective fraction) } | null
+// The logo is capped at 40 % of the side and must leave the finder rows/columns (9 modules + separator each side,
+// hence n - 18) untouched: covering a finder makes the code undetectable, which no error correction can repair.
+export function qrLogoBox(n, logo) {
+  if (!logo || !(logo.size > 0)) return null;
+  const pad = Math.max(0, +logo.pad || 0);
+  const maxSide = n - 18 - 2 * pad;
+  if (maxSide < 2) return null;
+  const side = Math.min(Math.max(0.05, Math.min(0.4, +logo.size)) * n, maxSide);
+  const c = n / 2, lo = c - side / 2 - pad, hi = c + side / 2 + pad;
+  // Cells overlapping the padded square by more than a sliver.
+  const r0 = Math.floor(lo + 0.05), r1 = Math.ceil(hi - 0.05) - 1;
+  return { x: c - side / 2, y: c - side / 2, side, r0, c0: r0, r1, c1: r1, size: side / n };
+}
+
+/**
+ * What a centred logo hides: { mask (Uint8Array n*n, 1 = cleared), cleared, dataCleared, dataModules, ratio
+ * (dataCleared / dataModules), codewordsHit, worstBlock: { hit, budget }, load (worst block hit / budget, > 1 cannot
+ * decode), nominal (EC_RECOVERY of the level) }. `ec` is the error-correction level of the matrix.
+ */
+// Why per-block accounting instead of "logo area < 30 % for level H": RS corrects per BLOCK, and interleaving spreads
+// each block over the symbol unevenly, so one block can be hit far harder than the average. The cleared modules are
+// mapped to codewords (dataModulePositions + codewordOrder) and each block's erasures are compared with its own
+// budget; load > 1 means at least one block cannot be decoded, whatever the average says.
+export function qrLogoCover(matrix, logo, ec = 'M') {
+  const n = matrix.length, v = versionOfSize(n);
+  const box = v ? qrLogoBox(n, logo) : null;
+  const mask = new Uint8Array(n * n);
+  const empty = { mask, cleared: 0, dataCleared: 0, dataModules: 0, ratio: 0, codewordsHit: 0, worstBlock: { hit: 0, budget: 0 }, load: 0, nominal: EC_RECOVERY[ec] || 0, box };
+  if (!v) return empty;
+  const fn = functionModules(v), pos = dataModulePositions(v), order = codewordOrder(v, ec);
+  const { ecLen, dataLens, total } = blockLayout(v, ec);
+  let dataModules = 0;
+  for (let i = 0; i < n * n; i++) if (!fn[i]) dataModules++;
+  if (!box) return { ...empty, dataModules };
+  const cwOf = new Int32Array(n * n).fill(-1);
+  for (let k = 0; k < total * 8; k++) cwOf[pos[k]] = k >> 3;
+  let cleared = 0, dataCleared = 0;
+  const hitCw = new Set();
+  for (let r = box.r0; r <= box.r1; r++) {
+    for (let c = box.c0; c <= box.c1; c++) {
+      const i = r * n + c;
+      mask[i] = 1; cleared++;
+      if (!fn[i]) { dataCleared++; if (cwOf[i] >= 0) hitCw.add(cwOf[i]); }
+    }
+  }
+  const perBlock = new Array(dataLens.length).fill(0);
+  for (const j of hitCw) perBlock[order[j][0]]++;
+  const budget = Math.floor(ecLen / 2), hit = Math.max(0, ...perBlock);
+  return {
+    mask, cleared, dataCleared, dataModules, ratio: dataCleared / dataModules, codewordsHit: hitCw.size,
+    worstBlock: { hit, budget }, load: budget ? hit / budget : Infinity, nominal: EC_RECOVERY[ec] || 0, box,
+  };
+}
+
+// Rounded rectangle path (clockwise, or counter-clockwise for holes) with corner radii [tl, tr, br, bl].
+function rrect(x, y, w, h, rad, ccw = false) {
+  const [tl, tr, br, bl] = Array.isArray(rad) ? rad : [rad, rad, rad, rad];
+  const arc = (r, dx, dy, sweep) => (r ? `a${num(r)} ${num(r)} 0 0 ${sweep} ${num(dx)} ${num(dy)}` : '');
+  if (!ccw) {
+    return `M${num(x + tl)} ${num(y)}h${num(w - tl - tr)}${arc(tr, tr, tr, 1)}v${num(h - tr - br)}${arc(br, -br, br, 1)}` +
+      `h${num(-(w - br - bl))}${arc(bl, -bl, -bl, 1)}v${num(-(h - bl - tl))}${arc(tl, tl, -tl, 1)}z`;
+  }
+  return `M${num(x + tl)} ${num(y)}${arc(tl, -tl, tl, 0)}v${num(h - tl - bl)}${arc(bl, bl, bl, 0)}h${num(w - bl - br)}` +
+    `${arc(br, br, -br, 0)}v${num(-(h - br - tr))}${arc(tr, -tr, -tr, 0)}z`;
+}
+function circle(cx, cy, r, ccw = false) {
+  const s = ccw ? 0 : 1;
+  return `M${num(cx - r)} ${num(cy)}a${num(r)} ${num(r)} 0 1 ${s} ${num(2 * r)} 0a${num(r)} ${num(r)} 0 1 ${s} ${num(-2 * r)} 0z`;
+}
+
+// Module layer path.
+function modulesPath(dark, n, q, style) {
+  let d = '';
+  if (style === 'square') {
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < n; c++) {
+        if (!dark(r, c)) continue;
+        const c0 = c;
+        while (c < n && dark(r, c)) c++;
+        d += `M${c0 + q} ${r + q}h${c - c0}v1h${c0 - c}z`;
+        c--;
+      }
+    }
+    return d;
+  }
+  if (style === 'bars') {
+    for (let c = 0; c < n; c++) {
+      for (let r = 0; r < n; r++) {
+        if (!dark(r, c)) continue;
+        const r0 = r;
+        while (r < n && dark(r, c)) r++;
+        const rad = 0.4, len = r - r0 - 2 * rad - 0.1;
+        d += `M${num(c + q + 0.1)} ${num(r0 + q + 0.05 + rad)}a${rad} ${rad} 0 0 1 0.8 0v${num(len)}a${rad} ${rad} 0 0 1 -0.8 0z`;
+        r--;
+      }
+    }
+    return d;
+  }
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      const x = c + q, y = r + q;
+      if (style === 'rounded') {
+        const R = 0.5;
+        if (dark(r, c)) {
+          const up = dark(r - 1, c), dn = dark(r + 1, c), lf = dark(r, c - 1), rt = dark(r, c + 1);
+          d += rrect(x, y, 1, 1, [!up && !lf ? R : 0, !up && !rt ? R : 0, !dn && !rt ? R : 0, !dn && !lf ? R : 0]);
+        } else if (dark.fillable(r, c)) {
+          // Concave fillets in the light cell where three dark neighbours meet, so the shapes flow together.
+          if (dark(r - 1, c) && dark(r, c - 1) && dark(r - 1, c - 1)) d += `M${x} ${y}h${R}a${R} ${R} 0 0 0 ${-R} ${R}z`;
+          if (dark(r - 1, c) && dark(r, c + 1) && dark(r - 1, c + 1)) d += `M${x + 1} ${y}v${R}a${R} ${R} 0 0 0 ${-R} ${-R}z`;
+          if (dark(r + 1, c) && dark(r, c + 1) && dark(r + 1, c + 1)) d += `M${x + 1} ${y + 1}h${-R}a${R} ${R} 0 0 0 ${R} ${-R}z`;
+          if (dark(r + 1, c) && dark(r, c - 1) && dark(r + 1, c - 1)) d += `M${x} ${y + 1}v${-R}a${R} ${R} 0 0 0 ${R} ${R}z`;
+        }
+        continue;
+      }
+      if (!dark(r, c)) continue;
+      if (style === 'dots') d += circle(x + 0.5, y + 0.5, 0.45);
+      else if (style === 'diamond') d += `M${x + 0.5} ${num(y - 0.04)}l0.54 0.54l-0.54 0.54l-0.54 -0.54z`;
+      else d += `M${x} ${y}h1v1h-1z`;
+    }
+  }
+  return d;
+}
+
+function finderPaths(n, q, finderStyle, eyeStyle) {
+  let ring = '', eye = '';
+  for (const [r0, c0] of [[0, 0], [0, n - 7], [n - 7, 0]]) {
+    const x = c0 + q, y = r0 + q;
+    if (finderStyle === 'circle') ring += circle(x + 3.5, y + 3.5, 3.5) + circle(x + 3.5, y + 3.5, 2.5, true);
+    else if (finderStyle === 'rounded') ring += rrect(x, y, 7, 7, 2.2) + rrect(x + 1, y + 1, 5, 5, 1.2, true);
+    else ring += rrect(x, y, 7, 7, 0) + rrect(x + 1, y + 1, 5, 5, 0, true);
+    if (eyeStyle === 'circle') eye += circle(x + 3.5, y + 3.5, 1.5);
+    else if (eyeStyle === 'rounded') eye += rrect(x + 2, y + 2, 3, 3, 0.9);
+    else eye += rrect(x + 2, y + 2, 3, 3, 0);
+  }
+  return { ring, eye };
+}
+
+/**
+ * Styled SVG markup of a matrix m[row][col] (true = dark).
+ * opts: { fg '#000000', bg '#ffffff' ('transparent' | 'none' | '' for none), gradient: null | { type 'linear' |
+ *         'radial', from (default fg), to, angle (degrees, CSS convention: 90 = left to right) }, quiet 4 (0..10),
+ *         moduleStyle 'square' | 'rounded' | 'dots' | 'diamond' | 'bars', finderStyle 'square' | 'rounded' |
+ *         'circle', eyeStyle 'square' | 'rounded' | 'circle', logo: null | { href (data: URL), size (fraction of
+ *         the matrix width, <= 0.4), pad (modules, default 1), plate (true: rounded backing plate in bg colour) },
+ *         title, id (prefix of the gradient id, default 'qr'), size (px width / height; default 100%) }
+ */
+export function qrStyledSVG(matrix, opts = {}) {
+  const n = matrix.length;
+  const fg = opts.fg || '#000000', bg = opts.bg == null ? '#ffffff' : opts.bg;
+  const q = Math.max(0, Math.min(10, Math.floor(+opts.quiet >= 0 ? +opts.quiet : 4)));
+  const W = n + 2 * q;
+  const moduleStyle = MODULE_STYLES.includes(opts.moduleStyle) ? opts.moduleStyle : 'square';
+  const finderStyle = FINDER_STYLES.includes(opts.finderStyle) ? opts.finderStyle : 'square';
+  const eyeStyle = EYE_STYLES.includes(opts.eyeStyle) ? opts.eyeStyle : 'square';
+  const id = String(opts.id || 'qr').replace(/[^\w-]/g, '') + '-g';
+  const logo = opts.logo && opts.logo.href ? { pad: 1, plate: true, ...opts.logo } : null;
+  const box = logo ? qrLogoBox(n, logo) : null;
+  const inFinder = (r, c) => (r < 7 && c < 7) || (r < 7 && c >= n - 7) || (r >= n - 7 && c < 7);
+  const cleared = (r, c) => !!box && r >= box.r0 && r <= box.r1 && c >= box.c0 && c <= box.c1;
+  const dark = (r, c) => r >= 0 && c >= 0 && r < n && c < n && !!matrix[r][c] && !inFinder(r, c) && !cleared(r, c);
+  dark.fillable = (r, c) => !inFinder(r, c) && !cleared(r, c);
+
+  let defs = '', fill = esc(fg);
+  const g = opts.gradient;
+  if (g && g.to) {
+    const from = esc(g.from || fg), to = esc(g.to);
+    const stops = `<stop offset="0" stop-color="${from}"/><stop offset="1" stop-color="${to}"/>`;
+    if (g.type === 'radial') {
+      defs = `<radialGradient id="${id}" gradientUnits="userSpaceOnUse" cx="${num(W / 2)}" cy="${num(W / 2)}" r="${num(n * 0.72)}">${stops}</radialGradient>`;
+    } else {
+      const a = ((+g.angle || 0) * Math.PI) / 180, dx = Math.sin(a), dy = -Math.cos(a);
+      const half = ((Math.abs(dx) + Math.abs(dy)) * n) / 2, c = W / 2;
+      defs = `<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${num(c - dx * half)}" y1="${num(c - dy * half)}" x2="${num(c + dx * half)}" y2="${num(c + dy * half)}">${stops}</linearGradient>`;
+    }
+    fill = `url(#${id})`;
+  }
+  const { ring, eye } = finderPaths(n, q, finderStyle, eyeStyle);
+  const mods = modulesPath(dark, n, q, moduleStyle);
+  const size = opts.size ? num(opts.size) : '100%';
+  let out = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${W}" width="${size}" height="${size}"` +
+    (opts.title ? ` role="img"><title>${esc(opts.title)}</title>` : ' aria-hidden="true">');
+  if (defs) out += `<defs>${defs}</defs>`;
+  if (!isNone(bg)) out += `<rect width="${W}" height="${W}" fill="${esc(bg)}"/>`;
+  if (mods) out += `<path fill="${fill}"${moduleStyle === 'square' ? ' shape-rendering="crispEdges"' : ''} d="${mods}"/>`;
+  out += `<path fill="${fill}" d="${ring}"/><path fill="${fill}" d="${eye}"/>`;
+  if (box) {
+    const px = box.c0 + q, py = box.r0 + q, ps = box.c1 - box.c0 + 1;
+    if (logo.plate) out += `<rect x="${px}" y="${py}" width="${ps}" height="${ps}" rx="${num(Math.min(1.2, ps / 6))}" fill="${esc(isNone(bg) ? '#ffffff' : bg)}"/>`;
+    out += `<image href="${esc(logo.href)}" x="${num(box.x + q)}" y="${num(box.y + q)}" width="${num(box.side)}" height="${num(box.side)}" preserveAspectRatio="xMidYMid meet"/>`;
+  }
+  return out + '</svg>';
+}

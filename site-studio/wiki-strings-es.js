@@ -1,0 +1,188 @@
+// site-studio/wiki-strings-es.js - editor strings, Spanish (same keys as strings-en.js).
+// Structure (data, header-level comments only): one flat object, keys namespaced by area (app.*, kp.* editor shell and
+// panels, b.* block names, f.* field labels, o.* option labels, set.* reader features, theme.*); values are strings with
+// {var} slots or plural objects (CLDR categories). en is the reference: ui/i18n.js falls back to it for a missing key,
+// so every key must exist in wiki-strings-en.js.
+export default {
+  'app.name': 'Knowledge Processor',
+
+  // shell
+  'kp.bases': 'Bases de conocimiento', 'kp.undo': 'Deshacer', 'kp.redo': 'Rehacer', 'kp.togglePreview': 'Mostrar u ocultar la vista previa', 'kp.lockAll': 'Volver a bloquear todo el contenido 451',
+  'kp.export': 'Publicar', 'kp.saving': 'Guardando…', 'kp.unsaved': 'Cambios sin guardar', 'kp.saved': 'Guardado', 'kp.saveFailed': 'No se pudo guardar: {msg}',
+  'kp.serverFailed': 'servidor no actualizado', 'kp.onServer': 'en el servidor', 'kp.noStorage': 'Este navegador no permite guardar datos aquí: los cambios solo se conservan hasta cerrar la pestaña. Descargue un archivo de proyecto para no perderlos.',
+  'kp.pages': 'Páginas', 'kp.page': 'Página', 'kp.media': 'Multimedia', 'kp.base': 'Base', 'kp.preview': 'Vista previa', 'kp.pageEditor': 'Editor de página', 'kp.panes': 'Paneles',
+
+  // pages
+  'kp.pagesCount': { one: '{n} página', other: '{n} páginas' }, 'kp.newPage': 'Nueva página', 'kp.newPageTitle': 'Nueva página', 'kp.secret': '451',
+  'kp.filterPages': 'Filtrar páginas', 'kp.collapse': 'Contraer', 'kp.expand': 'Expandir', 'kp.homePage': 'Portada', 'kp.secretPage': 'Página secreta (451)',
+  'kp.hasVariants': { one: '{n} variante secreta', other: '{n} variantes secretas' }, 'kp.versionsN': { one: '{n} versión', other: '{n} versiones' },
+  'kp.hiddenPage': 'No listada', 'kp.redirect': 'Redirección', 'kp.open': 'Abrir', 'kp.rename': 'Cambiar nombre', 'kp.newChild': 'Nueva subpágina',
+  'kp.newSecretChild': 'Nueva subpágina secreta', 'kp.moveTo': 'Mover a…', 'kp.moveUp': 'Subir', 'kp.moveDown': 'Bajar', 'kp.makeHome': 'Convertir en portada',
+  'kp.duplicate': 'Duplicar', 'kp.makeSecret': 'Hacer secreta (451)', 'kp.makePublic': 'Hacer pública', 'kp.delete': 'Eliminar', 'kp.topLevel': '(nivel superior)',
+  'kp.parentPage': 'Página superior', 'kp.move': 'Mover', 'kp.copySuffix': '(copia)', 'kp.cannotDuplicateSecret': 'Desbloquee la página y hágala pública para duplicarla.',
+  'kp.cannotDeleteHome': 'La portada no se puede eliminar. Convierta antes otra página en portada.', 'kp.deletePage': 'Eliminar página',
+  'kp.deletePageQ': '¿Eliminar «{title}»?', 'kp.deletePageKids': { one: '¿Eliminar «{title}»? Su {n} subpágina sube un nivel.', other: '¿Eliminar «{title}»? Sus {n} subpáginas suben un nivel.' },
+  'kp.pageTitle': 'Título', 'kp.noPage': 'No hay ninguna página seleccionada.',
+
+  // page editor
+  'kp.pageActions': 'Acciones de la página', 'kp.more': 'Más', 'kp.pageSettings': 'Ajustes de la página', 'kp.slug': 'Dirección', 'kp.slugHint': 'Parte de la URL: letras de cualquier escritura, dígitos, «-» y «/» para páginas anidadas.',
+  'kp.slugHome': 'La portada se publica en la raíz del sitio; la dirección se usa para los enlaces.', 'kp.slugFromTitle': 'Crear la dirección a partir del título', 'kp.fromTitle': 'Del título',
+  'kp.displayTitle': 'Título mostrado', 'kp.displayHint': 'Opcional: un título con marcado (cursiva, ruby) que se muestra en lugar del título simple.',
+  'kp.categories': 'Categorías', 'kp.category': 'categoría', 'kp.newCategory': 'Nueva categoría', 'kp.categoryName': 'Nombre de la categoría',
+  'kp.summary': 'Resumen', 'kp.summaryHint': 'Se muestra en las vistas previas al pasar el ratón, en las tarjetas y en los resultados de búsqueda (si no, el primer párrafo).', 'kp.image': 'Imagen', 'kp.imageHint': 'Para vistas previas y tarjetas (si no, la primera imagen de la página).',
+  'kp.date': 'Fecha', 'kp.author': 'Autor', 'kp.toc': 'Índice', 'kp.layout': 'Ancho', 'kp.hiddenHint': 'No aparece en listas, página aleatoria ni búsqueda; se llega a ella por enlaces.',
+  'kp.redirectTarget': 'Redirigir a', 'kp.pageLayers': 'Capas de esta página', 'kp.pageLayersHint': 'Interruptores que solo tiene esta página (las capas de la base están en los ajustes de la base).',
+  'kp.newLayer': 'Nueva capa', 'kp.layerName': 'Nombre de la capa', 'kp.onByDefault': 'visible por defecto', 'kp.remove': 'Quitar',
+  'kp.variants': 'Variantes', 'kp.publicVersion': 'Pública', 'kp.secretVersion': 'Versión secreta', 'kp.newVariant': 'Variante secreta', 'kp.newVariantHint': 'Una alternativa de esta página que solo se abre con contraseña (#?451=…)',
+  'kp.renameVariant': 'Cambiar nombre de la variante', 'kp.variantLabel': 'Nombre de la variante', 'kp.changePassword': 'Cambiar contraseña', 'kp.lock': 'Bloquear', 'kp.deleteVariant': 'Eliminar variante secreta',
+  'kp.deleteVariantQ': '¿Eliminar esta variante secreta? Su contenido se perderá.', 'kp.versions': 'Versiones', 'kp.mainVersion': 'Versión principal', 'kp.versionN': 'Versión {n}',
+  'kp.newVersion': 'Versión', 'kp.newVersionHint': 'Otra versión de la página (p. ej., «más sencilla»); los lectores cambian entre versiones', 'kp.simpler': 'Más sencilla', 'kp.fullVersion': 'Detallada',
+  'kp.versionHint': 'Las versiones son textos alternativos de la misma página, por ejemplo uno detallado y otro más sencillo. Tantas como quiera, con cualquier nombre.',
+  'kp.versionLabel': 'Nombre de la versión', 'kp.versionCopy': 'Empezar con una copia de la versión actual', 'kp.add': 'Añadir', 'kp.renameVersion': 'Cambiar nombre de la versión',
+  'kp.moveLeft': 'Mover a la izquierda', 'kp.moveRight': 'Mover a la derecha', 'kp.deleteVersion': 'Eliminar versión', 'kp.deleteVersionQ': '¿Eliminar la versión «{name}»?',
+  'kp.whatLinksHere': 'Lo que enlaza aquí', 'kp.noBacklinks': 'Todavía ninguna página enlaza aquí.',
+  'kp.lockedPage': 'Esta página está cifrada', 'kp.lockedVariant': 'Esta variante está cifrada', 'kp.lockedHint': 'Escriba su contraseña para editarla. La contraseña no se guarda; el contenido se descifra solo en esta pestaña.',
+  'kp.backToPublic': 'Versión pública', 'kp.secretPageEditing': 'Página secreta: todo aquí está sellado con su contraseña; sin ella, la dirección da un simple error 404.',
+  'kp.variantEditing': 'Variante secreta: los lectores sin contraseña ven la versión pública; con #?451=contraseña pueden cambiar a esta.',
+
+  // blocks
+  'kp.addBlock': 'Añadir bloque', 'kp.insertHere': 'Insertar un bloque aquí', 'kp.hidden': 'oculto', 'kp.edit': 'Editar', 'kp.show': 'Mostrar', 'kp.hide': 'Ocultar',
+  'kp.blockLayer': 'Visible con la capa', 'kp.noLayer': '(siempre visible)', 'kp.noLayersYet': 'Aún no hay capas: añádalas en los ajustes de la base o de la página.',
+  'kp.addItem': 'Añadir elemento', 'kp.item': 'Elemento', 'kp.columnN': 'Columna {n}', 'kp.row': 'Fila', 'kp.column': 'Columna',
+  'kp.tiersHint': 'Elija primero los niveles (capas) del bloque.', 'kp.tiersPick': 'Cada capa elegida es una línea bajo el original (transcripción, glosa, traducción…).',
+  'kp.ptsHint': 'Puntos: {n} (se editan en el editor de diagramas)', 'kp.editDiagram': 'Editar imagen y regiones', 'kp.diagramHint': 'Dibuje regiones en la imagen, arrastre las etiquetas para colocar sus líneas guía y enlace las regiones con páginas.',
+  'kp.linkPh': 'página, página#sección o https://…', 'kp.color': 'Color', 'kp.clear': 'Borrar', 'kp.format': 'Formato',
+  'kp.mk.bold': 'Negrita (Ctrl+B)', 'kp.mk.italic': 'Cursiva (Ctrl+I)', 'kp.mk.link': 'Enlace a una página (Ctrl+K)', 'kp.mk.heading': 'Encabezado', 'kp.mk.list': 'Lista',
+  'kp.mk.quote': 'Cita', 'kp.mk.ref': 'Nota al pie', 'kp.mk.cite': 'Referencia', 'kp.mk.layer': 'Texto de una capa', 'kp.mk.tip': 'Información emergente', 'kp.mk.ph': 'Marcador por rellenar', 'kp.mk.code': 'Código',
+
+  // media
+  'kp.addFiles': 'Añadir archivos (o soltarlos aquí)', 'kp.upload': 'Subir archivos', 'kp.mediaCount': { one: '{n} archivo', other: '{n} archivos' }, 'kp.noMedia': 'Todavía no hay archivos.',
+  'kp.mediaItem': 'Archivo', 'kp.name': 'Nombre', 'kp.alt': 'Texto alternativo', 'kp.altHint': 'Lo que muestra la imagen, para lectores de pantalla y por si no se carga.',
+  'kp.credit': 'Crédito / fuente', 'kp.secretMedia': 'Solo dentro del contenido 451', 'kp.secretMediaHint': 'Nunca se publica en claro: el archivo viaja cifrado dentro de las páginas secretas que lo usan.',
+  'kp.usedOn': 'Se usa en: {list}', 'kp.unused': 'No se usa en ninguna página pública.', 'kp.replace': 'Reemplazar', 'kp.replaced': 'Archivo reemplazado', 'kp.copyMarkup': 'Copiar marcado del enlace',
+  'kp.copied': 'Copiado', 'kp.deleteMedia': 'Eliminar archivo', 'kp.deleteMediaQ': '¿Eliminar este archivo?', 'kp.deleteMediaUsed': 'Este archivo se usa en: {list}. ¿Eliminarlo de todos modos?',
+  'kp.properties': 'Propiedades', 'kp.choose': 'Elegir…', 'kp.chooseMedia': 'Elija un archivo', 'kp.noFile': 'Sin archivo', 'kp.logo': 'Logotipo',
+
+  // diagram editor
+  'kp.dg.select': 'Seleccionar / mover', 'kp.dg.point': 'Punto', 'kp.dg.rect': 'Rectángulo', 'kp.dg.circle': 'Círculo', 'kp.dg.poly': 'Polígono', 'kp.dg.node': 'Caja (mapa conceptual)',
+  'kp.dg.help.select': 'Arrastre las regiones para moverlas y las etiquetas para colocarlas (la línea guía las sigue); las flechas las desplazan, Supr elimina.',
+  'kp.dg.help.point': 'Haga clic en la imagen para colocar un punto.', 'kp.dg.help.rect': 'Arrastre sobre la imagen para dibujar un rectángulo.', 'kp.dg.help.circle': 'Arrastre desde el centro para dibujar un círculo.',
+  'kp.dg.help.poly': 'Haga clic en las esquinas; doble clic o Intro para terminar.', 'kp.dg.help.none': 'Haga clic para colocar una caja con etiqueta (un nodo de un mapa conceptual).',
+  'kp.dg.picture': 'Imagen y aspecto', 'kp.dg.noPicture': 'Sin imagen', 'kp.dg.region': 'Región {n}', 'kp.dg.labelOnRegion': 'Etiqueta sobre la región',
+  'kp.dg.empty': 'Elija una herramienta arriba y dibuje sobre la imagen.', 'kp.dg.arrows': 'Flechas ({n})', 'kp.dg.addArrow': 'Añadir flecha', 'kp.apply': 'Aplicar',
+
+  // 451
+  'kp.deriving': 'Procesando la contraseña…', 'kp.derivingHint': 'La clave se deriva de la contraseña con una función lenta a propósito, para que adivinarla también sea lento.',
+  'kp.password': 'Contraseña', 'kp.passwordAgain': 'Repita la contraseña', 'kp.showPassword': 'Mostrar la contraseña', 'kp.passwordEmpty': 'Escriba una contraseña.', 'kp.passwordMismatch': 'Las contraseñas no coinciden.',
+  'kp.passwordHint': 'Los lectores abren este contenido con #?451=contraseña al final de la dirección o en la página «Desbloquear». Una contraseña perdida no se puede recuperar.',
+  'kp.unlockTitle': 'Desbloquear contenido 451', 'kp.unlock': 'Desbloquear', 'kp.unlockWrong': 'Esta contraseña no abre nada en esta base.', 'kp.unlockedN': { one: 'Desbloqueado: {n} elemento', other: 'Desbloqueados: {n} elementos' },
+  'kp.secretPageTitle': 'Página secreta', 'kp.notePh': 'solo la ve usted, p. ej. «borrador para el equipo»', 'kp.newSecretPage': 'Nueva página secreta (451)',
+  'kp.secretPageHint': 'Para los lectores sin contraseña, una página secreta no existe (un simple error 404); su dirección, título y texto están cifrados.',
+  'kp.editorNote': 'Nota en el editor', 'kp.newVariant2': 'Nueva variante secreta', 'kp.variantHint': 'Los lectores sin contraseña ven la página pública; con ella pueden cambiar a esta variante. Puede tener sus propias versiones.',
+  'kp.variantCopy': 'Empezar con una copia de la página pública', 'kp.passwordChanged': 'Contraseña cambiada', 'kp.homeCannotBeSecret': 'La portada no puede ser secreta.',
+  'kp.makeSecretDropsVariants': 'Las variantes secretas de esta página se eliminan cuando toda la página pasa a ser secreta. ¿Continuar?',
+  'kp.unlockFirst': 'Desbloquee primero la página.', 'kp.makePublicQ': '¿Publicar esta página en claro? Su contenido será legible para todos.',
+
+  // base settings
+  'kp.general': 'General', 'kp.baseTitle': 'Título', 'kp.tagline': 'Lema', 'kp.contentLang': 'Idioma del contenido', 'kp.contentLangHint': 'Se usa para la división de palabras, la ordenación, las fechas y la búsqueda.',
+  'kp.readerLang': 'Idioma de la interfaz de lectura', 'kp.readerLangHint': 'Botones, «Contenido», «Referencias», búsqueda y textos 404 de la base publicada.',
+  'kp.look': 'Aspecto', 'kp.theme': 'Tema', 'kp.accent': 'Color de acento', 'kp.accentHint': 'Enlaces, botones y resaltados (vacío: el color del tema).',
+  'kp.navigation': 'Navegación superior', 'kp.navHint': 'Enlaces de la cabecera y del menú lateral: una dirección de página, [[category:…]] o https://…', 'kp.label': 'Etiqueta', 'kp.addLink': 'Añadir enlace',
+  'kp.footer': 'Pie de página', 'kp.footerText': 'Texto del pie de página', 'kp.license': 'Línea de licencia', 'kp.layers': 'Capas (interruptores)',
+  'kp.layersHint': 'Las capas son partes de las páginas que los lectores muestran u ocultan con botones: transcripción, traducciones, glosas, comentarios… Marque bloques o texto con una capa.',
+  'kp.rubyLayer': 'Capa de furigana / ruby', 'kp.rubyHint': 'El texto ruby escrito como {base|reading} pertenece a esta capa.',
+  'kp.features': 'Funciones para lectores', 'kp.security': 'Cifrado 451', 'kp.kdf': 'Derivación de la clave',
+  'kp.kdfHint': 'Los sobres se cifran con AES-256-GCM y una clave derivada de la contraseña. Los cambios se aplican al contenido sellado a partir de ahora; los sobres existentes conservan sus ajustes.',
+  'kp.kdfT': 'Pasadas (Argon2id t)', 'kp.kdfM': 'Memoria, KiB (Argon2id m)', 'kp.kdfI': 'Iteraciones (PBKDF2)',
+  'theme.encyclopedia': 'Enciclopedia', 'theme.fandom-dark': 'Fandom (oscuro)', 'theme.magazine': 'Revista', 'theme.minimal': 'Minimalista', 'theme.scholarly': 'Académico',
+  'set.search': 'Búsqueda', 'set.previews': 'Vista previa de enlaces al pasar el ratón', 'set.recent': 'Cambios recientes', 'set.random': 'Página aleatoria', 'set.allPages': 'Todas las páginas',
+  'set.backlinks': 'Lo que enlaza aquí', 'set.crumbs': 'Ruta de navegación', 'set.unlock': 'Página «Desbloquear» (451)', 'set.subpages': 'Subpáginas bajo los artículos', 'set.schemeToggle': 'Selector claro / oscuro',
+  'set.footerInfo': 'Línea «Hecho con»', 'set.lastEdited': 'Fecha de la última edición', 'set.numbered': 'Contenido numerado', 'set.toc': 'Contenido', 'set.tocMin': 'Contenido automático a partir de este número de encabezados',
+
+  // preview
+  'kp.addressHint': 'La dirección de esta página en el modo de publicación elegido', 'kp.back': 'Atrás', 'kp.previewMode': 'Modo de publicación',
+  'kp.mode.single': 'Un archivo', 'kp.mode.static': 'Sitio estático', 'kp.mode.server': 'Servidor', 'kp.device': 'Ancho', 'kp.dev.desktop': 'Escritorio', 'kp.dev.tablet': 'Tableta', 'kp.dev.phone': 'Teléfono',
+  'kp.openTab': 'Abrir la versión de un solo archivo en una pestaña nueva', 'kp.previewUnavailable': 'La vista previa necesita el paquete del lector, que esta copia no tiene.', 'kp.popupBlocked': 'El navegador bloqueó la pestaña nueva.',
+  'kp.openHere': 'Abrir en la vista previa', 'kp.editPage': 'Editar página', 'kp.createPage': 'Crear esta página', 'kp.copyLink': 'Copiar marcado del enlace',
+
+  // publishing
+  'kp.exportTitle': 'Publicar', 'kp.exportSealed': { one: '{n} elemento de contenido 451 está bloqueado en el editor: se publica sellado, tal cual.', other: '{n} elementos de contenido 451 están bloqueados en el editor: se publican sellados, tal cual.' },
+  'kp.exportSealedAll': 'El contenido 451 siempre se publica cifrado; solo los sobres salen del editor.', 'kp.download': 'Descargar',
+  'kp.ex.single': 'Un archivo HTML', 'kp.ex.singleHint': 'Todas las páginas, imágenes y el lector en un archivo que funciona sin conexión y desde el disco; las páginas son #/direcciones.',
+  'kp.ex.static': 'Sitio estático', 'kp.ex.staticHint': 'Un archivo por página (buscadores, lectores sin JS) y un 404.html que sirve las páginas virtuales: GitHub / Codeberg Pages, Netlify, cualquier alojamiento estático.',
+  'kp.ex.server': 'Servidor (Node.js)', 'kp.ex.serverHint': 'server.mjs para Node 18+: direcciones reales, estado 404 para páginas desconocidas y una API de edición con token.',
+  'kp.ex.project': 'Archivo de proyecto', 'kp.ex.projectHint': 'Toda la base con sus archivos, para seguir en otro navegador o guardar una copia de seguridad (se importa en «Bases de conocimiento»).',
+  'kp.ex.publish': 'Publicar en un servidor', 'kp.ex.publishHint': 'Enviar la base a un servidor en marcha de la exportación «Servidor» (mediante su API de edición).',
+  'kp.ex.hosted': 'Publicado aquí', 'kp.ex.hostedHint': 'Este servidor publica la base en:', 'kp.urlStyle': 'Direcciones', 'kp.urlStyleHint': 'limpias: /page · carpetas: /page/ · html: /page.html (también funciona desde una carpeta en el disco)',
+  'kp.style.clean': 'Limpias (/page)', 'kp.style.folders': 'Carpetas (/page/)', 'kp.style.html': 'Archivos .html (/page.html)',
+  'kp.basePath': 'Ruta base', 'kp.basePathHint': 'Opcional: la carpeta de un sitio de proyecto, p. ej. /repository/ (se detecta automáticamente si está vacía).',
+  'kp.siteURL': 'Dirección del sitio', 'kp.siteURLHint': 'Opcional: la dirección completa para sitemap.xml y robots.txt.', 'kp.serverURL': 'Dirección del servidor', 'kp.token': 'Token',
+  'kp.serverURLMissing': 'Escriba la dirección del servidor.', 'kp.publish': 'Publicar', 'kp.published': 'Publicado', 'kp.openSite': 'Abrir el sitio',
+  'kp.exporting': 'Preparando: {what}…', 'kp.exportFailed': 'Error al publicar: {msg}',
+
+  // bases
+  'kp.inBrowser': 'En este navegador', 'kp.newBase': 'Nueva base de conocimiento a partir de una plantilla', 'kp.import': 'Importar un archivo de proyecto (.zip / .json)', 'kp.onServerTitle': 'En este servidor',
+  'kp.loading': 'Cargando…', 'kp.uploadToServer': 'Subir la base abierta a este servidor', 'kp.deleteBase': 'Eliminar base de conocimiento', 'kp.deleteBaseQ': '¿Eliminar «{title}» de este navegador? Si quiere conservarla, descargue antes un archivo de proyecto.',
+  'kp.notFoundBase': 'No se encontró la base de conocimiento.', 'kp.creating': 'Creando la base de conocimiento…', 'kp.created': 'Se creó «{title}»',
+  'kp.importExists': 'Ya existe', 'kp.importExistsQ': '«{title}» ya está en este navegador. ¿Reemplazarla? (Cancelar conserva ambas.)', 'kp.imported': 'Se importó «{title}»', 'kp.importFailed': 'Error al importar: {msg}',
+
+  // server sync
+  'kp.tokenTitle': 'Token de edición', 'kp.tokenHint': 'El servidor muestra su token al arrancar (o defina KP_TOKEN). Se guarda en este navegador.',
+  'kp.tokenWrong': 'El servidor no aceptó el token.', 'kp.retry': 'Reintentar', 'kp.conflict': 'El servidor tiene una versión más reciente de esta base.', 'kp.overwrite': 'Sobrescribir',
+  'kp.syncFailed': 'No se pudo actualizar el servidor: {msg}', 'kp.uploaded': 'Subido al servidor',
+
+  // block types (b.), descriptions (bd.), categories (c.)
+  'c.text': 'Texto', 'c.wiki': 'Enciclopedia', 'c.media': 'Multimedia e imágenes', 'c.language': 'Idiomas y textos paralelos', 'c.nav': 'Navegación', 'c.layout': 'Diseño',
+  'b.text': 'Texto', 'bd.text': 'Párrafos, encabezados, listas, enlaces, notas al pie',
+  'b.heading': 'Encabezado', 'bd.heading': 'Un encabezado de sección (también en el índice)',
+  'b.quote': 'Cita', 'bd.quote': 'Cita en bloque, cita destacada o epígrafe',
+  'b.verse': 'Versos / líneas', 'bd.verse': 'Poemas, letras de canciones, líneas numeradas y traducción paralela',
+  'b.callout': 'Recuadro', 'bd.callout': 'Nota, consejo, advertencia, esbozo, spoiler',
+  'b.details': 'Desplegable', 'bd.details': 'Una sección que el lector despliega',
+  'b.code': 'Código', 'bd.code': 'Texto preformateado',
+  'b.divider': 'Separador', 'bd.divider': 'Línea, estrellas o espacio',
+  'b.infobox': 'Ficha', 'bd.infobox': 'Recuadro de resumen con una imagen y datos clave',
+  'b.hatnote': 'Nota de encabezado', 'bd.hatnote': '«Artículo principal: …», «Para otros usos de este término, véase …»',
+  'b.toc': 'Índice', 'bd.toc': 'Colocar el índice o hacerlo flotar',
+  'b.references': 'Referencias', 'bd.references': 'La lista de notas al pie y citas',
+  'b.seealso': 'Véase también', 'bd.seealso': 'Páginas relacionadas',
+  'b.navbox': 'Plantilla de navegación', 'bd.navbox': 'Una tabla de navegación compartida por páginas relacionadas',
+  'b.disambig': 'Desambiguación', 'bd.disambig': 'Páginas con el mismo nombre',
+  'b.table': 'Tabla', 'bd.table': 'Filas y columnas, ordenables',
+  'b.timeline': 'Cronología', 'bd.timeline': 'Fechas y acontecimientos',
+  'b.pagelist': 'Lista de páginas', 'bd.pagelist': 'Subpáginas, una categoría, páginas recientes o elegidas, como lista o tarjetas',
+  'b.media': 'Imagen / multimedia', 'bd.media': 'Imagen, audio, vídeo o archivo; a la izquierda, a la derecha, centrado, con texto al lado; con enlace',
+  'b.gallery': 'Galería', 'bd.gallery': 'Cuadrícula, filas compactas o carrusel',
+  'b.diagram': 'Imagen anotada', 'bd.diagram': 'Regiones con líneas guía hacia etiquetas que enlazan con páginas; mapas conceptuales',
+  'b.banner': 'Banner', 'bd.banner': 'Una imagen grande con un título y un botón',
+  'b.interlinear': 'Texto interlineal', 'bd.interlinear': 'Líneas con transcripción, glosas y traducciones como capas conmutables; marcas de tiempo de audio',
+  'b.glossary': 'Glosario / vocabulario', 'bd.glossary': 'Términos con lecturas y significados (tabla o tarjetas)',
+  'b.flashcards': 'Tarjetas de estudio', 'bd.flashcards': 'Tarjetas que se dan la vuelta',
+  'b.columns': 'Columnas', 'bd.columns': 'Bloques uno al lado del otro',
+
+  // fields (f.)
+  'f.align': 'Posición', 'f.alt': 'Texto alternativo', 'f.anchor': 'Ancla', 'f.aspect': 'Proporciones', 'f.audio': 'Audio', 'f.author': 'Autor', 'f.back': 'Reverso',
+  'f.bg': 'Fondo', 'f.button': 'Texto del botón', 'f.caption': 'Leyenda', 'f.category': 'Categoría', 'f.code': 'Código', 'f.collapsed': 'Contraído', 'f.collapsible': 'Plegable',
+  'f.color': 'Color', 'f.cols': 'Columnas', 'f.compact': 'Compacto', 'f.date': 'Fecha', 'f.depth': 'Niveles', 'f.desc': 'Descripción', 'f.edges': 'Flechas', 'f.float': 'Flotante',
+  'f.frame': 'Marco', 'f.from': 'Desde', 'f.front': 'Anverso', 'f.group': 'Grupo', 'f.groups': 'Grupos', 'f.h': 'Alto', 'f.head': 'Celdas de encabezado', 'f.header': 'Fila de encabezado',
+  'f.heading': 'Con encabezado', 'f.id': 'Id', 'f.image': 'Imagen', 'f.intro': 'Introducción', 'f.items': 'Elementos', 'f.kind': 'Tipo', 'f.label': 'Etiqueta', 'f.labels': 'Etiquetas',
+  'f.lang': 'Código de idioma', 'f.layer': 'Capa', 'f.layout': 'Disposición', 'f.level': 'Nivel', 'f.limit': 'Como máximo', 'f.link': 'Enlace', 'f.links': 'Enlaces', 'f.loop': 'Bucle sin sonido',
+  'f.lx': 'Etiqueta x', 'f.ly': 'Etiqueta y', 'f.meaning': 'Significado', 'f.meaningLayer': 'Capa de significado', 'f.media': 'Archivo', 'f.note': 'Nota', 'f.noteLayer': 'Capa de notas',
+  'f.numbered': 'Numerado', 'f.numbers': 'Números de línea', 'f.open': 'Abierto', 'f.pts': 'Puntos', 'f.r': 'Radio', 'f.ratio': 'Proporciones', 'f.reading': 'Lectura',
+  'f.readingLayer': 'Capa de lectura', 'f.rows': 'Filas', 'f.shape': 'Forma', 'f.size': 'Tamaño', 'f.sort': 'Orden', 'f.sortable': 'Ordenable', 'f.source': 'Fuente',
+  'f.striped': 'Filas alternas', 'f.style': 'Estilo', 'f.subtitle': 'Subtítulo', 'f.summary': 'Resumen', 'f.t': 'Tiempo (s)', 'f.term': 'Término', 'f.text': 'Texto', 'f.tiers': 'Niveles (capas)',
+  'f.title': 'Título', 'f.to': 'Hasta', 'f.trLayer': 'Capa de traducción', 'f.translation': 'Traducción', 'f.value': 'Valor', 'f.w': 'Ancho', 'f.width': 'Ancho (px)', 'f.x': 'x', 'f.y': 'y',
+
+  // options (o.; o.<field>.<value> where the generic word does not fit)
+  'o.about': 'Acerca de (sin prefijo)', 'o.all': 'Todo', 'o.always': 'Siempre', 'o.arrow': 'Flecha', 'o.block': 'Bloque', 'o.border': 'Borde', 'o.both': 'Ambos', 'o.cards': 'Tarjetas',
+  'o.category': 'Categoría', 'o.center': 'Centro', 'o.children': 'Subpáginas', 'o.circle': 'Círculo', 'o.col': 'Primera columna', 'o.columns': 'Columnas', 'o.compact': 'Compacto',
+  'o.custom': 'Personalizado', 'o.dashed': 'Discontinua', 'o.date': 'Fecha', 'o.epigraph': 'Epígrafe', 'o.five': 'Cada 5 líneas', 'o.float': 'Texto alrededor', 'o.full': 'Ancho completo',
+  'o.further': 'Más información', 'o.grid': 'Cuadrícula', 'o.hero': 'Destacado + tarjetas', 'o.hover': 'Al pasar el ratón', 'o.important': 'Importante', 'o.info': 'Información',
+  'o.l': 'Grande', 'o.left': 'Izquierda', 'o.line': 'Línea', 'o.links': 'Páginas elegidas', 'o.list': 'Lista', 'o.m': 'Mediano', 'o.main': 'Artículo principal', 'o.none': 'Ninguno', 'o.note': 'Nota',
+  'o.numbers': 'Solo números', 'o.order': 'Orden de las páginas', 'o.overlay': 'Texto sobre la imagen', 'o.packed': 'Filas compactas', 'o.plain': 'Sencillo', 'o.point': 'Punto', 'o.poly': 'Polígono',
+  'o.pull': 'Cita destacada', 'o.recent': 'Recientes', 'o.rect': 'Rectángulo', 'o.right': 'Derecha', 'o.row': 'Primera fila', 'o.s': 'Pequeño', 'o.see': 'Véase también', 'o.slider': 'Carrusel',
+  'o.space': 'Espacio', 'o.split': 'Lado a lado', 'o.spoiler': 'Spoiler', 'o.stacked': 'Apilado', 'o.stars': 'Estrellas', 'o.stub': 'Esbozo', 'o.table': 'Tabla', 'o.thumb': 'Marco de miniatura',
+  'o.tip': 'Consejo', 'o.title': 'Título', 'o.warning': 'Advertencia',
+  'o.numbers.all': 'Cada línea', 'o.source.all': 'Todas las páginas', 'o.labels.numbers': 'Números + leyenda', 'o.labels.always': 'Siempre', 'o.shape.none': 'Caja (sin región)',
+  'o.toc.auto': 'Automático', 'o.toc.on': 'Siempre', 'o.toc.off': 'Nunca', 'o.layout.default': 'Normal', 'o.layout.wide': 'Ancho', 'o.layout.full': 'Ancho completo',
+};

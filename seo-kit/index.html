@@ -1,0 +1,40 @@
+<!doctype html>
+<!-- seo-kit/index.html: site page: generators for sitemap.xml, robots.txt, JSON-LD and head meta tags; UI built by main.js.
+     A shell, not a document: one render path (JS) owns content, i18n and state; static markup would duplicate it and
+     drift. Cost accepted: no content without JS. The three pages share this head and body skeleton and differ only in
+     title and entry script, so the shell (common.js startShell) renders identical navigation on each. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- charset first: must sit in the first 1024 bytes, before any non-ASCII byte (the dash in titles), or the parser re-decodes. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Without viewport mobile browsers lay out at ~980px and zoom out; the @media (max-width) rules of app.css would never fire. -->
+<title>SEO Kit</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234338ca'/%3E%3Cg fill='none' stroke='%23fff' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='14' cy='14' r='8'/%3E%3Cpath d='M26 26l-6.3-6.3M12 11l-2.4 3 2.4 3M16 11l2.4 3-2.4 3'/%3E%3C/g%3E%3C/svg%3E">
+<!-- Icon above: data: URI, zero requests, works from file:// and offline builds. URL-encoded, not base64: shorter
+     for SVG; '#' must be %23 or it starts a URL fragment and truncates the image.
+     Stylesheet order is a cascade contract: at equal specificity the later file wins.
+       1. ui/base.css  tokens (--ed-*), reset, primitives (.ed-*) shared by every app
+       2. ui/app.css   app shell (.ap-*)
+       3. ./app.css    this app (.sk-*), overrides 1 and 2 without !important
+     Reordering breaks overrides silently. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- .ap on body: root hook of the shell styles; a class rather than bare `body` so shared CSS never leaks onto
+     non-shell pages.
+     Hidden anchors = page registry read by common.js pageHref(id). The build renames pages and rewrites href in
+     markup reliably, while string literals in JS are rewritten only on exact match; the anchor is the single source of
+     truth. `hidden` is semantic, works before CSS loads and keeps the links out of the accessibility tree. e2e.js also
+     opens the sibling pages through these anchors. -->
+<a id="pg-site" href="index.html" hidden></a>
+<a id="pg-og" href="og.html" hidden></a>
+<a id="pg-check" href="check.html" hidden></a>
+<!-- Mount point: <main> landmark for assistive tech; id="main" is the hook the entry script empties and fills. -->
+<main class="ap-main" id="main"></main>
+<!-- type="module": deferred by spec (runs after parse, so #main exists), strict mode, ES imports of ../ libraries. -->
+<script type="module" src="./main.js"></script>
+</body>
+</html>

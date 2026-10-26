@@ -1,0 +1,409 @@
+/* photo/photo.css - styles of the photo library: the command card (cmdview.js), the editor (editor.js) and its
+   Transform · ImageMagick panel (cmdpanel.js). Needs ui/base.css tokens.
+
+   CONTRACT
+   - Namespace: `ph-` for the editor and command card, `pm-` for the ImageMagick panel built by cmdpanel.js. Shared
+     primitives (`ed-btn`, `ed-range`, `ed-seg-btn`, `ed-ic`, state `ed-on`) come from ui/base.css and are only ever
+     restyled in a ph-/pm- context (`.ph-opt .ed-range`), never bare, so other apps are unaffected.
+   - Specificity budget: one class; two for context or state (`.ph-lrow.ph-on`, `.ph-opt .ed-range` = 0,2,0, which beats
+     the primitive's single class without !important). Mode switches use one extra ancestor class on the editor root
+     (`.ph-mode-cmd ...`, `.ph-sheet-open ...`, `.ph-closed ...`), toggled by editor.js / panels.js, so a whole layout
+     changes by flipping one class instead of restyling elements from JS. No !important in this file.
+   - Tokens: own `--ph-*` colours (syntax highlighting, fidelity states, canvas and checkerboard) defined per theme in
+     the same three blocks ui/base.css uses: light default, OS dark unless the page forces light, forced dark. All
+     other colours come from `--ed-*`, so the editor follows the app theme.
+   - Fidelity colours are a fixed vocabulary across every view: green = exact, amber = approximate, grey = none (the
+     raster/magick.js step.fidelity values). Same meaning in the card, the steps, layer captions and the panel.
+
+   LAYOUT PRIMITIVES
+   - The editor is a 4-row grid (menubar, options, body, status) with the body row minmax(0, 1fr): the only row that
+     shrinks, so the canvas stage gets whatever height the page gives and the chrome never scrolls away.
+   - min-width: 0 / minmax(0, ...) wherever long text (commands, layer names) sits in a flex or grid child; the default
+     min-width: auto would make the column at least as wide as the longest unbreakable command.
+   - Below 860px the side panel becomes a bottom sheet (position: fixed + translateY) and the tool column a row. */
+
+/* Light theme tokens. The checkerboard pair is the standard transparency pattern; ph-canvas is a neutral grey so
+   neither a white nor a black picture blends into the surroundings. */
+:root {
+  --ph-code-bg: #f6f8fb; --ph-code-fg: #1f2633; --ph-opt: #1d5fd1; --ph-str: #0f7a4a; --ph-kw: #8a3ec9; --ph-cont: #9aa1ad;
+  --ph-frag-hover: rgba(37, 99, 235, .10); --ph-frag-on: rgba(37, 99, 235, .18); --ph-ok: #15803d; --ph-approx: #b45309; --ph-none: #6b7280;
+  --ph-canvas: #d9dde4; --ph-check-a: #ffffff; --ph-check-b: #e4e7ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ph-code-bg: #11151b; --ph-code-fg: #dce3ee; --ph-opt: #7fb0ff; --ph-str: #6fd6a0; --ph-kw: #d3a5ff; --ph-cont: #5f6b7c;
+    --ph-frag-hover: rgba(91, 140, 255, .16); --ph-frag-on: rgba(91, 140, 255, .28); --ph-ok: #4ade80; --ph-approx: #fbbf24; --ph-none: #9aa3b2;
+    --ph-canvas: #0c0f13; --ph-check-a: #2a2f37; --ph-check-b: #22262d;
+  }
+}
+:root[data-theme="dark"] {
+  --ph-code-bg: #11151b; --ph-code-fg: #dce3ee; --ph-opt: #7fb0ff; --ph-str: #6fd6a0; --ph-kw: #d3a5ff; --ph-cont: #5f6b7c;
+  --ph-frag-hover: rgba(91, 140, 255, .16); --ph-frag-on: rgba(91, 140, 255, .28); --ph-ok: #4ade80; --ph-approx: #fbbf24; --ph-none: #9aa3b2;
+  --ph-canvas: #0c0f13; --ph-check-a: #2a2f37; --ph-check-b: #22262d;
+}
+
+/* ---- command card ---------------------------------------------------------------------------------------- */
+/* The card shows the ImageMagick command of the current picture with clickable fragments linked to steps. */
+.ph-cmd { display: flex; flex-direction: column; gap: 10px; }
+.ph-cmd-head { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
+.ph-cmd-head .ph-cmd-title { margin: 0; }
+.ph-cmd-im { font: 600 10.5px/18px var(--ed-mono); padding: 0 7px; border-radius: 999px; color: var(--ed-muted); border: 1px solid var(--ed-border); white-space: nowrap; }
+.ph-cmd-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ph-cmd-btns { display: inline-flex; align-items: center; gap: 4px; }
+.ph-cmd-empty { margin: 0; }
+.ph-cmd-body { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.ph-cmd-code {
+  margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--ph-code-bg); color: var(--ph-code-fg); border: 1px solid var(--ed-border);
+  font: 12.5px/1.65 var(--ed-mono); white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 360px; tab-size: 2;
+}
+/* Default wraps (pre-wrap + overflow-wrap: anywhere) so a long -fx expression never forces horizontal page scroll;
+   the nowrap toggle restores copy-faithful line layout and scrolls inside the box instead (overflow: auto above). */
+.ph-cmd-code.ph-nowrap { white-space: pre; overflow-wrap: normal; }
+.ph-cmd-code:focus-visible { box-shadow: var(--ed-focus); }
+/* Fragments are inline spans that may wrap across lines; box-decoration-break: clone gives every line box its own
+   rounded corners and padding, instead of one highlight sliced open at the wrap. .ph-hover is the JS-driven twin of
+   :hover, set when the linked step (not the fragment) is hovered. */
+.ph-frag { border-radius: 4px; cursor: pointer; transition: background .12s, box-shadow .12s; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.ph-frag:hover, .ph-frag.ph-hover { background: var(--ph-frag-hover); }
+.ph-frag.ph-on { background: var(--ph-frag-on); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ed-accent) 55%, transparent); }
+.ph-c-opt { color: var(--ph-opt); font-weight: 600; white-space: nowrap; }
+.ph-c-str { color: var(--ph-str); }
+.ph-c-kw { color: var(--ph-kw); font-weight: 600; }
+.ph-c-cont { color: var(--ph-cont); }
+.ph-cmd-sum { display: flex; gap: 6px 12px; flex-wrap: wrap; align-items: center; font-size: 12.5px; }
+.ph-fid { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
+.ph-fid .ed-ic, .ph-fid svg { width: 15px; height: 15px; }
+.ph-fid-exact { color: var(--ph-ok); }
+.ph-fid-approx { color: var(--ph-approx); }
+.ph-fid-none { color: var(--ph-none); }
+.ph-cmd-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; counter-reset: ph-step; }
+.ph-step { border-radius: 8px; }
+/* Step row: icon, label, args. minmax(0, max-content) lets the label take its natural width but still shrink (and
+   ellipsize) before the args column is squeezed to nothing; the args column is the flexible remainder. */
+.ph-step-b {
+  display: grid; grid-template-columns: 20px minmax(0, max-content) minmax(0, 1fr); align-items: center; gap: 8px; width: 100%; padding: 5px 8px;
+  border: 0; border-radius: 8px; background: transparent; text-align: left; font-size: 12.5px; color: var(--ed-text);
+}
+.ph-step-b:hover, .ph-step.ph-hover .ph-step-b { background: var(--ed-hover); }
+.ph-step.ph-on .ph-step-b { background: var(--ed-accent-weak); }
+.ph-step-ic { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; }
+.ph-step-ic .ed-ic, .ph-step-ic svg { width: 13px; height: 13px; }
+.ph-step-exact .ph-step-ic { color: var(--ph-ok); background: color-mix(in srgb, var(--ph-ok) 14%, transparent); }
+.ph-step-approx .ph-step-ic { color: var(--ph-approx); background: color-mix(in srgb, var(--ph-approx) 16%, transparent); }
+.ph-step-none .ph-step-ic { color: var(--ph-none); background: var(--ed-hover); }
+.ph-step-l { font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ph-step-a { font: 11.5px var(--ed-mono); color: var(--ed-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ph-step-n { margin: 0 8px 4px 36px; font-size: 12px; color: var(--ed-muted); line-height: 1.4; }
+.ph-cmd-missing { padding: 8px 10px; border-radius: 10px; background: var(--ed-panel-2); border: 1px dashed var(--ed-border-strong); font-size: 12.5px; }
+.ph-miss-h { display: flex; align-items: center; gap: 6px; margin: 0 0 4px; font-weight: 600; }
+.ph-cmd-missing ul, .ph-cmd-notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.ph-cmd-missing li, .ph-cmd-notes li { display: flex; align-items: flex-start; gap: 6px; color: var(--ed-muted); font-size: 12px; line-height: 1.4; }
+.ph-cmd-missing .ed-ic, .ph-cmd-notes .ed-ic, .ph-cmd-missing svg, .ph-cmd-notes svg { width: 14px; height: 14px; margin-top: 1px; }
+/* Phone: args drop under the label (grid-column 2 of a 2-column template) rather than being ellipsized to nothing. */
+@media (max-width: 560px) {
+  .ph-cmd-tools { width: 100%; }
+  .ph-cmd-btns { margin-left: auto; }
+  .ph-step-b { grid-template-columns: 20px minmax(0, 1fr); }
+  .ph-step-a { grid-column: 2; }
+  .ph-cmd-code { font-size: 12px; padding: 10px; }
+}
+
+/* ---- editor -------------------------------------------------------------------------------------------------- */
+/* height: 100% + min-height: 0 + overflow: hidden: the editor fills its host and never grows with content; scrolling
+   happens inside the panels and the stage handles pan/zoom itself. */
+.ph-ed {
+  display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; height: 100%; min-height: 0; overflow: hidden;
+  background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: 14px; box-shadow: var(--ed-shadow-sm);
+}
+/* Horizontal scroll with a hidden scrollbar: on narrow windows the menus remain reachable by swipe without a bar
+   eating vertical space. */
+.ph-menubar { display: flex; align-items: center; gap: 2px; padding: 4px 8px; border-bottom: 1px solid var(--ed-border); min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.ph-mbtn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--ed-text); font-weight: 550; white-space: nowrap; }
+.ph-mbtn:hover { background: var(--ed-hover); }
+/* The "all menus" button and the sheet toggle exist in the DOM always and are revealed by the 860px query below. */
+.ph-mall, .ph-sheet-btn { display: none; }
+.ph-menubar .ed-btn { margin-left: 6px; }
+.ph-optbar {
+  display: flex; align-items: center; gap: 8px 14px; padding: 5px 10px; min-height: 44px; border-bottom: 1px solid var(--ed-border);
+  background: var(--ed-panel-2); overflow-x: auto; white-space: nowrap; scrollbar-width: thin;
+}
+.ph-opt-tool { display: inline-flex; align-items: center; gap: 6px; font-weight: 650; font-size: 12.5px; padding-right: 12px; border-right: 1px solid var(--ed-border); flex: none; }
+.ph-opt { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; flex: none; }
+.ph-opt .ed-range { width: 110px; }
+.ph-opt-l { color: var(--ed-muted); font-size: 12px; font-weight: 550; }
+.ph-opt-v { min-width: 44px; font-variant-numeric: tabular-nums; font-size: 12px; color: var(--ed-text); }
+.ph-opt-check { cursor: pointer; }
+.ph-opt-sel { width: auto; height: 28px; }
+.ph-opt .ed-seg-btn { min-height: 24px; padding: 0 8px; }
+.ph-opt-hint { font-size: 12px; color: var(--ed-muted); }
+.ph-opt-badge { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; background: var(--ed-accent-weak); color: var(--ed-accent); font-size: 12px; font-weight: 600; }
+.ph-opt-badge .ed-ic, .ph-opt-badge svg { width: 14px; height: 14px; }
+.ph-opt-cmd { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; font: 600 11px/20px var(--ed-mono); color: var(--ph-ok); background: color-mix(in srgb, var(--ph-ok) 12%, transparent); flex: none; }
+.ph-opt-cmd .ed-ic, .ph-opt-cmd svg { width: 13px; height: 13px; }
+/* Tool rail, stage, side panel. The panel is clamped to 260-310px: narrower clips the property forms, wider steals
+   canvas for nothing. min-height: 0 lets the grid row shrink below content so the panel scrolls (overflow-y below). */
+.ph-body { display: grid; grid-template-columns: 50px minmax(0, 1fr) minmax(260px, 310px); min-height: 0; }
+.ph-tools { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 6px 5px; border-right: 1px solid var(--ed-border); overflow-x: hidden; overflow-y: auto; scrollbar-width: none; }
+.ph-tool { flex: none; display: grid; place-items: center; width: 38px; height: 34px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--ed-muted); }
+.ph-tool:hover { background: var(--ed-hover); color: var(--ed-text); }
+.ph-tool.ed-on { background: var(--ed-accent-weak); color: var(--ed-accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ed-accent) 40%, transparent); }
+/* Foreground / background swatches overlapped as in classic editors. The native colour input is stretched over the
+   swatch at opacity 0: it keeps the platform picker and keyboard access while the swatch supplies the look. */
+.ph-colors { position: relative; flex: none; width: 40px; height: 48px; margin: 6px 0 4px; }
+.ph-sw { position: absolute; width: 24px; height: 24px; border-radius: 6px; border: 2px solid var(--ed-panel); box-shadow: 0 0 0 1px var(--ed-border-strong); cursor: pointer; overflow: hidden; }
+.ph-sw input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; border: 0; padding: 0; }
+.ph-sw-fg { left: 2px; top: 2px; z-index: 1; }
+.ph-sw-bg { left: 14px; top: 16px; }
+.ph-sw-x { position: absolute; right: -4px; top: -2px; width: 18px; height: 18px; padding: 0; border: 0; background: none; color: var(--ed-muted); }
+.ph-sw-x .ed-ic, .ph-sw-x svg { width: 13px; height: 13px; }
+.ph-sw-d { position: absolute; left: 0; bottom: -2px; width: 12px; height: 12px; padding: 0; border: 1px solid var(--ed-border-strong); background: linear-gradient(135deg, #000 50%, #fff 50%); border-radius: 3px; }
+/* touch-action: none hands every touch to the pointer handlers (pan, pinch, paint) instead of the browser scrolling or
+   zooming the page; user-select: none stops drags from selecting UI text. */
+.ph-stage { position: relative; overflow: hidden; background: var(--ph-canvas); touch-action: none; user-select: none; -webkit-user-select: none; }
+.ph-stage.ph-drop { box-shadow: inset 0 0 0 3px var(--ed-accent); }
+/* Two stacked canvases: .ph-view holds the composited picture, .ph-over the overlay (selection ants, handles, brush
+   cursor) and receives input. Redrawing the overlay never touches the expensive composite. */
+.ph-view, .ph-over { position: absolute; left: 0; top: 0; }
+.ph-over { outline: none; cursor: crosshair; }
+.ph-over:focus-visible { box-shadow: inset 0 0 0 2px var(--ed-accent); }
+.ph-over[data-tool="move"] { cursor: move; }
+.ph-over[data-tool="hand"], .ph-over.ph-grab { cursor: grab; }
+.ph-over.ph-grabbing { cursor: grabbing; }
+.ph-over[data-tool="zoom"] { cursor: zoom-in; }
+.ph-over[data-tool="text"] { cursor: text; }
+/* Cursor per tool via the data-tool attribute (0,2,0 incl. the attribute) rather than one class per tool: editor.js
+   sets a single attribute. Painting tools hide the system cursor because the overlay draws a brush-sized outline. */
+.ph-over[data-tool="brush"], .ph-over[data-tool="eraser"], .ph-over[data-tool="stamp"] { cursor: none; }
+/* In-place text entry positioned over the canvas by JS; white-space: pre matches how the text layer renders lines. */
+.ph-textedit {
+  position: absolute; z-index: 2; margin: 0; padding: 0; border: 1px dashed var(--ed-accent); outline: none; resize: none; overflow: hidden;
+  background: color-mix(in srgb, var(--ed-panel) 25%, transparent); white-space: pre; min-width: 40px; caret-color: var(--ed-accent);
+}
+.ph-busy {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 3; display: inline-flex; align-items: center; gap: 8px;
+  padding: 5px 12px 5px 7px; border-radius: 999px; background: var(--ed-panel); border: 1px solid var(--ed-border); box-shadow: var(--ed-shadow); font-size: 12px;
+}
+.ph-busy .ed-spinner { width: 16px; height: 16px; border-width: 2px; }
+.ph-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; overflow: auto; }
+.ph-welcome { width: min(480px, 100%); display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; padding: 26px 22px; border-radius: 16px; background: var(--ed-panel); border: 1px solid var(--ed-border); box-shadow: var(--ed-shadow); }
+.ph-welcome h2 { font-size: 18px; margin: 0; }
+.ph-welcome .ed-hint { margin: 0; }
+.ph-welcome-ic { display: grid; place-items: center; width: 52px; height: 52px; border-radius: 14px; color: var(--ed-accent-text); background: linear-gradient(135deg, var(--ed-accent), color-mix(in srgb, var(--ed-accent) 55%, #9333ea)); }
+.ph-welcome-ic .ed-ic, .ph-welcome-ic svg { width: 26px; height: 26px; }
+.ph-welcome-b, .ph-welcome-src { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+.ph-welcome-src { flex-direction: column; align-items: center; padding-top: 8px; border-top: 1px solid var(--ed-border); width: 100%; }
+.ph-welcome-src .ed-btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.ph-welcome-cmd { display: flex; align-items: flex-start; gap: 6px; text-align: left; }
+.ph-welcome-cmd .ed-ic { margin-top: 1px; }
+.ph-side { border-left: 1px solid var(--ed-border); overflow-y: auto; min-height: 0; scrollbar-width: thin; }
+.ph-status {
+  display: flex; align-items: center; gap: 12px; padding: 3px 10px; min-height: 30px; border-top: 1px solid var(--ed-border);
+  font-size: 12px; color: var(--ed-muted); white-space: nowrap; overflow: hidden; font-variant-numeric: tabular-nums;
+}
+.ph-st-zoom { border: 0; background: var(--ed-hover); border-radius: 6px; padding: 1px 8px; font-variant-numeric: tabular-nums; color: var(--ed-text); }
+.ph-st-v { display: inline-flex; align-items: center; gap: 4px; }
+.ph-st-v .ed-ic, .ph-st-v svg { width: 13px; height: 13px; }
+.ph-st-hint { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+
+/* panels: collapsible panes (aria-expanded drives the chevron rotation, so state and visuals cannot disagree). */
+.ph-panels { display: flex; flex-direction: column; }
+.ph-sheet-top { display: none; }
+.ph-pane { border-bottom: 1px solid var(--ed-border); }
+.ph-pane-h { display: flex; align-items: center; gap: 6px; width: 100%; padding: 9px 10px; border: 0; background: transparent; text-align: left; font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .04em; color: var(--ed-text); }
+.ph-pane-h > .ed-ic:first-child { width: 14px; height: 14px; color: var(--ed-muted); transition: transform .15s; }
+.ph-pane-h > .ed-ic:first-child svg { width: 14px; height: 14px; }
+.ph-pane-h[aria-expanded="true"] > .ed-ic:first-child { transform: rotate(90deg); }
+.ph-pane-h > span:nth-child(3) { flex: 1 1 auto; }
+.ph-pane-h .ed-ic:nth-child(2) { color: var(--ed-accent); }
+.ph-pane-b { padding: 0 10px 10px; display: flex; flex-direction: column; gap: 8px; }
+.ph-closed .ph-pane-b { display: none; }
+.ph-pane-empty { margin: 0; }
+.ph-badge { padding: 0 7px; border-radius: 999px; font-size: 10.5px; font-weight: 650; text-transform: none; letter-spacing: 0; background: color-mix(in srgb, currentColor 13%, transparent); }
+.ph-lhead { display: flex; flex-direction: column; gap: 6px; }
+.ph-blend { height: 30px; }
+.ph-lop { display: flex; align-items: center; gap: 8px; }
+.ph-lop .ed-range { flex: 1 1 auto; }
+.ph-llist { list-style: none; margin: 0; padding: 4px; display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel-2); max-height: 320px; overflow-y: auto; }
+.ph-lrow { display: flex; align-items: center; gap: 4px; border-radius: 8px; padding: 2px; }
+.ph-lrow.ph-on { background: var(--ed-accent-weak); }
+.ph-lrow.ph-hidden .ph-lmain { opacity: .5; }
+.ph-lrow.ph-drag { opacity: .4; }
+.ph-lrow.ph-dropto { box-shadow: inset 0 2px 0 var(--ed-accent); }
+.ph-lmain { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 2px; border: 0; background: transparent; border-radius: 6px; text-align: left; color: var(--ed-text); }
+/* Layer thumbnails over a checkerboard made of two offset 45-degree gradients: transparency shows as the usual pattern
+   without an image request. The mask thumb overrides with black (the masked-out value). */
+.ph-lthumb, .ph-lmask {
+  flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 5px; overflow: hidden; border: 1px solid var(--ed-border-strong);
+  background-color: var(--ph-check-a); background-image: linear-gradient(45deg, var(--ph-check-b) 25%, transparent 25%, transparent 75%, var(--ph-check-b) 75%), linear-gradient(45deg, var(--ph-check-b) 25%, transparent 25%, transparent 75%, var(--ph-check-b) 75%);
+  background-size: 10px 10px; background-position: 0 0, 5px 5px;
+}
+.ph-lthumb canvas, .ph-lmask canvas { max-width: 100%; max-height: 100%; display: block; }
+.ph-lthumb-ic { background: var(--ed-panel); color: var(--ed-accent); }
+.ph-lmask { padding: 0; cursor: pointer; background: #000; }
+.ph-lmask.ph-off { opacity: .45; box-shadow: inset 0 0 0 2px var(--ed-danger); }
+.ph-target .ph-lthumb, .ph-lmask.ph-target { box-shadow: 0 0 0 2px var(--ed-accent); }
+.ph-lname { display: flex; align-items: center; gap: 4px; min-width: 0; flex: 1 1 auto; font-size: 12.5px; }
+.ph-lname > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ph-lkind { color: var(--ed-muted); }
+.ph-lkind svg { width: 13px; height: 13px; }
+.ph-lbg { display: inline-flex; flex: none; color: var(--ed-faint); }
+.ph-lbg svg { width: 13px; height: 13px; }
+/* Second rule for .ph-lmain (first above): adds wrapping so the command caption (.ph-lcap, order 3, full basis) lands
+   on its own line under the name; the left margin 48px aligns it past the 40px thumbnail plus gap. Kept separate from
+   the first rule; merging them would not change the cascade (same specificity, nothing in between overrides). */
+.ph-lmain { flex-wrap: wrap; row-gap: 0; }
+.ph-lcap { flex: 1 0 100%; order: 3; margin: -2px 0 0 48px; font: 10.5px/1.35 var(--ed-mono); color: var(--ph-ok); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ph-lcap-approx { color: var(--ph-approx); }
+.ph-lrow.ph-ref-hover { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ed-accent) 70%, transparent); background: var(--ph-frag-hover); }
+.ph-lrename { height: 26px; font-size: 12.5px; }
+.ph-lfoot { display: flex; align-items: center; gap: 0; }
+.ph-ptitle { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ph-ptitle b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ph-ptitle .ed-ic { color: var(--ed-accent); }
+.ph-ptitle .ed-muted { margin-left: auto; font-size: 11.5px; }
+.ph-pf { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+/* Property row: label, slider, value. The fixed 46px value column keeps sliders the same length in every row. */
+.ph-pf-r { display: grid; grid-template-columns: minmax(76px, auto) minmax(0, 1fr) 46px; align-items: center; gap: 8px; }
+.ph-pf-r .ph-opt-v { text-align: right; min-width: 0; }
+.ph-pf-check { flex-direction: row; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer; }
+.ph-pf-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ph-pgroup { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--ed-border); }
+.ph-pg-h { display: flex; align-items: center; gap: 6px; margin: 0; font-weight: 600; font-size: 12.5px; }
+.ph-pgroup .ed-seg { width: 100%; }
+/* image-rendering: pixelated: the histogram canvas is drawn at low resolution and stretched; smoothing would blur the
+   bins into a haze. */
+.ph-hist { width: 100%; height: 56px; border-radius: 6px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); color: var(--ed-faint); image-rendering: pixelated; }
+.ph-curves { width: 100%; max-width: 260px; aspect-ratio: 1; border-radius: 8px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); color: var(--ed-text); touch-action: none; cursor: crosshair; }
+.ph-pcmd, .ph-pnote, .ph-dlg-cmd { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0; padding: 7px 9px; border-radius: 8px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); font-size: 12px; color: var(--ed-muted); }
+.ph-pcmd code, .ph-dlg-cmd code { font: 11.5px var(--ed-mono); color: var(--ph-opt); overflow-wrap: anywhere; flex: 1 1 140px; min-width: 0; }
+.ph-pcmd .ed-ic, .ph-pnote .ed-ic, .ph-dlg-cmd .ed-ic { color: var(--ph-ok); }
+.ph-pnote-none .ed-ic { color: var(--ph-none); }
+.ph-dlg-cmdnote { flex-basis: 100%; color: var(--ph-approx); }
+.ph-hlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; max-height: 220px; overflow-y: auto; }
+.ph-hbtn { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; text-align: left; font-size: 12.5px; color: var(--ed-text); }
+.ph-hbtn > span:nth-child(2) { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ph-hbtn .ed-ic:first-child { color: var(--ed-muted); }
+.ph-hbtn:hover { background: var(--ed-hover); }
+.ph-hrow.ph-on .ph-hbtn { background: var(--ed-accent-weak); color: var(--ed-accent); font-weight: 600; }
+.ph-hrow.ph-future .ph-hbtn { opacity: .45; }
+.ph-hrow { border-radius: 6px; }
+.ph-hrow.ph-ref-hover { background: var(--ph-frag-hover); }
+.ph-hcmd { display: flex; align-items: center; gap: 4px; margin: -2px 8px 3px 30px; font: 10.5px/1.4 var(--ed-mono); color: var(--ph-opt); min-width: 0; }
+.ph-hcmd > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ph-hcmd .ed-ic, .ph-hcmd svg { width: 11px; height: 11px; flex: none; color: var(--ph-ok); }
+.ph-pcmd-l { font-weight: 600; }
+.ph-pcmd-b { margin-left: auto; }
+.ph-pcmd .ph-pcmd-c { flex: 1 0 100%; max-height: 7.2em; overflow: auto; }
+/* mode switch */
+.ph-modes { margin: 0 6px; flex: none; }
+.ph-modes .ed-seg-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 28px; white-space: nowrap; }
+.ph-modes .ed-ic, .ph-modes svg { width: 15px; height: 15px; }
+/* Transform · ImageMagick: no tools, a wide panel beside the picture */
+.ph-mode-cmd .ph-tools, .ph-mode-cmd .ph-optbar { display: none; }
+.ph-ed.ph-mode-cmd { grid-template-rows: auto minmax(0, 1fr) auto; }
+.ph-mode-cmd .ph-body { grid-template-columns: minmax(0, 1fr) minmax(360px, 46%); }
+.ph-mode-cmd .ph-over { cursor: pointer; }
+.ph-mode-cmd .ph-over.ph-grabbing { cursor: grabbing; }
+.ph-mode-cmd .ph-pane-cmd .ph-pane-h > span:nth-child(3) { text-transform: none; letter-spacing: 0; }
+.pm { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.pm-intro { display: flex; gap: 8px; align-items: flex-start; margin: 0; padding: 8px 10px; border-radius: 10px; background: var(--ed-accent-weak); color: var(--ed-text); font-size: 12.5px; line-height: 1.45; }
+.pm-intro p { margin: 0; }
+.pm-intro .ed-ic { color: var(--ed-accent); margin-top: 1px; flex: none; }
+.pm-ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.pm-ctl .ed-seg-btn { min-height: 28px; padding: 0 9px; }
+.pm-ops { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; border: 1px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel-2); }
+.pm-ops-h { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12.5px; }
+.pm-ops-h b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pm-ops-h .ed-ic { color: var(--ed-accent); flex: none; }
+.pm-ops-h .ph-badge { margin-left: auto; }
+.pm-ops .ed-hint { margin: 0; }
+.pm-op { display: grid; grid-template-columns: minmax(0, 11em) minmax(0, 1fr); gap: 2px 10px; align-items: baseline; font-size: 12px; }
+.pm-op-l { color: var(--ed-text); font-weight: 550; }
+.pm-op code { font: 11.5px/1.45 var(--ed-mono); color: var(--ph-opt); overflow-wrap: anywhere; }
+.pm-op-approx .pm-op-l::after { content: ' ≈'; color: var(--ph-approx); font-weight: 700; }
+.pm-notebox { font-size: 12px; }
+.pm-notebox summary { display: flex; align-items: center; gap: 6px; cursor: pointer; font-weight: 600; color: var(--ed-text); }
+.pm-notebox summary .ed-ic { color: var(--ph-approx); }
+.pm-notes { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.pm-notes li { display: flex; gap: 6px; align-items: flex-start; padding: 4px 6px; border-radius: 6px; color: var(--ed-muted); line-height: 1.4; }
+.pm-notes li[role="button"] { cursor: pointer; }
+.pm-notes li[role="button"]:hover, .pm-notes li.pm-on { background: var(--ed-hover); color: var(--ed-text); }
+.pm-notes .ed-ic, .pm-notes svg { width: 14px; height: 14px; flex: none; margin-top: 1px; color: var(--ph-approx); }
+.pm-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pm-meta { font: 11.5px var(--ed-mono); color: var(--ed-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* Ligatures off in every command view: coding fonts merge '->' or '!=' into one glyph, and a command must read
+   (and copy) exactly as typed. Both properties, because some fonts expose them only via feature settings. */
+.pm-pre, .ph-hcmd, .pm-op code, .ph-pcmd code, .ph-lcap, .pm-file { font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
+.pm-pre {
+  margin: 0; padding: 12px 14px; border-radius: 10px; background: var(--ph-code-bg); color: var(--ph-code-fg); border: 1px solid var(--ed-border);
+  font: 12px/1.65 var(--ed-mono); white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: min(52vh, 520px); tab-size: 2;
+}
+.pm-pre.pm-nowrap { white-space: pre; overflow-wrap: normal; }
+.pm-pre:focus-visible { box-shadow: var(--ed-focus); }
+.pm-p { border-radius: 4px; cursor: pointer; transition: background .12s, box-shadow .12s; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.pm-p:hover, .pm-p.pm-hover { background: var(--ph-frag-hover); }
+.pm-p.pm-hl { background: var(--ph-frag-on); box-shadow: 0 0 0 1px color-mix(in srgb, var(--ed-accent) 55%, transparent); }
+.pm-files { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 0; font-size: 12px; color: var(--ed-muted); }
+.pm-files > .ed-ic { color: var(--ph-ok); }
+.pm-file { font: 11.5px var(--ed-mono); padding: 1px 6px; border-radius: 5px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); color: var(--ed-text); cursor: pointer; }
+.pm-file.pm-hl, .pm-file.pm-hover { border-color: var(--ed-accent); background: var(--ph-frag-on); }
+.pm-foot { margin: 0; }
+/* dialogs */
+.ph-dlg-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ph-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+/* 3x3 anchor picker of the canvas-size dialog. */
+.ph-anchor { display: grid; grid-template-columns: repeat(3, 34px); grid-template-rows: repeat(3, 28px); gap: 4px; }
+.ph-anchor button { display: grid; place-items: center; border: 1px solid var(--ed-border-strong); border-radius: 6px; background: var(--ed-panel); padding: 0; }
+.ph-anchor button i { width: 8px; height: 8px; border-radius: 2px; background: var(--ed-faint); }
+.ph-anchor button.ed-on { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.ph-anchor button.ed-on i { background: var(--ed-accent); }
+.ph-fprev-wrap { display: grid; place-items: center; padding: 8px; border-radius: 10px; background: var(--ph-canvas); }
+.ph-fprev { width: 300px; max-width: 100%; height: auto; image-rendering: pixelated; background-color: var(--ph-check-a); background-image: linear-gradient(45deg, var(--ph-check-b) 25%, transparent 25%, transparent 75%, var(--ph-check-b) 75%), linear-gradient(45deg, var(--ph-check-b) 25%, transparent 25%, transparent 75%, var(--ph-check-b) 75%); background-size: 12px 12px; background-position: 0 0, 6px 6px; }
+.ph-keys td:last-child { white-space: nowrap; }
+.ph-allmenu .ed-menu { max-height: 70vh; overflow-y: auto; }
+
+/* phones and narrow windows: tools in a row, panels in a bottom sheet with tabs */
+/* medium widths: the inactive mode and the send button show their icons only */
+@media (max-width: 1440px) {
+  .ph-modes .ed-seg-btn:not(.ed-on) .ph-btn-l, .ph-send .ph-btn-l { display: none; }
+}
+/* 860px: below it the three-column body cannot keep both a usable canvas and a 260px panel. The panel becomes a fixed
+   bottom sheet: translateY(105%) hides it off-screen (105, not 100, so its shadow does not peek in), visibility hidden
+   removes it from the tab order and the accessibility tree while closed; .ph-sheet-open slides it in. Panes become
+   tabs: one visible at a time (.ph-tab-on), the collapse state (.ph-closed) is ignored because a tab is always open. */
+@media (max-width: 860px) {
+  .ph-ed { border-radius: 0; border-left: 0; border-right: 0; }
+  .ph-mbtn:not(.ph-mall) { display: none; }
+  .ph-mall, .ph-sheet-btn { display: inline-flex; }
+  .ph-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
+  .ph-stage { grid-row: 1; }
+  .ph-tools { grid-row: 2; flex-direction: row; overflow-x: auto; overflow-y: hidden; border-right: 0; border-top: 1px solid var(--ed-border); padding: 4px 6px; }
+  .ph-tools > .ed-spacer { display: none; }
+  .ph-colors { margin: 0 4px; height: 38px; }
+  .ph-side {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; max-height: min(62vh, 560px); border: 1px solid var(--ed-border); border-radius: 16px 16px 0 0;
+    background: var(--ed-panel); box-shadow: var(--ed-shadow-lg); transform: translateY(105%); transition: transform .2s ease-out; visibility: hidden;
+  }
+  .ph-sheet-open .ph-side { transform: none; visibility: visible; }
+  .ph-sheet-top { display: flex; align-items: center; gap: 4px; position: sticky; top: 0; z-index: 1; padding: 6px 6px 4px; background: var(--ed-panel); border-bottom: 1px solid var(--ed-border); }
+  .ph-ptabs { display: flex; gap: 2px; flex: 1 1 auto; overflow-x: auto; scrollbar-width: none; }
+  .ph-ptab { display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--ed-muted); font-weight: 550; white-space: nowrap; }
+  .ph-ptab.ed-on { background: var(--ed-accent-weak); color: var(--ed-accent); }
+  .ph-pane { display: none; border: 0; }
+  .ph-pane.ph-tab-on { display: block; }
+  .ph-pane-h { display: none; }
+  .ph-closed .ph-pane-b { display: flex; }
+  .ph-pane-b { padding-top: 10px; }
+  .ph-llist { max-height: none; }
+  .ph-st-hint { display: none; }
+  .ph-opt .ed-range { width: 84px; }
+  .ph-mode-cmd .ph-body { grid-template-columns: minmax(0, 1fr); }
+  .ph-modes { margin: 0 2px; }
+  .pm-pre { max-height: none; }
+  .pm-op { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .ph-btn-l { display: none; }
+  .ph-st-pos { display: none; }
+  .ph-dlg-row { grid-template-columns: 1fr; }
+}

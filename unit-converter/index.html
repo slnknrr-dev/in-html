@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- unit-converter/index.html — converter page. A shell, not a document: all UI is built by main.js into <main>.
+     Why an empty shell: one render path (JS) for content, i18n and state; static markup would duplicate it and drift.
+     Cost accepted: no content without JS. Build (singlefile.js) strips every comment of this file from artifacts. -->
+<html lang="en">
+<!-- lang="en" is the static default only; ui/i18n.js rewrites it on language switch (screen readers, hyphenation). -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: must be inside the first 1024 bytes, before any non-ASCII text (title, icon), or the parser re-decodes. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Without viewport mobile browsers lay out at ~980px and zoom out; every @media (max-width) in app.css would never fire. -->
+<title>Unit Converter</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f46e5'/%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.2' stroke-linejoin='round' d='M5 21 21 5l6 6-16 16z'/%3E%3Cpath stroke='%23fff' stroke-width='2' d='M10 17l2 2M14 13l2 2M18 9l2 2'/%3E%3C/svg%3E">
+<!-- Icon as data: URI — zero requests, works from file:// and offline builds. URL-encoded (%3C, %23), not base64:
+     shorter for SVG and still diffable. '#' must be %23, else it starts a fragment and truncates the URI. -->
+
+<!-- Cascade order = specificity tie-breaker. Equal-specificity rules: later file wins. So the order is a contract:
+       1. ui/base.css  tokens (--ed-*), reset, primitives (.ed-input, .ed-btn) shared by every app
+       2. ui/app.css   app shell (.ap-*: header, main, cards)
+       3. ./app.css    this app (.uc-*), may override 1–2 without !important
+     Reordering breaks overrides silently: no error, wrong colours. Prefixes (ed-/ap-/uc-) are namespaces, not BEM. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- .ap on <body>: root hook for ui/app.css shell styles; scoping to a class (not bare `body`) lets the shared
+     stylesheet coexist with pages that are not app shells. -->
+
+<!-- Page registry as hidden anchors, read by common.js pageHref(id).
+     Why not hardcode 'tables.html' in JS: the build renames pages (publishName: APP.tables.html) and rewrites <a href>
+     in markup reliably; string literals in JS are rewritten only when exact. The anchor is the single source of truth.
+     `hidden` (not CSS display:none): semantic, works before CSS loads, excluded from a11y tree. -->
+<a id="pg-convert" href="index.html" hidden></a>
+<a id="pg-tables" href="tables.html" hidden></a>
+
+<!-- Mount point. <main> landmark: assistive tech jumps here directly. id="main" — stable hook for main.js. -->
+<main class="ap-main" id="main"></main>
+
+<!-- type="module": deferred by spec (runs after parse, <main> exists — no DOMContentLoaded needed), strict mode,
+     ES imports. Placed last anyway: harmless, readable. Bundled into one inline module by the build. -->
+<script type="module" src="./main.js"></script>
+</body>
+</html>

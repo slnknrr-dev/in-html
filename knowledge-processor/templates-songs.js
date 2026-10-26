@@ -1,0 +1,1536 @@
+// knowledge-processor/templates-songs.js - the "songs" template: an author's analysis (in Russian) of eleven songs of
+// Alexander Nepomnyashchy (1968-2007): one page per song with a detailed and a short version, cross-cutting pages
+// (motifs with a concept map, images, space, characters, metre, intertext, glossary, chronology), a help page and a
+// 451 page of working notes (password 'razbor451'). The lyrics are copyrighted and are NOT reproduced anywhere: the
+// analysis is written in the analyst's own words and every song page keeps empty quote slots ({{placeholder|…}}) for the
+// user's own short citations. Biographical facts come from the sources cited on the pages (opened 2026-10-13); what
+// could not be verified is marked with placeholders.
+//
+// Structure (top to bottom): helpers -> SVG illustrations (strings built at import, stored as media via svgMedia from
+// kit.js) -> shared blocks (navbox etc.) -> page specs -> the default export { id, icon, name, desc, spec({ lang }) }.
+// Contract checked by test.js: every page and version renders with no missing block and no red link (links to 451
+// pages excepted), every declared password opens at least one envelope, name/desc exist in all 7 UI languages.
+// Pages are data, not code: a block is { type, ...fields } as defined in blocks.js; text fields use markup.js syntax
+// ([[link]], {{template|...}}, {ruby|reading}). Comments stay outside template literals: inside, they would become
+// content. This is a large data file: only structure and non-obvious helpers are commented.
+import { svgMedia } from './kit.js';
+
+const ACC = '2026-10-13';
+
+// ---------------------------------------------------------------------------------------------
+// Media: abstract flat SVG illustrations (no portraits of real people).
+
+const svg = (w, h, body) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}">${body}</svg>`;
+const stars = (list, fill = '#fff6dc') => `<g fill="${fill}">${list.map(([x, y, r]) => `<circle cx="${x}" cy="${y}" r="${r || 1.5}"/>`).join('')}</g>`;
+
+const BANNER = svg(1200, 400, `<defs><linearGradient id="a" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d1330"/><stop offset=".62" stop-color="#28306a"/><stop offset="1" stop-color="#7a4f7f"/></linearGradient><linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4a4f6e"/><stop offset="1" stop-color="#151829"/></linearGradient><linearGradient id="c" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f6c766"/><stop offset="1" stop-color="#c8632b"/></linearGradient><radialGradient id="d"><stop offset="0" stop-color="#ffe9b0" stop-opacity=".85"/><stop offset="1" stop-color="#ffe9b0" stop-opacity="0"/></radialGradient></defs>` +
+  `<rect width="1200" height="400" fill="url(#a)"/>` +
+  stars([[60, 40], [140, 90, 1], [210, 30], [330, 70, 1], [420, 24], [520, 60, 1.2], [610, 34], [700, 80, 1], [760, 26], [840, 58], [1080, 40], [1130, 110, 1], [1160, 30], [470, 120, 1], [880, 140, 1], [300, 140, 1], [1040, 160, 1]]) +
+  `<circle cx="980" cy="90" r="96" fill="url(#d)"/><circle cx="980" cy="90" r="30" fill="#fff1c4"/>` +
+  `<g fill="#141938"><rect x="0" y="236" width="70" height="90"/><rect x="66" y="206" width="54" height="120"/><rect x="118" y="252" width="80" height="74"/><rect x="196" y="190" width="46" height="136"/><rect x="240" y="226" width="90" height="100"/><rect x="740" y="214" width="70" height="112"/><rect x="806" y="244" width="96" height="82"/><rect x="900" y="180" width="52" height="146"/><rect x="950" y="230" width="84" height="96"/><rect x="1030" y="200" width="60" height="126"/><rect x="1088" y="246" width="112" height="80"/></g>` +
+  `<g fill="#f2b544" opacity=".85"><rect x="80" y="220" width="8" height="10"/><rect x="98" y="244" width="8" height="10"/><rect x="206" y="206" width="8" height="10"/><rect x="220" y="236" width="8" height="10"/><rect x="262" y="244" width="8" height="10"/><rect x="756" y="232" width="8" height="10"/><rect x="826" y="262" width="8" height="10"/><rect x="914" y="198" width="8" height="10"/><rect x="930" y="236" width="8" height="10"/><rect x="968" y="250" width="8" height="10"/><rect x="1046" y="218" width="8" height="10"/><rect x="1110" y="264" width="8" height="10"/><rect x="1150" y="264" width="8" height="10"/></g>` +
+  `<rect y="322" width="1200" height="78" fill="#0b0e22"/><path d="M588 322h24l250 78H338z" fill="url(#b)"/><path d="M600 328v8M600 346v12M600 370v18" stroke="#f2b544" stroke-width="4"/>` +
+  `<g transform="translate(250 372) rotate(38) scale(.72)"><rect x="-15" y="-470" width="30" height="330" fill="#5b3a26"/><rect x="-24" y="-540" width="48" height="78" rx="9" fill="#3c2619"/><ellipse cx="0" cy="-130" rx="86" ry="72" fill="url(#c)"/><ellipse cx="0" cy="0" rx="118" ry="96" fill="url(#c)"/><circle cx="0" cy="-78" r="30" fill="#1a1530"/><rect x="-42" y="16" width="84" height="12" rx="4" fill="#3c2619"/><g stroke="#f7ecd0" stroke-width="1.3"><path d="M-9 22V-470M-3 22V-470M3 22V-470M9 22V-470"/></g></g>`);
+
+const LOGO = svg(64, 64, `<rect width="64" height="64" rx="14" fill="#1d2547"/><path d="M32 9c11 0 19 6 19 15 0 13-12 25-19 30-7-5-19-17-19-30 0-9 8-15 19-15z" fill="#e8913a"/><path d="M32 17l3 7 7.5.6-5.8 4.8 2 7.3L32 32.8l-6.7 3.9 2-7.3-5.8-4.8 7.5-.6z" fill="#fff1c4"/>`);
+
+const GUITAR = svg(400, 400, `<defs><radialGradient id="g" cx=".5" cy=".4" r=".6"><stop offset="0" stop-color="#2c3566"/><stop offset="1" stop-color="#0f1630"/></radialGradient><linearGradient id="w" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f6c766"/><stop offset="1" stop-color="#b8542a"/></linearGradient></defs><rect width="400" height="400" fill="url(#g)"/>` +
+  stars([[40, 50], [90, 120, 1], [330, 60], [360, 150, 1], [60, 300, 1], [350, 330]]) +
+  `<g transform="rotate(-18 200 220)"><rect x="188" y="20" width="24" height="170" fill="#5b3a26"/><rect x="180" y="0" width="40" height="34" rx="7" fill="#3c2619"/><ellipse cx="200" cy="210" rx="66" ry="56" fill="url(#w)"/><ellipse cx="200" cy="300" rx="92" ry="76" fill="url(#w)"/><g stroke="#ffe9b0" stroke-width="3"><path d="M200 222v-14M200 278v14M172 250h-14M228 250h14M181 231l-10-10M219 269l10 10M219 231l10-10M181 269l-10 10"/></g><circle cx="200" cy="250" r="20" fill="#fff1c4"/><rect x="168" y="318" width="64" height="10" rx="3" fill="#3c2619"/><g stroke="#f7ecd0" stroke-width="1"><path d="M194 322V24M198 322V24M202 322V24M206 322V24"/></g></g>`);
+
+const CASSETTE = svg(400, 260, `<rect width="400" height="260" fill="#eadfca"/><rect x="40" y="40" width="320" height="190" rx="16" fill="#2c3566"/><rect x="62" y="60" width="276" height="96" rx="8" fill="#f6efe0"/><rect x="62" y="60" width="276" height="22" fill="#c8632b"/><rect x="120" y="100" width="160" height="44" rx="22" fill="#1a1f3a"/><circle cx="148" cy="122" r="16" fill="#f6efe0"/><circle cx="252" cy="122" r="16" fill="#f6efe0"/><circle cx="148" cy="122" r="6" fill="#1a1f3a"/><circle cx="252" cy="122" r="6" fill="#1a1f3a"/><path d="M110 230l22-50h136l22 50z" fill="#1d2547"/><circle cx="150" cy="208" r="6" fill="#eadfca"/><circle cx="250" cy="208" r="6" fill="#eadfca"/><path d="M80 72h120" stroke="#f6efe0" stroke-width="4"/>`);
+
+const SUNSWALLOW = svg(400, 300, `<defs><linearGradient id="s" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1d1840"/><stop offset="1" stop-color="#8a4a5e"/></linearGradient><radialGradient id="u"><stop offset="0" stop-color="#fff1c4"/><stop offset=".55" stop-color="#f2b544"/><stop offset="1" stop-color="#f2b544" stop-opacity="0"/></radialGradient></defs><rect width="400" height="300" fill="url(#s)"/>` +
+  `<circle cx="200" cy="150" r="96" fill="url(#u)"/><circle cx="200" cy="150" r="34" fill="#fff6dc"/><g fill="none" stroke="#fff1c4" stroke-opacity=".5"><circle cx="200" cy="150" r="52"/><circle cx="200" cy="150" r="70"/></g>` +
+  `<path d="M300 70l34-16-20 22 16 14-22-8-6 18-5-20-28 4z" fill="#141938"/>` +
+  `<g fill="#141938"><path d="M0 300V262l20-40 20 40 20-52 20 52 20-36 20 36 20-60 20 60 20-44 20 44 20-56 20 56 20-40 20 40 20-62 20 62 20-38 20 38 20-50 20 50 20-34 20 34V300z"/></g>`);
+
+const DANCE = svg(400, 300, `<defs><linearGradient id="d" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#28306a"/><stop offset=".7" stop-color="#7a4f7f"/><stop offset="1" stop-color="#e8913a"/></linearGradient></defs><rect width="400" height="300" fill="url(#d)"/>` +
+  stars([[40, 30], [120, 60, 1], [350, 40], [300, 90, 1]]) +
+  `<circle cx="180" cy="170" r="110" fill="#111325"/><g fill="none" stroke="#2f3456"><circle cx="180" cy="170" r="96"/><circle cx="180" cy="170" r="82"/><circle cx="180" cy="170" r="68"/><circle cx="180" cy="170" r="54"/></g><circle cx="180" cy="170" r="30" fill="#c8432b"/><circle cx="180" cy="170" r="4" fill="#f6efe0"/>` +
+  `<circle cx="350" cy="56" r="14" fill="#9aa3c7"/><path d="M350 56l-34 58" stroke="#c9d4e3" stroke-width="7" stroke-linecap="round"/><path d="M306 132l-22 34" stroke="#c9d4e3" stroke-width="7" stroke-linecap="round"/><path d="M309 118l6 4M300 126l7 2" stroke="#f2b544" stroke-width="3"/>`);
+
+const PUPPET = svg(400, 300, `<rect width="400" height="300" fill="#efe4cf"/><rect x="90" y="24" width="220" height="200" fill="#6b4a2b"/><rect x="104" y="38" width="192" height="172" fill="#e9d6ae"/><path d="M150 200v-70a50 50 0 0 1 100 0v70z" fill="#b9a07a"/><path d="M164 200v-62a36 36 0 0 1 72 0v62z" fill="#3a2a22"/><path d="M200 196c-22 0-26-20-12-36 2 12 8 10 8 0 0-10 6-20 14-24-4 14 14 22 10 40-2 12-8 20-20 20z" fill="#e8913a"/><path d="M200 196c-9 0-12-10-5-18 2 6 5 4 5-2 6 6 10 20 0 20z" fill="#fff1c4"/><rect x="176" y="120" width="48" height="26" rx="6" fill="#4f5a6e"/>` +
+  `<g transform="translate(250 252) rotate(-14)"><circle cx="0" cy="0" r="18" fill="none" stroke="#e0a630" stroke-width="8"/><rect x="16" y="-4" width="84" height="8" fill="#e0a630"/><rect x="84" y="4" width="8" height="16" fill="#e0a630"/><rect x="70" y="4" width="8" height="12" fill="#e0a630"/></g>` +
+  `<g fill="#a5784a" stroke="#6b4a2b" stroke-width="2"><rect x="24" y="236" width="120" height="22" rx="11"/><rect x="34" y="214" width="110" height="22" rx="11"/></g><g fill="#d9b98a"><circle cx="135" cy="247" r="7"/><circle cx="135" cy="225" r="7"/></g>`);
+
+const BRICKS = svg(400, 300, `<defs><pattern id="p" width="60" height="30" patternUnits="userSpaceOnUse"><rect width="60" height="30" fill="#8a3e2e"/><path d="M0 1h60M0 16h60M30 1v15M1 16v14M59 16v14" stroke="#4a2219" stroke-width="3"/></pattern><radialGradient id="l"><stop offset="0" stop-color="#fff1c4"/><stop offset="1" stop-color="#f2b544" stop-opacity="0"/></radialGradient></defs><rect width="400" height="300" fill="url(#p)"/>` +
+  `<circle cx="210" cy="152" r="60" fill="url(#l)"/><rect x="180" y="137" width="60" height="30" fill="#fff6dc"/>` +
+  `<path d="M150 46q50-36 100 0q-50 36-100 0z" fill="#efe4cf" stroke="#141938" stroke-width="4"/><circle cx="200" cy="46" r="13" fill="#141938"/><circle cx="204" cy="42" r="4" fill="#efe4cf"/>` +
+  `<rect x="40" y="250" width="56" height="50" fill="#6b4a2b"/><ellipse cx="68" cy="250" rx="28" ry="9" fill="#d9b98a"/><ellipse cx="68" cy="250" rx="14" ry="4" fill="none" stroke="#6b4a2b" stroke-width="2"/>`);
+
+const FLOWER = svg(400, 300, `<defs><linearGradient id="n" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d1330"/><stop offset="1" stop-color="#2c3566"/></linearGradient><linearGradient id="f" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#c8432b"/><stop offset="1" stop-color="#f6c766"/></linearGradient></defs><rect width="400" height="300" fill="url(#n)"/>` +
+  stars([[30, 30], [80, 70, 1], [150, 24], [260, 40, 1], [330, 26], [370, 90, 1], [300, 120, 1]]) +
+  `<path d="M190 300l8-110h4l8 110z" fill="#3f4462"/><path d="M200 230V128" stroke="#4f7a5a" stroke-width="5"/><path d="M200 196c-20-4-30-16-30-28 14 2 26 12 30 28z" fill="#4f7a5a"/>` +
+  `<path d="M200 140c-30 0-44-26-34-52 6 14 14 16 14 6 0-16 8-34 20-44-2 16 16 26 18 44 8-6 8-16 6-24 14 14 16 40 4 56-6 10-16 14-28 14z" fill="url(#f)"/><path d="M200 136c-12 0-18-12-12-24 3 6 7 6 7 0 8 6 12 24 5 24z" fill="#fff1c4"/>` +
+  `<g transform="translate(70 200)"><circle r="30" fill="#f6efe0" stroke="#9aa3c7" stroke-width="4"/><path d="M0 0V-20M0 0l14 8" stroke="#141938" stroke-width="4" stroke-linecap="round"/><path d="M-30-6l18 4-8 10 20 10" stroke="#0d1330" stroke-width="3" fill="none"/></g><path d="M300 262l14-8 4 10z" fill="#f6efe0"/><path d="M330 246l10-12 6 12z" fill="#f6efe0"/>`);
+
+const MOTHS = svg(400, 300, `<defs><radialGradient id="o" cx=".5" cy=".85" r=".6"><stop offset="0" stop-color="#7a3b2e"/><stop offset="1" stop-color="#0f1630"/></radialGradient><linearGradient id="fl" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#c8432b"/><stop offset=".6" stop-color="#e8913a"/><stop offset="1" stop-color="#fff1c4"/></linearGradient></defs><rect width="400" height="300" fill="url(#o)"/>` +
+  `<path d="M200 262c-40 0-56-34-40-66 4 18 14 22 16 8 4-24 14-50 30-64-2 22 18 38 22 62 8-8 10-20 8-30 20 22 22 60 4 78-10 10-22 12-40 12z" fill="url(#fl)"/><g stroke="#4a2219" stroke-width="12" stroke-linecap="round"><path d="M140 282l120-22M140 260l120 22"/></g>` +
+  `<g fill="#e9e1d0">${[[60, 60, 1], [100, 96, .9], [320, 50, 1], [290, 92, .9], [150, 130, .8], [260, 132, .8], [184, 166, .7], [226, 160, .7]].map(([x, y, s]) => `<g transform="translate(${x} ${y}) scale(${s})"><ellipse cx="-7" cy="0" rx="8" ry="5" transform="rotate(-25)"/><ellipse cx="7" cy="0" rx="8" ry="5" transform="rotate(25)"/></g>`).join('')}</g>`);
+
+const SNOWBERRY = svg(400, 300, `<defs><linearGradient id="k" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1d2547"/><stop offset=".55" stop-color="#7a4f7f"/><stop offset="1" stop-color="#f2a65a"/></linearGradient></defs><rect width="400" height="300" fill="url(#k)"/>` +
+  `<g fill="#ffe9b0" opacity=".28"><path d="M200 170L120 0h40zM200 170L230 0h40zM200 170L330 10l30 20z"/></g><path d="M0 190l60-50 40 30 50-60 60 70 50-40 60 50 80-30v40H0z" fill="#26203f"/>` +
+  `<path d="M0 210q100-30 200 0t200 0V300H0z" fill="#eef2f7"/><path d="M0 250q120-24 240 4t160-10V300H0z" fill="#dfe7f1"/>` +
+  `<g><circle cx="110" cy="236" r="9" fill="#c8432b"/><path d="M104 228l6-6 6 6z" fill="#3f6b52"/><circle cx="270" cy="262" r="9" fill="#c8432b"/><path d="M264 254l6-6 6 6z" fill="#3f6b52"/><circle cx="190" cy="282" r="8" fill="#c8432b"/></g><g fill="#eef2f7"><ellipse cx="114" cy="230" rx="14" ry="5"/><ellipse cx="266" cy="256" rx="14" ry="5"/></g>` +
+  `<g fill="#bfe0f2" stroke="#ffffff" stroke-width="1.5"><path d="M60 270l14-10 4 16z"/><path d="M320 226l16 2-10 10z"/><path d="M220 236l10-12 6 14z"/></g>`);
+
+const TRAIN = svg(400, 300, `<defs><radialGradient id="h" cx=".5" cy=".42" r=".5"><stop offset="0" stop-color="#fff1c4"/><stop offset=".25" stop-color="#f2b544" stop-opacity=".7"/><stop offset="1" stop-color="#0f1630" stop-opacity="0"/></radialGradient></defs><rect width="400" height="300" fill="#0f1630"/><rect width="400" height="300" fill="url(#h)"/>` +
+  `<path d="M0 300l196-174h8L400 300z" fill="#1a1f3a"/><g stroke="#9aa3c7" stroke-width="3"><path d="M120 300l78-174M280 300l-78-174"/></g><g stroke="#4a4f6e" stroke-width="3"><path d="M150 236h100M170 196h60M182 168h36M190 150h20"/></g><circle cx="200" cy="124" r="10" fill="#fff6dc"/>` +
+  `<g fill="#9aa3c7" opacity=".7">${[[40, 40], [90, 80], [330, 60], [300, 110], [60, 150], [360, 170], [140, 30], [250, 30]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="2.5"/>`).join('')}</g>`);
+
+const ROAD = svg(400, 300, `<defs><linearGradient id="r" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d1330"/><stop offset="1" stop-color="#3a3f6a"/></linearGradient></defs><rect width="400" height="300" fill="url(#r)"/>` +
+  stars([[30, 24], [70, 60, 1], [120, 30], [180, 70, 1], [240, 20], [300, 50, 1], [350, 30], [380, 90, 1], [60, 110, 1], [330, 120, 1]]) +
+  `<path d="M0 150h400v150H0z" fill="#141938"/><path d="M190 150h20l130 150H60z" fill="#2a2e45"/><path d="M200 156v8M200 176v14M200 206v20M200 246v30" stroke="#f2b544" stroke-width="4"/>` +
+  stars([[150, 270, 1.8], [250, 250, 1.6], [180, 210, 1.2], [226, 190, 1], [120, 292, 2]], '#ffe9b0') +
+  `<rect x="330" y="150" width="6" height="80" fill="#9aa3c7"/><circle cx="333" cy="146" r="18" fill="#f6efe0" stroke="#c8432b" stroke-width="5"/>`);
+
+const HORSES = svg(400, 300, `<defs><linearGradient id="x" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d1330"/><stop offset="1" stop-color="#4a1f35"/></linearGradient><linearGradient id="z" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fff1c4" stop-opacity="0"/><stop offset="1" stop-color="#fff1c4"/></linearGradient></defs><rect width="400" height="300" fill="url(#x)"/>` +
+  `<g fill="none" stroke="#c8432b" stroke-width="7" stroke-linecap="round">${[[40, 90], [110, 60], [180, 96], [250, 54], [320, 84]].map(([x, y]) => `<path d="M${x} ${y}q20-26 46-10q-10 4-12 14l14 18M${x + 10} ${y + 2}l-8 22M${x + 30} ${y + 4}l6 20"/>`).join('')}</g>` +
+  `<path d="M260 20l90 34" stroke="url(#z)" stroke-width="3"/>` +
+  `<g fill="#0a0d1f"><path d="M0 300V230l20-50 20 50 16-70 16 70 24-56 22 56 18-80 18 80 26-60 20 60 18-70 18 70 22-50 20 50 18-74 18 74 22-56 24 56 20-66 20 66V300z"/></g><g fill="#e9e1d0"><rect x="70" y="200" width="5" height="100"/><rect x="236" y="190" width="5" height="110"/><rect x="330" y="206" width="5" height="94"/></g>`);
+
+const TRAM = svg(400, 300, `<defs><linearGradient id="t" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#28306a"/><stop offset=".6" stop-color="#9a6fa0"/><stop offset="1" stop-color="#f6c08a"/></linearGradient></defs><rect width="400" height="300" fill="url(#t)"/>` +
+  `<g fill="#f6efe0" opacity=".6"><ellipse cx="80" cy="230" rx="70" ry="18"/><ellipse cx="320" cy="250" rx="90" ry="20"/><ellipse cx="300" cy="70" rx="50" ry="12"/></g><path d="M0 60L400 20M0 74L400 34" stroke="#141938" stroke-width="2"/>` +
+  `<g transform="rotate(-8 200 150)"><path d="M190 98l20-36M210 98l-6-38" stroke="#141938" stroke-width="3"/><rect x="110" y="100" width="190" height="76" rx="14" fill="#c8432b"/><rect x="110" y="160" width="190" height="16" fill="#9e2f22"/><g fill="#fff1c4"><rect x="126" y="114" width="30" height="30" rx="4"/><rect x="166" y="114" width="30" height="30" rx="4"/><rect x="206" y="114" width="30" height="30" rx="4"/><rect x="246" y="114" width="40" height="40" rx="4"/></g></g>` +
+  `<path d="M205 60l4-10 3 10 10 2-10 3-3 10-4-10-10-3z" fill="#fff6dc"/><g fill="#141938"><path d="M60 120l10-6 10 6-10-2z"/><path d="M340 140l8-5 8 5-8-2z"/></g>`);
+
+const METRE = svg(600, 220, `<rect width="600" height="220" fill="#f6efe0"/>` + [['ямб', '0101010'], ['хорей', '1010101'], ['дактиль', '1001001'], ['амфибрахий', '0100100'], ['анапест', '0010010']].map(([name, pat], i) => {
+  const y = 22 + i * 40;
+  return `<text x="20" y="${y + 18}" font-family="system-ui, sans-serif" font-size="16" fill="#1d2547">${name}</text>` + [...pat].map((c, j) => c === '1' ? `<rect x="${170 + j * 56}" y="${y - 4}" width="34" height="30" rx="5" fill="#c8632b"/>` : `<rect x="${170 + j * 56}" y="${y + 14}" width="34" height="12" rx="4" fill="#9aa3c7"/>`).join('');
+}).join(''));
+
+const VERTICAL = svg(800, 600, `<defs><linearGradient id="v1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0d1330"/><stop offset="1" stop-color="#3a3f7a"/></linearGradient><linearGradient id="v2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3a2a22"/><stop offset="1" stop-color="#140e0b"/></linearGradient></defs><rect width="800" height="200" fill="url(#v1)"/>` +
+  stars([[40, 30], [120, 80, 1], [200, 40], [300, 100, 1], [380, 30], [460, 70], [520, 20, 1], [620, 90, 1], [700, 40], [760, 120, 1]]) +
+  `<path d="M60 170Q400 20 760 120" fill="none" stroke="#f2b544" stroke-width="3" stroke-dasharray="10 10"/><rect x="540" y="62" width="44" height="22" rx="5" fill="#c8432b" transform="rotate(-12 562 73)"/>` +
+  `<rect y="200" width="800" height="230" fill="#2c3566"/><g fill="#141938"><rect x="20" y="250" width="40" height="180"/><rect x="58" y="226" width="46" height="204"/><rect x="102" y="280" width="54" height="150"/><rect x="154" y="240" width="40" height="190"/><rect x="192" y="300" width="60" height="130"/></g>` +
+  `<path d="M392 230h16l90 200H302z" fill="#4a4f6e"/><path d="M400 240v14M400 270v22M400 312v30M400 362v40" stroke="#f2b544" stroke-width="5"/>` +
+  `<g fill="#24402f"><path d="M540 430l30-120 30 120zM590 430l34-150 34 150zM650 430l28-110 28 110zM700 430l34-140 34 140z"/></g><g fill="#e9e1d0"><rect x="604" y="330" width="5" height="100"/><rect x="684" y="340" width="5" height="90"/></g>` +
+  `<rect y="430" width="800" height="170" fill="url(#v2)"/><g stroke="#6b5b4a" stroke-width="6"><path d="M80 470v100M120 470v100M160 470v100M200 470v100M60 470h160"/></g><path d="M420 470h300l-30 90H450z" fill="#0a0706"/>`);
+
+const MEDIA = {
+  banner: svgMedia(BANNER, { name: 'banner-night-road.svg', alt: 'Ночной город, уходящая к горизонту дорога и гитара на переднем плане — абстрактная иллюстрация' }),
+  logo: svgMedia(LOGO, { name: 'logo.svg', alt: 'Медиатор со звездой' }),
+  guitar: svgMedia(GUITAR, { name: 'guitar.svg', alt: 'Акустическая гитара с солнцем вместо резонаторного отверстия на фоне ночного неба' }),
+  cassette: svgMedia(CASSETTE, { name: 'cassette.svg', alt: 'Аудиокассета — носитель, на котором выходили альбомы 1990-х' }),
+  sunswallow: svgMedia(SUNSWALLOW, { name: 'apofatiya.svg', alt: 'Солнце над частоколом копий и взлетающая ласточка' }),
+  dance: svgMedia(DANCE, { name: 'tantsuy.svg', alt: 'Виниловая пластинка со сломанной иглой на фоне рассвета' }),
+  puppet: svgMedia(PUPPET, { name: 'buratino.svg', alt: 'Нарисованный на холсте очаг, золотой ключик и поленница' }),
+  bricks: svgMedia(BRICKS, { name: 'gosudarstvo.svg', alt: 'Кирпичная стена со всевидящим оком; свет пробивается сквозь место выпавшего кирпича; пень срубленного дерева' }),
+  flower: svgMedia(FLOWER, { name: 'cvetochek.svg', alt: 'Цветок из пламени над ночной дорогой и разбитые часы' }),
+  moths: svgMedia(MOTHS, { name: 'po-odnomu.svg', alt: 'Ночной костёр и мотыльки, летящие к огню' }),
+  snowberry: svgMedia(SNOWBERRY, { name: 'polyany.svg', alt: 'Снежное поле с ягодами земляники, осколки зеркала и рассветные лучи за скалами' }),
+  train: svgMedia(TRAIN, { name: 'konets.svg', alt: 'Рельсы, уходящие к слепящему огню приближающегося поезда; падающий пепел' }),
+  road: svgMedia(ROAD, { name: 'avtostop.svg', alt: 'Ночное шоссе, на асфальте отражаются звёзды' }),
+  horses: svgMedia(HORSES, { name: 'partizanskaya.svg', alt: 'Алые кони в ночном небе над тёмным лесом с берёзами' }),
+  tram: svgMedia(TRAM, { name: 'besplatno.svg', alt: 'Красный трамвай, летящий среди облаков' }),
+  metre: svgMedia(METRE, { name: 'metre.svg', alt: 'Схемы пяти классических размеров: ударные слоги показаны высокими столбиками' }),
+  vertical: svgMedia(VERTICAL, { name: 'vertical.svg', alt: 'Три яруса мира песен: небо с трамваем, земля с городом, дорогой и лесом, подземелье с решёткой и рвом' }),
+};
+
+// ---------------------------------------------------------------------------------------------
+// Sources (every URL below was opened on 2026-10-13). Books without URL are well-known publications.
+
+const SITE = 'https://www.nepomn.ru/';
+const OFF = 'Александр Непомнящий — официальный сайт';
+const cite = (o) => '{{cite|' + Object.entries(o).map(([k, v]) => `${k}=${v}`).join('|') + (o.url ? `|access=${ACC}` : '') + '}}';
+const album = (id, title) => cite({ title, work: OFF, url: `${SITE}release_media_all.php?release_id=${id}`, note: 'страница альбома: состав и выходные данные' });
+const songSrc = (v, title) => cite({ title, work: OFF, url: `${SITE}song.php?variant_id=${v}`, note: 'страница песни; датировка указана под текстом' });
+
+const S = {
+  wikiRu: cite({ title: 'Непомнящий, Александр Евгеньевич', work: 'Википедия', url: 'https://ru.wikipedia.org/wiki/Непомнящий,_Александр_Евгеньевич' }),
+  wikiEn: cite({ title: 'Aleksandr Nepomnyashchiy', work: 'Wikipedia', url: 'https://en.wikipedia.org/wiki/Aleksandr_Nepomnyashchiy' }),
+  site: cite({ title: OFF, url: SITE }),
+  audio: cite({ title: 'Аудиозаписи', work: OFF, url: `${SITE}release_list.php?media_type=audio`, note: 'список альбомов по годам' }),
+  r1: album(1, 'Новые похождения А. И. Свидригайлова (1968–1994)'),
+  r3: album(3, 'Экстремизм (1995)'),
+  r4: album(4, 'Тёмная сторона любви (1996)'),
+  r5: album(5, 'Полюс (1997)'),
+  r6: album(6, 'Земляника (1999)'),
+  r7: album(7, 'Поражение (2000)'),
+  r8: album(8, 'Зерно (2000, бутлег)'),
+  r9: album(9, 'Зелёные холмы (2001, бутлег)'),
+  r10: album(10, 'Хлеб земной (2003)'),
+  r18: album(18, 'Земляника (2CD)'),
+  r27: album(27, 'У Морриса (2000)'),
+  s28: songSrc(28, 'Партизанская (вариант альбома «Экстремизм»)'),
+  s62: songSrc(62, 'Партизанская (вариант альбома «Полюс»)'),
+  s64: songSrc(64, 'По одному'),
+  s55: songSrc(55, 'Конец'),
+  s54: songSrc(54, 'Земляничные поляны'),
+  s61: songSrc(61, 'Автостопная'),
+  s93: songSrc(93, 'Апофатия'),
+  s63: songSrc(63, 'Бесплатно'),
+  s85: songSrc(85, 'Автостопная №2 (Цветочек)'),
+  s96: songSrc(96, 'Новые похождения Буратино'),
+  s89: songSrc(89, 'О нашем поражении (Танцуй пока)'),
+  s99: songSrc(99, 'Всемирное государство'),
+  militchuk: cite({ author: 'Милитчук А. А.', title: 'Религиозная проблематика в художественном творчестве и публицистике А. Непомнящего', work: 'Филология и культура', year: '2021', issue: '4 (66)', pages: '182–186', url: 'https://cyberleninka.ru/article/n/religioznaya-problematika-v-hudozhestvennom-tvorchestve-i-publitsistike-a-nepomnyaschego' }),
+  avtonom: cite({ title: 'Партизанская тема в творчестве Александра Непомнящего', work: 'Автономное действие', year: '2018', url: 'https://avtonom.org/freenews/partizanskaya-tema-v-tvorchestve-aleksandra-nepomnyashchego', note: 'авторская колонка посетителя сайта; есть комментарии читателей' }),
+  kmPolus: cite({ author: 'Ступников Д.', title: 'Александр Непомнящий «Полюс»', work: 'KM.RU', year: '2021', url: 'https://www.km.ru/muzyka/2021/06/10/persony-i-sobytiya-v-mire-muzyki/888578-aleksandr-nepomnyashchii-polyus' }),
+  kmZem: cite({ author: 'Ступников Д.', title: 'Александр Непомнящий «Земляника» (2 CD)', work: 'KM.RU', year: '2020', url: 'https://www.km.ru/muzyka/2020/02/27/persony-i-sobytiya-v-mire-muzyki/870708-aleksandr-nepomnyashchii-zemlyanika-2-cd' }),
+  cahier: cite({ title: 'Александр Непомнящий — Поражение (2000)', work: 'Записная Книжка', year: '2021', url: 'https://cahier.app/nepomnyaschii2000/' }),
+  gasparov1: cite({ author: 'Гаспаров М. Л.', title: 'Очерк истории русского стиха: Метрика. Ритмика. Рифма. Строфика', publisher: 'Наука', place: 'М.', year: '1984' }),
+  gasparov2: cite({ author: 'Гаспаров М. Л.', title: 'Метр и смысл: Об одном из механизмов культурной памяти', publisher: 'РГГУ', place: 'М.', year: '1999' }),
+};
+
+// Footnotes of one page version: the first use of a source carries the citation, later uses only its name.
+function refs() {
+  const seen = new Set();
+  return (k) => {
+    if (seen.has(k)) return `{{ref|name=${k}}}`;
+    seen.add(k);
+    return `{{ref|name=${k}|${S[k]}}}`;
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shared blocks
+
+const MOTIF = {
+  ogon: 'Огонь и свет', doroga: 'Дорога и бегство', voyna: 'Последняя война', vesna: 'Весна и снег', porazhenie: 'Поражение как победа',
+  rynok: 'Купля и продажа', sistema: 'Система и спектакль', vremya: 'Остановленное время', nebo: 'Небо и полёт',
+};
+const motifLink = (k) => `[[motivy#${MOTIF[k]}|${MOTIF[k].toLowerCase()}]]`;
+
+const NAVBOX = {
+  type: 'navbox', title: 'Песни', color: '#8a3b2e',
+  groups: [
+    { label: '1995–1996', links: '[[partizanskaya|Партизанская]]\n[[po-odnomu|По одному]]\n[[konets|Конец]]' },
+    { label: '1997', links: '[[apofatiya|Апофатия]]\n[[avtostopnaya|Автостопная]]\n[[zemlyanichnye-polyany|Земляничные поляны]]' },
+    { label: '1999', links: '[[avtostopnaya-2|Автостопная №2 (Цветочек)]]\n[[buratino|Новые похождения Буратино]]\n[[o-nashem-porazhenii|О нашем поражении (Танцуй пока)]]\n[[vsemirnoe-gosudarstvo|Всемирное государство]]' },
+    { label: 'Год не указан', links: '[[besplatno|Бесплатно]]' },
+    { label: 'Разделы', links: '[[pesni|Все песни]]\n[[motivy|Мотивы]]\n[[obrazy-i-simvoly|Образы и символы]]\n[[prostranstvo|Пространство]]\n[[personazhi|Персонажи]]\n[[metrika|Метрика]]\n[[intertekst|Интертекст]]\n[[glossariy|Глоссарий]]\n[[hronologiya|Хронология]]' },
+  ],
+};
+
+const T = (text, extra = {}) => ({ type: 'text', text, ...extra });
+const scheme = (code, caption) => ({ type: 'code', code, caption, layer: 'meter' });
+const comment = (text) => ({ type: 'callout', kind: 'note', title: 'Комментарий аналитика', text, layer: 'comment' });
+const slot = (what) => ({ type: 'quote', style: 'pull', text: `{{placeholder|Место для цитаты: ${what}. Не больше одной-двух строк, с указанием источника.}}`, source: '{{placeholder|песня, альбом, год записи}}' });
+
+// ---------------------------------------------------------------------------------------------
+// Song pages: a detailed and a short version with the same infobox.
+
+function infobox(s, r) {
+  return {
+    type: 'infobox', title: s.title, subtitle: 'песня Александра Непомнящего', image: s.img, caption: s.caption,
+    rows: [
+      { label: 'Слова и музыка', value: '[[ob-avtore|Александр Непомнящий]]' },
+      { label: 'Датировка', value: s.ysrc ? `${s.year} (по официальному сайту)${r(s.ysrc)}` : s.year },
+      { label: 'Альбомы', value: s.albums(r) },
+      { label: 'Длительность', value: '{{placeholder|уточнить по записи}}' },
+      { label: 'Объём текста', value: s.size },
+      { header: true, label: 'Поэтика' },
+      { label: 'Размер', value: s.meter, layer: 'meter' },
+      { label: 'Рифмовка', value: s.rhyme, layer: 'meter' },
+      { label: 'Лирический субъект', value: s.subject },
+      { label: 'Мотивы', value: s.motifs.map(motifLink).join(', ') },
+    ],
+  };
+}
+
+function songPage(s) {
+  const r1 = refs(), r2 = refs();
+  const full = [
+    { type: 'hatnote', kind: 'about', text: 'Авторский разбор; текст песни здесь не приводится. Короткие цитаты можно вставить в пустые слоты внизу — см. [[kak-polzovatsya#Как заполнять слоты для цитат|Как пользоваться разбором]].' },
+    infobox(s, r1),
+    T(s.lead(r1)),
+    ...s.body(r1),
+    T('## Место для цитат\nСлоты ниже нарочно оставлены пустыми: текст песни защищён авторским правом и в базу не включён. Вставьте в каждый слот одну-две строки, на которые опирается разбор, и укажите запись, по которой цитируете.'),
+    ...s.slots.map(slot),
+    { type: 'references', title: 'Источники' },
+    { type: 'seealso', items: s.see.map(([link, note]) => ({ link, note })) },
+    NAVBOX,
+  ];
+  const short = [
+    infobox(s, r2),
+    { type: 'callout', kind: 'tip', title: 'Кратко', text: s.brief(r2) },
+    T('Образы, композиция, метрика и интертекст разобраны в версии «Подробный разбор»; термины объяснены в [[glossariy|глоссарии]].'),
+    { type: 'references', title: 'Источники' },
+    NAVBOX,
+  ];
+  return {
+    slug: s.slug, title: s.title, parent: 'pesni', order: s.order, cats: ['pesni'], summary: s.summary,
+    versions: [{ id: 'full', label: 'Подробный разбор', blocks: full }, { id: 'short', label: 'Кратко', blocks: short }],
+  };
+}
+
+const LEGEND = 'Схема без слов: ∪ — безударный слог, —́ — ударный, | — цезура';
+
+const SONGS = [
+  // ------------------------------------------------------------------ Партизанская
+  {
+    slug: 'partizanskaya', title: 'Партизанская', order: 1, img: 'horses', caption: 'Алые кони над лесом (абстрактная иллюстрация)',
+    year: '1995', ysrc: 's28',
+    albums: (r) => `[[albomy#Экстремизм (1995)|«Экстремизм»]] (1995)${r('r3')}; [[albomy#Полюс (1997)|«Полюс»]] (1997)${r('r5')}`,
+    size: 'около 40 строк, три части с припевом', meter: 'дольник с тяготением к анапесту; припев — анапест и дактиль', rhyme: 'парная (AABB), мужская',
+    subject: 'рассказчик о «мальчике» и хоровое «мы»', motifs: ['voyna', 'ogon', 'vesna', 'doroga'],
+    summary: 'Баллада о мальчике, который в дедовских сапогах уходит на войну и гибнет, и гимн вневременной войне конца времён, где сливаются партизаны Белоруссии, Батыево нашествие и битва конца времён.',
+    lead: (r) => `«Партизанская» — песня [[ob-avtore|Александра Непомнящего]], датированная на официальном сайте 1995 годом${r('s28')}; вошла в альбом «Экстремизм» (1995) и повторно — в «Полюс» (1997)${r('s62')}. Это баллада о мальчике, который уходит на войну вслед за дедом и погибает, и одновременно гимн вневременной войне конца времён, в которой Великая Отечественная, нашествие Батыя и битва конца времён сливаются в одну. Автор статьи на сайте «Автономное действие» называет песню квинтэссенцией партизанской темы у Непомнящего${r('avtonom')}.`,
+    body: (r) => [
+      T(`## Сюжет и лирический герой
+Песня соединяет балладу и гимн. Эпический рассказчик говорит в третьем лице о мальчике, который уходит на войну, наследуя деду, и погибает; припев от имени хорового «мы» поёт о войне, которая со смертью не кончается. Переход от «он» к «мы» превращает частную гибель в общий миф, а смерть героя — в переход в иной мир, где битва продолжается.
+
+## Образы и символы
+**Огонь и свет.** Песня открывается образами угасания и закрывается вспышкой нового света: огонь гаснет, чтобы вспыхнул свет иного порядка — сквозная схема Непомнящего (см. [[motivy#Огонь и свет|Огонь и свет]]).
+
+**Война как служение.** Воинская и церковная символика (кресты и знамёна, окопы по ту сторону неба) сливаются: война понята как священное стояние. Алые кони в небе близки всадникам Апокалипсиса (Откр. 6:4){{layer|intertext| и, возможно, «Купанию красного коня» К. Петрова-Водкина — только ассоциация}}.
+
+**Мифологическое время.** Рядом стоят XX век (белорусские леса — топография партизанского движения 1941–1944 годов), XIII век (татарская стрела, Евпатий Коловрат), легенда (Китеж) и будущее. Это не небрежность: все войны — одна.
+
+**Смерть ребёнка.** Ольха — дерево смерти в европейской балладе{{layer|intertext| (Лесной царь у Гёте — Erlkönig, «ольховый король»; в балладе, переведённой Жуковским, тоже гибнет ребёнок)}}; дедовские сапоги — знак преемственности поколений.`),
+      T(`## Композиция
+Три повествовательные части, каждая завершается припевом; между частями — короткие двустишия-видения. Припев неизменен, кроме одного эпитета в последнем проведении: он повторяет определение, которым раньше был назван иной мир, — припев как бы догоняет героя. Время движется не вперёд, а вглубь: от недавней войны к древней и к будущей.
+
+## Ритм и размер
+Куплеты написаны трёхиктным [[glossariy#Метрика|дольником]] с тяготением к трёхсложным размерам и мужскими окончаниями; зачинная строка — чистый трёхстопный [[glossariy#Метрика|анапест]]. Припев заметно регулярнее: первая строка — четырёхстопный анапест с дактилическим окончанием, вторая — четырёхстопный [[glossariy#Метрика|дактиль]] с мужским. Трёхсложные размеры в русской традиции прочно связаны с военной лирикой{{layer|meter| — классический пример: «В землянке» А. Суркова (1941), трёхстопный анапест; о «семантическом ореоле» метра писал М. Л. Гаспаров${r('gasparov2')}}}.`),
+      scheme(`куплет, зачин     ∪ ∪ —́ ∪ ∪ —́ ∪ ∪ —́             анапест 3-ст., мужская клаузула
+куплет, далее     ∪ —́ ∪ —́ ∪ ∪ —́ ∪ ∪ —́           дольник 4-иктный
+припев, строка 1  ∪ ∪ —́ ∪ ∪ —́ ∪ ∪ —́ ∪ ∪ —́ ∪ ∪   анапест 4-ст., дактилическая
+припев, строка 2  —́ ∪ ∪ —́ ∪ ∪ —́ ∪ ∪ —́            дактиль 4-ст., мужская`, LEGEND),
+      T(`## Рифма
+Куплеты рифмуются попарно (AABB); рифмы преимущественно мужские и нередко неточные — совпадает ударный гласный, но не опорные согласные. Это «песенная» рифма рок-поэзии, рассчитанная на слух. Припев почти не рифмуется: его держит не созвучие, а параллелизм и повтор притяжательного местоимения.
+
+## Интертекст
+- Дж. Р. Р. Толкин, «Властелин колец»: финал, где Фродо уплывает из Серых Гаваней; у Непомнящего — инверсия: корабли не пришли.
+- «Повесть о разорении Рязани Батыем» — Евпатий Коловрат.
+- Легенда о невидимом граде Китеже, скрывшемся от Батыя в водах Светлояра.
+- Откровение Иоанна: кони и всадники.
+- Жанровое заглавие отсылает к партизанскому фольклору Великой Отечественной.
+- {{layer|intertext|Гёте — Жуковский, «Лесной царь» (ольха, гибель ребёнка) — гипотеза.}}`),
+      T(`## Интерпретации
+1. **Историко-патриотическая**: песня-память о партизанах Белоруссии, где внук наследует деду.
+2. **Эсхатологическая**: последняя партизанская война — битва добра со злом за пределами истории; смерть мальчика — переход, а не конец. Так её читает и «Автономное действие»: тотальная священная война, выходящая за рамки жизни и миров${r('avtonom')}.
+3. **Контркультурная**: партизан — состояние человека, не встроенного в систему; бегство с урока — отказ от школьной указки.
+
+Ранняя дата и включение в «Экстремизм» помещают песню в период, который источники описывают как бунтарский; повторная запись на «Полюсе» (1997) совпадает с поворотом автора к православной тематике${r('wikiRu')} — и та же песня начинает звучать как духовный стих.`),
+      comment('Китеж открывается только праведным; то, что град откроется новому Коловрату, — награда за стояние, а не бегство от боя. Открытый вопрос: почему леса именно белорусские? {{placeholder|проверить, есть ли авторские комментарии или биографический повод}}.'),
+    ],
+    slots: ['строка о бегстве мальчика перед рассветом', 'первая строка припева', 'строки о Китеже и новом Коловрате'],
+    see: [['motivy#Последняя война', 'сквозной мотив'], ['konets', 'та же эсхатология в городском варианте'], ['intertekst', 'сводная таблица отсылок']],
+    brief: () => `Баллада о мальчике, который уходит на войну вслед за дедом и гибнет, — и гимн войне, не кончающейся со смертью. Все войны России здесь сливаются в одну.
+
+- **Главная мысль**: смерть не отменяет верности; свет приходит после того, как погас последний огонь.
+- **Как звучит**: припев — ровный трёхсложный размер, как у военных песен.
+- **Отсылки**: Толкин, Китеж, Евпатий Коловрат, Апокалипсис.`,
+  },
+
+  // ------------------------------------------------------------------ По одному
+  {
+    slug: 'po-odnomu', title: 'По одному', order: 2, img: 'moths', caption: 'Мотыльки летят к костру',
+    year: '1996', ysrc: 's64',
+    albums: (r) => `[[albomy#Полюс (1997)|«Полюс»]] (1997)${r('r5')}; бутлег [[albomy#Зелёные холмы (2001)|«Зелёные холмы»]] (2001)${r('r9')}`,
+    size: 'около 50 строк', meter: 'дольник; припев — длинный хорей', rhyme: 'парная со сквозным моноримом к рефрену',
+    subject: 'отстранённый свидетель', motifs: ['ogon', 'nebo'],
+    summary: 'Песня-реквием: каталог примет мира, где смерть стала бытом, с рефреном о чужой смерти, который в конце меняется — герой допускает, что умер он сам.',
+    lead: (r) => `«По одному» — песня-реквием [[ob-avtore|Александра Непомнящего]] (1996 по официальному сайту${r('s64')}), вошедшая в альбом «Полюс» (1997)${r('r5')}. Её центр — рефрен о чужой смерти, на которую герой смотрит со стороны, пока в последней части не допускает, что умер он сам. Образ мотыльков, по одному летящих в костёр, дал песне название.`,
+    body: (r) => [
+      T(`## Сюжет и лирический герой
+Сюжета в собственном смысле нет: песня — реквием, перечень примет мира, где смерть стала повседневностью. Говорит свидетель; его отстранённость — не равнодушие, а оцепенение. Рефрен о чужой смерти повторяется после строф и лишь однажды меняется: в последней части герой допускает, что смерть коснулась и его. Этот единственный сдвиг — смысловой центр песни.
+
+## Образы и символы
+**Огонь и мотыльки.** Мотыльки, летящие на огонь, — древний образ самоуничтожающего влечения к свету{{layer|intertext| (ср. «Блаженное томление» Гёте и суфийскую притчу о мотыльке и свече)}}. Наречие в заглавии делает смерть индивидуальной: умирают не массой, а каждый сам.
+
+**Ожидание.** Сравнения припева объединены темой ожидания, которое не сбудется или сбудется слишком поздно: взгляд в небо, больничная палата, письмо с фронта.
+
+**Мир-кладбище.** Онемевшие колокола, неразличимость города и кладбища, общий ров — мир, где смерть перестала быть событием.
+
+**Взгляд Бога.** В коде впервые появляется Бог — свидетель с космической дистанции, который видит, но не вмешивается.{{layer|intertext| Образ развалин в песке напоминает «Озимандию» Шелли — гипотеза.}}`),
+      T(`## Композиция
+Строфы-каталоги с рефреном чередуются с большим припевом. Рефрен звучит в конце строфы дважды подряд — эффект заевшей пластинки. Перелом приходится на последнюю часть, где меняется рефрен; кода обходится без рефрена совсем.
+
+## Ритм и размер
+Строфы — четырёхиктный [[glossariy#Метрика|дольник]] с дактилическим началом строки: зачин — почти правильный четырёхстопный [[glossariy#Метрика|дактиль]] с женским окончанием, рефрен — дольник с мужским. Припев перестраивается на длинную хореическую строку с цезурой: смена размера отделяет хронику от молитвы.`),
+      scheme(`строфа, зачин   —́ ∪ ∪ —́ ∪ ∪ —́ ∪ ∪ —́ ∪          дактиль 4-ст., женская
+рефрен          ∪ —́ ∪ —́ ∪ ∪ —́ ∪ ∪ —́            дольник, мужская
+припев          —́ ∪ —́ ∪ ∪ ∪ —́ ∪ | ∪ ∪ —́ ∪ ∪ —́   длинный хорей с цезурой и пропусками ударений`, LEGEND),
+      T(`## Рифма
+Рифмовка парная, но с особенностью: почти во всех строфах одна из строк рифмуется с рефреном на один и тот же открытый ударный гласный. Возникает сквозной [[glossariy#Рифма|монорим]], стягивающий разнородные картины к рефрену, — как будто все смерти рифмуются с одной. Припев рифмуется отдельно, на другие звуки.
+
+## Интертекст
+Это наименее цитатная песня цикла: её материал — советская и постсоветская повседневность (бульдозер, больница, пластинка, письма с фронта). Возможные фоны: военная лирика о письмах, пришедших после гибели; память о массовых захоронениях XX века. Заглавие может нести и конвойный оттенок — команду выходить по одному (гипотеза).
+
+## Интерпретации
+1. **Экзистенциальная**: стихотворение о смерти другого, которая оказывается репетицией моей; изменение рефрена — момент осознания.
+2. **Социальная**: портрет середины 1990-х, где смерть стала фоном, а ужас — бытом.
+3. **Религиозная**: Бог в коде видит, но не вмешивается — это созвучно мотиву богооставленности, который источники отмечают в ранних песнях автора${r('wikiRu')}.`),
+      comment('Песня есть и на неофициальном сборнике «Зелёные холмы» (2001) — то есть автор пел её и после поворота к православию. {{placeholder|сравнить вариант «Полюса» с поздними исполнениями: не менялся ли финал и рефрен}}.'),
+    ],
+    slots: ['рефрен в исходной форме', 'изменённый рефрен последней части', 'строка о мотыльках'],
+    see: [['motivy#Огонь и свет', 'огонь, на который летят'], ['konets', 'смерть и равнодушие мира'], ['metrika', 'дольник в сравнении']],
+    brief: () => `Реквием о мире, где смерть стала привычной: герой смотрит на чужую гибель со стороны, пока в конце не допускает, что она касается и его. Заглавие — о том, что каждый умирает сам.
+
+- **Главная мысль**: привычка к смерти не спасает от неё.
+- **Как звучит**: дольник; рефрен скреплён одной сквозной рифмой.
+- **Финал**: Бог видит, как гаснет детский смех, — и молчит.`,
+  },
+
+  // ------------------------------------------------------------------ Конец
+  {
+    slug: 'konets', title: 'Конец', order: 3, img: 'train', caption: 'Огонь приближающегося поезда',
+    year: '1996', ysrc: 's55',
+    albums: (r) => `[[albomy#Полюс (1997)|«Полюс»]] (1997), соло-гитара — А. Булычёв${r('r5')}`,
+    size: 'около 35 строк', meter: 'четырёхиктный тактовик', rhyme: 'парная (AABB), подхват на стыке строф',
+    subject: '«мы» против «вас»; адресат «ты»', motifs: ['porazhenie', 'voyna', 'sistema', 'ogon'],
+    summary: 'Незамеченный апокалипсис: мир биороботов и телевизионной вечности против тех, кто идёт к Солнцу; конец уже начался, а суп ещё не остыл.',
+    lead: (r) => `«Конец» — песня [[ob-avtore|Александра Непомнящего]] (1996 по официальному сайту${r('s55')}), вторая в альбоме «Полюс» (1997); соло-гитару на записи, по данным сайта, играет А. Булычёв${r('r5')}, по словам рецензента KM.RU — участник группы «Кранты»${r('kmPolus')}. Это апокалипсис, оставшийся незамеченным: конец света уже идёт, а обычная жизнь течёт своим чередом.`,
+    body: (r) => [
+      T(`## Сюжет и лирический герой
+Песня-проповедь: коллективное «мы» обличает мир, где удобное счастье противопоставлено пути к Солнцу, и обращается к «ты» — тому, кто ещё не выбрал. Главный парадокс — незамеченный апокалипсис: конец света уже идёт, а обычная жизнь продолжается. Спасение — в стойкости; финал обещает новую землю и новое небо.
+
+## Образы и символы
+**Человек-механизм.** Биороботы и телевизионная вечность — жизнь внутри Системы; ср. [[buratino|«Буратино»]] и [[vsemirnoe-gosudarstvo|«Всемирное государство»]].
+
+**Огонь и ослепление.** Солнечный огонь и горящие скиты — цена пути к свету. Скиты отсылают к старообрядческим самосожжениям («гарям») XVII–XVIII веков в ожидании конца света; ослепление как условие прозрения роднит песню с [[apofatiya|«Апофатией»]].
+
+**Неотвратимость.** Поезд и чума — образы приближающегося суда; совесть, ставшая поездом, — суд, от которого не уйти.
+
+**Маска и пустота.** Лица, осыпающиеся, как штукатурка, скрывают пустоту; за ней — только победа «нас» и новая земля (Откр. 21:1). Танец перед концом связывает песню с [[o-nashem-porazhenii|«О нашем поражении»]].`),
+      T(`## Композиция
+Ряд коротких строф из двух двустиший, к финалу распадающийся: двустишия, [[glossariy#Композиция|подхват]] на стыке строф, трёхстишие и короткая кода. Распад строфики изображает тот самый конец — форма осыпается.
+
+## Ритм и размер
+Четырёхиктный [[glossariy#Метрика|тактовик]] с переменными интервалами (от одного до трёх безударных) и тенденцией к трёхсложности. Ритм речитативный, близкий к рок-декламации; в финальных строках интервалы выравниваются, интонация становится заклинательной.`),
+      scheme(`типичная строка  —́ ∪ ∪ ∪ —́ ∪ ∪ —́ ∪ ∪ —́ ∪        тактовик, 4 икта, женская
+вариант          —́ ∪ ∪ ∪ —́ ∪ ∪ ∪ ∪ —́ ∪          3 сильных ударения, сжатие`, LEGEND),
+      T(`## Рифма
+Парная рифмовка (AABB): точные рифмы соседствуют с неточными и ассонансами. Повтор строки про Берлин работает и как рифма, и как мост между строфами.
+
+## Интертекст
+- Кэндзабуро Оэ, «Объяли меня воды до души моей» (1973): Ооки Исана — отшельник, примкнувший к молодым бунтарям и в финале принимающий бой.
+- Старообрядческая эсхатология: скиты, «последние времена».
+- Откровение Иоанна: новая земля и новое небо.
+- Формула воздаяния по заслугам — русская передача латинского suum cuique; в XX веке её немецкий вариант стоял на воротах Бухенвальда{{layer|intertext| (нем. Jedem das Seine)}}. В песне она соседствует с отказом мёртвым в воскресении — самая мрачная точка текста.
+- Заглавие перекликается с более ранней песней автора «Конец русского рок-н-ролла» (альбомы 1994 и 1995 годов)${r('r3')}.
+- {{layer|intertext|Типологическая параллель: «Песенка о конце света» Ч. Милоша (1944), где конца мира тоже никто не замечает. Прямой связи не доказано.}}
+
+## Интерпретации
+1. **Контркультурная**: песня против телевизионной вечности и потребительского счастья 1990-х.
+2. **Эсхатологическая**: конец — не катастрофа, а незаметно начавшийся процесс; спасение — в стойкости.
+3. **Внутренняя**: конец — это и конец прежнего «я»; осыпающаяся штукатурка — разоблачение масок.
+
+Строка об отказе мёртвым в воскресении резко расходится с поздней православной позицией автора; источники описывают эволюцию его взглядов${r('wikiRu')}, и песня фиксирует ранний этап.`),
+      comment('Сравнить с «Земляничными полянами», открывающими тот же альбом: обе песни кончаются образом иного неба и иной земли. Похоже, «Полюс» задуман с эсхатологической рамкой. {{placeholder|проверить по буклету порядок песен и авторские пояснения}}.'),
+    ],
+    slots: ['строки о биороботах', 'строки о незамеченном конце', 'финальная строка о новой земле'],
+    see: [['zemlyanichnye-polyany', 'тот же финал — иное небо'], ['motivy#Поражение как победа', 'сквозной мотив'], ['personazhi', 'Ооки Исана и другие']],
+    brief: () => `Мир делится на тех, кто ищет удобного счастья, и тех, кто идёт к Солнцу и платит за это. Конец света уже идёт, но его не замечают.
+
+- **Главная мысль**: спасение — в стойкости, как у последнего солдата на рубеже.
+- **Как звучит**: речитативный тактовик, парная рифма; к финалу строфы распадаются.
+- **Отсылки**: роман Кэндзабуро Оэ, старообрядческие скиты, Апокалипсис.`,
+  },
+];
+SONGS.push(
+  // ------------------------------------------------------------------ Земляничные поляны
+  {
+    slug: 'zemlyanichnye-polyany', title: 'Земляничные поляны', order: 4, img: 'snowberry', caption: 'Земляника под снегом и лучи иного неба',
+    year: '1997', ysrc: 's54',
+    albums: (r) => `[[albomy#Полюс (1997)|«Полюс»]] (1997), доп. гитара — А. Вертоградов${r('r5')}; [[albomy#Земляника (1999)|«Земляника»]] (1999)${r('r6')}`,
+    size: 'около 40 длинных строк, три строфы', meter: 'длинный хорей с цезурой и внутренней рифмой', rhyme: 'внутренняя + парная; рефрен холостой',
+    subject: '«мы» оставшихся до конца; странник', motifs: ['vesna', 'ogon', 'vremya', 'nebo', 'porazhenie'],
+    summary: 'Рай, спрятанный под снегом: прощание с контркультурой 1990-х, Глейпнир и волк Фенрир, осколки зеркала Снежной королевы и рассвет иного неба.',
+    lead: (r) => `«Земляничные поляны» — песня [[ob-avtore|Александра Непомнящего]] (1997 по официальному сайту${r('s54')}), открывающая альбом «Полюс» (1997) и вошедшая также в «Землянику» (1999)${r('r6')}. Заглавие и рефрен отсылают к битловской «Strawberry Fields Forever», но вечные поляны у Непомнящего лежат под снегом. Рецензент KM.RU видит в землянике символ детской чистоты и рая — скрытого, но сохранённого до последних времён${r('kmZem')}.`,
+    body: (r) => [
+      T(`## Сюжет и лирический герой
+Три большие строфы ведут от диагноза эпохи через отмену «спектакля» к личному пути через смерть и очищение. Говорит сначала «мы» тех, кто не продал себя и остался до конца, затем безымянный странник. Рефрен о землянике под снегом завершает каждую строфу, но к финалу меняет смысл: из приговора он становится обещанием.
+
+## Образы и символы
+**Рай под снегом.** Земляника под снегом — сокрытый рай; снег одновременно смерть и сохранение. Рецензент KM.RU видит в землянике символ детской чистоты и рая, сохранённого до последних времён${r('kmZem')}.
+
+**Конец контркультуры.** Мартиролог, хиппи-бисер, заводные человечки с ключами в спине (мост к [[buratino|«Буратино»]]) — приметы эпохи, обречённой на превращение: украшения станут оружием, деньги — углями (фольклорный мотив чёртова клада).
+
+**Отменённый Рагнарёк.** Путы из невозможных материалов — это Глейпнир из «Младшей Эдды», которым скован волк Фенрир. У Непомнящего путы больше не нужны: волк сам стал собакой — конец света обращён в примирение.
+
+**Зима Андерсена.** Разбитое зеркальце и Снежная королева — осколки зеркала тролля и Кай, складывающий слово «вечность». Рецензент KM.RU связывает этот образ со словами самого автора о споре с прочтением истории Кая у А. Дугина и о близости ему «Герды» группы «Инструкция по выживанию»${r('kmZem')}.
+
+**Иное небо.** Рассветные лучи иного неба и иной земли — Откр. 21:1; тот же финал у [[konets|«Конца»]].`),
+      T(`## Композиция
+Три строфы нарастающей длины, каждая завершается одним рефреном. Первые две построены по одной схеме: длинные строки-каталоги, короткая строка-переход, пророчество, рефрен. Третья ломает схему: пророчество сменяется исповедью, и рефрен звучит уже после рассвета.
+
+## Ритм и размер
+Основа — длинная хореическая строка с цезурой и регулярными пропусками ударений (пэонический ритм: сильное место через три слога) с [[glossariy#Рифма|внутренней рифмой]] на цезуре. Такая строка распадается на два четырёхстопных хорея — размер пушкинских сказок и детских считалок, и это подкреплено реминисценцией из «рисовальной» считалки про человечка. Короткие строки-переходы — трёхстопный ямб; третья строфа раскачивается почти до [[glossariy#Метрика|тактовика]].`),
+      scheme(`длинная строка  ∪ ∪ —́ ∪ ∪ ∪ —́ ∪ | ∪ ∪ —́ ∪ ∪ ∪ —́ ∪ …   хорей с пэоническим ритмом
+полустишия      —́ ∪ —́ ∪ ∪ ∪ —́ ∪ | —́ ∪ —́ ∪ ∪ ∪ —́ ∪        2 × хорей 4-ст. (считалочный)
+переход         ∪ —́ ∪ —́ ∪ —́                          ямб 3-ст.`, LEGEND),
+      T(`## Рифма
+Внутренняя рифма на цезуре плюс парная концевая. Сам рефрен ни с чем не рифмуется: это холостая строка, отделённая от строфы и потому звучащая как надпись на камне.
+
+## Интертекст
+- The Beatles, «Strawberry Fields Forever» (1967) — заглавие и формула рефрена.
+- «Младшая Эдда» — Глейпнир, Фенрир, Рагнарёк.
+- Г. Х. Андерсен, «Снежная королева».
+- Детская считалка-рисовалка про человечка.
+- «Караул устал» — слова матроса А. Железнякова при разгоне Учредительного собрания (январь 1918); у Непомнящего — конец представления. Та же формула — в [[buratino|«Новых похождениях Буратино»]].
+- Свет, светящий во тьме, — Ин. 1:5.
+- {{layer|intertext|И. Бергман, «Земляничная поляна» (1957): память, старость, смерть — вероятный второй фон заглавия.}}
+
+## Интерпретации
+1. **Прощание с контркультурой**: мартиролог рок-героев, бисер хиппи и всеобщий дурман уходят — это не поражение, а очищение.
+2. **Христианская**: рай не уничтожен, а сокрыт до Второго пришествия; так читает песню рецензент KM.RU, видя в рефрене указание на вечность${r('kmZem')}.
+3. **Сказочная**: путь Кая и Герды через зиму — инициация, в которой Снежная королева невольно становится орудием очищения.
+
+Двусмысленность рефрена (вечная зима или вечная сохранность?) держит всю песню и не разрешается до конца.`),
+      comment(`В версии «Полюса» звучит дополнительная электрогитара А. Вертоградова; рецензент KM.RU отмечает, что она привносит хаос и местами перекрывает голос${r('kmPolus')}. Электрическая версия альбома «Земляника» («Огонь»), по данным рецензии, не издана. {{placeholder|сравнить тексты вариантов «Полюса» и «Земляники»}}.`),
+    ],
+    slots: ['рефрен', 'строки о волке и псе', 'строки о Снежной королеве'],
+    see: [['konets', 'тот же альбом, тот же финал'], ['obrazy-i-simvoly#Снег, лёд, зеркало', 'символика снега'], ['intertekst', 'Эдда, Андерсен, The Beatles']],
+    brief: () => `Песня о рае, который не погиб, а скрыт под снегом. Эпоха фальши обречена на превращение, а герой, пройдя через смерть и холод, видит рассвет иного неба.
+
+- **Главная мысль**: снег не убивает землянику, а хранит её.
+- **Как звучит**: длинный сказочный хорей с внутренними рифмами.
+- **Отсылки**: The Beatles, Андерсен, скандинавский миф о волке Фенрире.`,
+  },
+
+  // ------------------------------------------------------------------ Автостопная
+  {
+    slug: 'avtostopnaya', title: 'Автостопная', order: 5, img: 'road', caption: 'Ночное шоссе со звёздами под ногами',
+    year: '1997', ysrc: 's61',
+    albums: (r) => `[[albomy#Полюс (1997)|«Полюс»]] (1997)${r('r5')}; [[albomy#У Морриса (2000)|«У Морриса»]] (2000)${r('r27')}`,
+    size: 'около 40 строк, кольцевая рамка', meter: 'четырёхстопный дактиль → хорей', rhyme: 'парная, грамматическая в рамке',
+    subject: 'хоровое «мы» путников; адресат «вы»', motifs: ['doroga', 'rynok', 'vesna', 'nebo'],
+    summary: 'Манифест жизни в дороге: «вы» хотели купить, «мы» не дались; дорога — это дом, а звёзды светятся под ногами.',
+    lead: (r) => `«Автостопная» — песня [[ob-avtore|Александра Непомнящего]] (1997 по официальному сайту${r('s61')}) из альбома «Полюс» (1997)${r('r5')}, манифест жизни в бесконечной дороге. Её рамка — строфа о том, что «вы» хотели купить «нас», а сделка не состоялась, — отделяет путников от тех, кто остался в очереди к кассе. У песни есть продолжения — см. [[avtostopnaya-znacheniya|Автостопная (значения)]].`,
+    body: (r) => [
+      T(`## Сюжет и лирический герой
+Песня-манифест: хоровое «мы» путников противопоставлено «вам» — тем, кто покупает и остаётся в очереди к кассе. Сюжета нет — есть позиция: дорога и есть дом, а небо уже под ногами. Кольцевая рамка подчёркивает, что выбор сделан давно и звучит как итог.
+
+## Образы и символы
+**Дорога как дом.** Ночное шоссе и звёзды, отражённые на асфальте, опрокидывают небо на землю: путник не ищет рая — он уже в пути к нему.
+
+**Фольклорный путь.** Беловодье — старообрядческая утопия праведной земли; железная обувь — сказочное испытание (героиня сказки о Финисте — Ясном соколе стаптывает железные башмаки). Песня переводит трассу на язык сказки.
+
+**Карнавал против смерти.** Пир во время чумы (Пушкин) здесь не трагедия, а карнавальная победа: чуму не боятся, а спаивают; весна — боевой поход (Вагнер, «Полёт валькирий»).
+
+**Печать.** Магнитная карта, помеченная именем Зверя (Откр. 13:16–17), — знак включённости в систему; тот же мотив — во [[vsemirnoe-gosudarstvo|«Всемирном государстве»]]. Кот учёный из пушкинского Лукоморья вернётся в [[buratino|«Буратино»]].`),
+      T(`## Композиция
+Кольцевая: строфа-рамка дословно повторяется в конце. Между ними — четверостишия, разделённые однострочным рефреном-распевом. Средняя часть строится на [[glossariy#Композиция|анафоре]], следующая — на фольклорных формулах, финальная — на интонации умиротворённого одобрения.
+
+## Ритм и размер
+Рамка и «анафорические» строфы — четырёхстопный [[glossariy#Метрика|дактиль]] с женскими окончаниями, местами расшатанный до дольника. Сказочная часть переходит на хорей с мужскими окончаниями — скоморошья, плясовая интонация. Рефрен внеметричен: вокализ и одна длинная строка.`),
+      scheme(`рамка           —́ ∪ ∪ —́ ∪ ∪ —́ ∪ ∪ —́ ∪        дактиль 4-ст., женская
+сказочная часть  —́ ∪ ∪ ∪ —́ ∪ ∪ ∪ —́ ∪ —́         хорей с пропусками, мужская`, LEGEND),
+      T(`## Рифма
+Парная (AABB). В рамке — подчёркнуто простые [[glossariy#Рифма|грамматические]] глагольные рифмы: «простота» здесь — позиция, а не неумение. В сказочной части рифмы мужские, иногда неточные; рефрен не рифмуется.
+
+## Интертекст
+- Советская и постсоветская традиция автостопа: трасса как контркультурное пространство.
+- Беловодье, сказка о Финисте, застольная формула с мёдом и вином — фольклор.
+- А. С. Пушкин: «Пир во время чумы», пролог к «Руслану и Людмиле».
+- Р. Вагнер, «Полёт валькирий».
+- Откровение Иоанна: печать Зверя.
+- {{layer|intertext|«Пикник на обочине» братьев Стругацких — ассоциация (пикник у дороги), гипотеза.}}
+
+## Интерпретации
+1. **Манифест неподкупности**: путник выбирает бедность и свободу вместо очереди в кассу.
+2. **Религиозная**: дом — не место, а путь; небо уже под ногами.
+3. **Социальная**: 1990-е как время купли-продажи людей, на которую песня отвечает отказом.
+
+Продолжения — [[avtostopnaya-2|«Автостопная №2 (Цветочек)»]] (1999) и «Автостопная 3» из альбома «Хлеб земной» (2003)${r('r10')}.`),
+      comment('Рамка — грамматический «приговор» в прошедшем времени: так получалось. Это не программа, а итог; песня звучит как воспоминание о пути, который уже выбран. Ср. с переходом будущего в настоящее во [[vsemirnoe-gosudarstvo|«Всемирном государстве»]].'),
+    ],
+    slots: ['строфа-рамка', 'рефрен', 'строки о звёздах под ногами'],
+    see: [['avtostopnaya-2', 'продолжение 1999 года'], ['prostranstvo#Дорога', 'дорога в пространстве песен'], ['motivy#Купля и продажа', 'сквозной мотив']],
+    brief: () => `Песня о жизни в бесконечной дороге: «мы» не продаёмся и уходим на трассу, «вы» остаётесь в очереди к кассе. Дорога — это дом; звёзды светятся прямо под ногами.
+
+- **Главная мысль**: свобода дороже сытости.
+- **Как звучит**: дактиль, кольцевая рамка, рефрен-распев.
+- **Отсылки**: Беловодье, железные сапоги из сказки, «Пир во время чумы», Апокалипсис.`,
+  },
+
+  // ------------------------------------------------------------------ Апофатия
+  {
+    slug: 'apofatiya', title: 'Апофатия', order: 6, img: 'sunswallow', caption: 'Солнце над остриями копий и ласточка',
+    year: '1997', ysrc: 's93',
+    albums: (r) => `[[albomy#Поражение (2000)|«Поражение»]] (2000)${r('r7')}`,
+    size: 'около 40 строк, два рефрена', meter: 'хорей: расшатанный → пэонический; рефрен — дактиль', rhyme: 'перекрёстная (ABAB), неточная',
+    subject: 'пророческое «я» → «мы»', motifs: ['ogon', 'porazhenie', 'vesna', 'nebo'],
+    summary: 'Апофатическое богословие в песне: видит тот, кто ослеп; вера-мнение уступает место знанию; побеждают погибшие, а сказки об их победе страшны премудрым пискарям.',
+    lead: (r) => `«Апофатия» — песня [[ob-avtore|Александра Непомнящего]], датированная на официальном сайте 1997 годом${r('s93')} и вошедшая в альбом «Поражение» (2000)${r('r7')}. Название — термин богословия: апофатика познаёт Бога через отрицание всех определений. Песня переводит этот метод в поэзию: чтобы увидеть, нужно ослепнуть; вместо веры-мнения — знание; погибшие побеждают.`,
+    body: (r) => [
+      T(`## Сюжет и лирический герой
+Песня переводит в поэзию апофатический метод: истина постигается через отрицание. Пророческое «я» исповедует знание вместо веры-мнения, через сказочные превращения возвещает суд и торжество погибших, а в финале обращается к другим — к тем, кто заранее оплакивает, и к тем, кто прячется от жизни. «Я» к финалу становится «мы».
+
+## Образы и символы
+**Парадоксы посвящения.** Рай через острия копий, зрение через слепоту, движение по воле невидимого ветра — Духа (Ин. 3:8): апофатическая логика всей песни.
+
+**Святой и огонь.** Огонь, который не пугает зверей, — агиографический мотив (ср. житие Серафима Саровского) и отблеск несгораемой купины; солнце внутри — внутренний свет, близкий исихастскому учению о Фаворском свете.
+
+**Сказочные превращения.** Ласточка (в славянском фольклоре — вестница весны), ставшая пулей и вернувшаяся в небо, ночь, превратившаяся в кошку, — мир, где насилие обращается против насильника, а хаос приручается любовью. Трибунал Сына над хозяином тюрьмы — Страшный суд над «князем мира сего».
+
+**Несотворённость.** Замок и лабиринты отсылают к Кафке, глина — к Адаму из праха (Быт. 2:7) и образу горшечника: человек ещё не завершён и сам участвует в своём творении.`),
+      T(`## Композиция
+Две строфы-зачина → рефрен → две сказочные строфы → рефрен → две финальные строфы без рефрена. Отсутствие третьего рефрена — смысловой ход: исповедание уже произнесено, и финал переходит от знания к обращению.
+
+## Ритм и размер
+Зачинные строфы — расшатанный [[glossariy#Метрика|хорей]]: строки начинаются хореически, а к концу ударения сталкиваются ([[glossariy#Метрика|стык ударений]]) или смещаются, и ритм «спотыкается» на самом важном. Сказочные строфы — длинный шестистопный хорей с регулярными пропусками ударений (сильное место через три слога, пэонический ритм) и женскими окончаниями — ритм песенного сказа. Рефрен — пятистопный хорей; солнечный рефрен — короткие [[glossariy#Метрика|дактилические]] строки. Финал снова расшатывается до тактовика.`),
+      scheme(`зачин          —́ ∪ —́ ∪ ∪ ∪ —́ —́ ∪              хорей со стыком ударений в конце
+сказочная      —́ ∪ ∪ ∪ —́ ∪ ∪ ∪ —́ ∪ ∪ ∪ —́ ∪       хорей 6-ст., пэонический ритм
+рефрен         ∪ ∪ —́ ∪ ∪ ∪ —́ ∪ —́ ∪              хорей 5-ст.
+солнечный      —́ ∪ ∪ —́ ∪ —́                      дактиль, 3 икта`, LEGEND),
+      T(`## Рифма
+Перекрёстная (ABAB), почти сплошь неточная: ассонансы, несовпадающие заударные, женские и дактилические клаузулы. Рифма здесь приблизительна так же, как апофатическое знание: созвучие угадывается, но не совпадает со словом.
+
+## Интертекст
+- Апофатическое богословие: Дионисий Ареопагит, восточная патристика.
+- Ин. 3:8; Быт. 2:7; Страшный суд.
+- Ф. Кафка, «Замок».
+- М. Е. Салтыков-Щедрин, «Премудрый пискарь»: пискари, чья мудрость в том, чтобы всю жизнь просидеть в норе.
+- Жития святых: звери у святого.
+
+## Интерпретации
+1. **Богословская**: песня как поэтическое изложение апофатики — Бог познаётся через отказ от понятий.
+2. **Эсхатологическая**: трибунал Сына и победа погибших — Страшный суд, восстанавливающий справедливость.
+3. **Биографическая**: декларация пути от веры как мнения к опыту; в контексте эволюции взглядов автора, описанной в источниках${r('wikiRu')}, — веха поворота к православию.`),
+      comment('Датировка 1997 и запись на «Поражении» (2000) — значит, песня несколько лет звучала на концертах до студийной записи. Сайт отмечает, что опубликованный текст — «вариант из альбома»: возможны и другие редакции. {{placeholder|уточнить ранние исполнения и разночтения}}.'),
+    ],
+    slots: ['строка о слепоте и зрении', 'рефрен-исповедание', 'строки о торжестве погибших'],
+    see: [['o-nashem-porazhenii', 'поражение как победа'], ['glossariy#Интертекст и стиль', 'апофатика, оксюморон'], ['motivy#Огонь и свет', 'солнце внутри']],
+    brief: () => `Название — богословский термин: Бога познают через отрицание. Поэтому в песне всё наоборот: видит тот, кто ослеп; побеждают погибшие; вместо веры-мнения — знание.
+
+- **Главная мысль**: истинное знание приходит через отказ от привычных понятий.
+- **Как звучит**: хорей — то спотыкающийся, то певучий, сказовый.
+- **Образы**: ласточка, ставшая пулей; ночь-кошка; суд над хозяином тюрьмы.`,
+  },
+
+  // ------------------------------------------------------------------ Бесплатно
+  {
+    slug: 'besplatno', title: 'Бесплатно', order: 7, img: 'tram', caption: 'Небесный трамвай',
+    year: '{{placeholder|год написания на сайте не указан — уточнить; не позднее 1997}}', ysrc: '',
+    albums: (r) => `[[albomy#Полюс (1997)|«Полюс»]] (1997)${r('r5')}`,
+    size: 'около 75 строк, куплеты-пятистишия', meter: 'акцентный стих, 4–6 ударений', rhyme: 'AABBA (как в лимерике)',
+    subject: '«я» музыканта и «мы» андеграунда; адресат — поп-звезда', motifs: ['rynok', 'sistema', 'nebo', 'doroga', 'vremya'],
+    summary: 'Инвектива против попсы и рынка и гимн музыке, которую нельзя купить: «мы» играем даром, а их небесный трамвай никому не догнать.',
+    lead: (r) => `«Бесплатно» — песня [[ob-avtore|Александра Непомнящего]] из альбома «Полюс» (1997)${r('r5')}; год написания на официальном сайте не указан${r('s63')}. Это инвектива против попсы и рынка — и гимн музыке, которую нельзя купить: «мы» играем даром, а их небесный трамвай никому не догнать. По данным Википедии, Егор Летов в 2005 году не согласился с этой позицией: по его мнению, лучше жить музыкой, чем играть даром и зарабатывать на других работах${r('wikiRu')}.`,
+    body: (r) => [
+      T(`## Сюжет и лирический герой
+Песня построена как спор: «я» музыканта, сливающееся с «мы» андеграунда, обращается к «ты» поп-звезды и к «вы» публики. Сатира на шоу-бизнес и 1990-е постепенно переходит в трагедию, затем в мятеж и, наконец, в преображение — от игры даром к полёту даром. Центральный символ — небесный трамвай, которого не догнать и который в финале возвращается.
+
+## Образы и символы
+**Рынок.** Ценник на теле, реклама, лоток, доллары — человек как товар. Им противостоит богемный минимум хлеба и портвейна — евхаристия, сниженная до бытового.
+
+**Сказка и телевизор.** Страна дураков, Поле чудес, Буратино — одновременно сказка А. Н. Толстого и телешоу; мост к [[buratino|«Новым похождениям Буратино»]]. Золотой телец (Исх. 32) уменьшен до презрительной формы.
+
+**Евангелие наизнанку.** Мессир (Воланд), нераскаявшийся Иуда (перевёрнутый Мф. 27:5), Богородица, отвернувшаяся от иконы, — мир, из которого ушло святое. Вселенский ветер и двенадцать в наряде — «Двенадцать» А. Блока.
+
+**Полёт и обращённое время.** Небесный трамвай{{layer|intertext| — почти наверняка «Заблудившийся трамвай» Н. Гумилёва (1919), летящий сквозь время и смерть}}; струны-обрыв — игра слов (оборванная струна и край пропасти); пуля, возвращающаяся в патрон, — время, пущенное вспять (ср. ласточку в [[apofatiya|«Апофатии»]]).`),
+      T(`## Композиция
+Пятистрочные куплеты чередуются с припевами, и припев от проведения к проведению меняется: вызов → путь → горькое примирение (трамвай скрылся из виду) → полёт (трамвай возвратится). Эта прогрессия — сюжет песни: от вызова через отчаяние к преображению.
+
+## Ритм и размер
+Куплеты — длинные строки [[glossariy#Метрика|акцентного стиха]] на 4–6 ударений, речитативного склада; припевы короче и певучее, держатся на повторе формулы. Метр подчинён интонации спора и проповеди.
+
+## Рифма
+Каждый куплет — пятистишие с рифмовкой AABBA, как в [[glossariy#Рифма|лимерике]]: две пары и возврат к первой рифме в последней строке. В предпоследнем куплете схема сдвигается к AABBB — рифма нагнетается к баррикаде. Рифмы часто неточные и разговорно-грубые: «уличная» поэтика нарочно противопоставлена гладкой попсе.`),
+      scheme(`куплет  A A B B A    (5 строк, 4–6 ударений в строке)
+кульминация  A A B B B`, 'Рифменные схемы куплетов'),
+      T(`## Интертекст
+- Н. Гумилёв, «Заблудившийся трамвай».
+- А. Блок, «Двенадцать».
+- А. Н. Толстой, «Золотой ключик, или Приключения Буратино»; телешоу «Поле чудес».
+- М. Булгаков, «Мастер и Маргарита».
+- М. Горький, «Песня о Соколе»: уж, который учит птиц летать.
+- Л.-Ф. Селин, «Путешествие на край ночи» — формула пути.
+- Исх. 32; Ильф и Петров, «Золотой телёнок».
+- Массовая культура 1980–1990-х: «Рэмбо III», фильмы с Бельмондо, видеомагнитофон.
+
+## Интерпретации
+1. **Эстетическая**: манифест андеграунда против шоу-бизнеса; бесплатность — гарантия свободы. Рецензент KM.RU видит здесь хиппистскую идею свободного духа, ставшую путём к небесному${r('kmPolus')}.
+2. **Политическая**: 1990-е — распродажа страны, война, телевизионный цинизм; трибунал и баррикады — характерный для автора радикализм тех лет. Упоминание убитого на войне сына, вероятно, связано с войной в Чечне 1994–1996 годов (гипотеза).
+3. **Религиозная**: финальный переход от игры к полёту превращает протест в преображение.
+4. **Полемическая**: с позицией «играть даром» спорил Летов (см. выше).`),
+      comment('Песня открыто бранная; при цитировании в слотах стоит выбирать строки из припевов. {{placeholder|уточнить год написания: на сайте его нет; песня вошла в «Полюс», значит, написана не позднее 1997}}.'),
+    ],
+    slots: ['первый припев', 'изменённый финальный припев', 'строки о Стране дураков'],
+    see: [['buratino', 'Страна дураков и Буратино'], ['motivy#Небо и полёт', 'небесный трамвай'], ['personazhi', 'Мессир, Иуда, двенадцать']],
+    brief: () => `Ругательная песня про попсу и одновременно гимн свободной музыке: «мы» играем даром, поэтому нас нельзя купить. Сатира на 1990-е (реклама, Брайтон-Бич, война на телеэкране) переходит в мечту о небесном трамвае, который увезёт в иной мир.
+
+- **Главная мысль**: то, что бесплатно, — бесценно.
+- **Как звучит**: каждый куплет — пятистишие AABBA; в финале «мы» уже не играем, а летаем.
+- **Отсылки**: Гумилёв, Блок, Булгаков, «Золотой ключик».`,
+  },
+);
+// Composition of «Автостопная №2»: ten episodes in a ring (a diagram on a plain background).
+const RUN_STEPS = [
+  ['Забег I', 'бег в длинных ямбических строках'], ['Встреча I', 'диалог с представителем «порядка»; ответ-рефрен'], ['Интерлюдия I', 'четверостишие-кредо в коротком ямбе'],
+  ['Миф', 'монолог о происхождении разделённого мира'], ['Встреча II', 'второй диалог; развязка силой'], ['Интерлюдия II', 'второе четверостишие-кредо'],
+  ['Забег III', 'ночная погоня; нагнетание образов'], ['Кульминация', 'немота героя, натиск нечисти'], ['Перелом', 'слово и огонь останавливают время'],
+  ['Кода', 'уход из времени; возврат к первой строке'],
+];
+const RUN_DIAGRAM = {
+  type: 'diagram', aspect: '16:9', labels: 'always', align: 'center', caption: 'Композиция: три «забега» с двумя интерлюдиями и побег сквозь время; пунктир — возврат к первой строке.',
+  items: RUN_STEPS.map(([label, note], i) => ({ id: 'e' + (i + 1), shape: 'rect', x: i < 5 ? 2 + i * 20 : 82 - (i - 5) * 20, y: i < 5 ? 10 : 62, w: 16, h: 24, label, note, color: i === 2 || i === 5 ? '#6b5b95' : i === 9 ? '#3f6b52' : '#c8632b' })),
+  edges: [...RUN_STEPS.slice(1).map((_, i) => ({ from: 'e' + (i + 1), to: 'e' + (i + 2), style: 'arrow' })), { from: 'e10', to: 'e1', style: 'dashed', label: 'кольцо' }],
+};
+
+SONGS.push(
+  // ------------------------------------------------------------------ Автостопная №2 (Цветочек)
+  {
+    slug: 'avtostopnaya-2', title: 'Автостопная №2 (Цветочек)', order: 8, img: 'flower', caption: 'Цветок из пламени и разбитые часы',
+    year: '1999', ysrc: 's85',
+    albums: (r) => `[[albomy#Земляника (1999)|«Земляника»]] (1999)${r('r6')}; [[albomy#У Морриса (2000)|«У Морриса»]] (2000)${r('r27')}`,
+    size: 'около 60 строк, три «забега»', meter: 'ямб разной длины (4, 5, 6, 8 стоп)', rhyme: 'перекрёстная и парная, мужская',
+    subject: 'плутовское «я» беглеца', motifs: ['doroga', 'ogon', 'vremya', 'sistema'],
+    summary: 'Плутовская сказка-погоня: герой украл с Олимпа цветок алого огня и бежит к любимой, отбиваясь от бесов-контролёров, а спасают его крест, огонёк и стихи, останавливающие время.',
+    lead: (r) => `«Автостопная №2 (Цветочек)» — песня [[ob-avtore|Александра Непомнящего]] (1999 по официальному сайту${r('s85')}), вошедшая в альбом «Земляника» (1999)${r('r6')}; рецензент KM.RU выделяет её среди песен альбома за страстность исполнения${r('kmZem')}. Это продолжение [[avtostopnaya|«Автостопной»]] и плутовская сказка-погоня: герой украл с Олимпа цветок алого огня и бежит к любимой, отбиваясь от бесов-контролёров.`,
+    body: (r) => [
+      T(`## Сюжет и лирический герой
+Плутовская сказка-погоня от первого лица: беглец, похитивший огонь у ложных богов, спешит к любимой, а представители порядка — бесы в облике проверяющих — пытаются его остановить. Сквозь погоню проступает миф о мироздании, устроенном мелким божком, который разделил людей. Спасают героя не оружие, а крест и слово: стихи останавливают время, и беглец ускользает домой.
+
+## Образы и символы
+**Украденный огонь.** Цветок алого огня соединяет три сюжета: огонь Прометея, похищенный с Олимпа; Красный Цветок Маугли у Киплинга (огонь, добытый у людей); «Аленький цветочек» Аксакова (дар для любимой). В финале огонь становится хранителем героя.
+
+**Бюрократия как бесовщина.** Документы, прописка, билет, чёрный воронок — государство-Олимп и его стража превращены в нечисть; против них действуют крестное знамение и рифма.
+
+**Миф о разделении.** Божок, рассёкший людей пополам, — миф Аристофана из «Пира» Платона (Зевс разрезает людей за дерзость) и гностический образ ложного творца, запершего небо. Заклинание против него — одна буква: латинское mors (смерть) превращается в amor (любовь).
+
+**Ночной кошмар.** Валькирии, пляска смерти, шахматные фигуры (самозваная власть в фальшивом пурпуре) и эпизод гоголевского Вия — зло слепо и нуждается в поводыре; связь с Хомой из [[o-nashem-porazhenii|«О нашем поражении»]]. Лёд, сковывающий сердце, — «Снежная королева».
+
+**Выход из времени.** Сломанные часы и остановленный кадр — побег из времени (ср. [[zemlyanichnye-polyany|«Земляничные поляны»]]); брошенная на дороге кепка — всё, что остаётся от героя здесь.
+
+## Композиция
+Три «забега», каждый с диалогом-встречей, разделены двумя короткими четверостишиями-интерлюдиями; кульминация переходит в развязку, а последняя строка возвращает к началу (кольцо). Схема — на диаграмме.`),
+      RUN_DIAGRAM,
+      T(`## Ритм и размер
+Песня последовательно [[glossariy#Метрика|ямбическая]], но ямб разной длины задаёт разные темпы: «забеги» — пяти- и шестистопный ямб с перекрёстной рифмой; диалоги — восьмистопный ямб с [[glossariy#Метрика|цезурой]]; интерлюдии — четырёхстопный ямб с парными мужскими рифмами (лубочная, почти считалочная интонация); кульминация распадается на короткие строки и звукоподражание очереди. Первая строка побега сбивается в амфибрахий — ритм на миг «проскальзывает» сквозь метр, как герой между секундами.`),
+      scheme(`забег        ∪ —́ ∪ —́ ∪ —́ ∪ ∪ ∪ —́                ямб 5-ст.
+диалог       ∪ —́ ∪ —́ ∪ ∪ ∪ —́ | ∪ ∪ ∪ —́ ∪ ∪ ∪ —́      ямб 8-ст. с цезурой
+интерлюдия   ∪ —́ ∪ —́ ∪ ∪ ∪ —́                      ямб 4-ст., мужская
+побег        ∪ —́ ∪ ∪ —́ ∪ ∪ —́                      амфибрахий 3-ст. (сбой)`, LEGEND),
+      T(`## Рифма
+В «забегах» — перекрёстная, в основном мужская: ударение на последнем слоге даёт ощущение топота. В интерлюдиях — парная мужская; в диалогах рифма связывает полустишия. Встречаются каламбурные и составные рифмы.
+
+## Интертекст
+- Миф о Прометее; Платон, «Пир» (миф об андрогинах).
+- Р. Киплинг, «Книга джунглей»; С. Аксаков, «Аленький цветочек».
+- Н. Гоголь, «Вий».
+- Г. Х. Андерсен, «Снежная королева».
+- Быт. 3:15; Мф. 27:5.
+- Скандинавская мифология (валькирии), средневековая пляска смерти.
+- Идиомы: заблудиться в трёх соснах; три семёрки.
+
+## Интерпретации
+1. **Прометеевская**: поэт крадёт огонь у ложных богов ради любви.
+2. **Христианско-гностическая**: мир устроен мелким божком, разделившим людей и расставившим контролёров; путь домой — через крест и слово.
+3. **Метапоэтическая**: спасает не автомат, а рифма — стихи останавливают время.
+4. **Контркультурная**: автостопщик против прописки, билетов и милиции.`),
+      comment(`На странице песни сайт перечисляет среди других вариантов исполнение с пометкой «Форпост 1998», тогда как под текстом стоит 1999${r('s85')}. {{placeholder|уточнить: дата написания или дата записи; когда песня впервые исполнена}}.`),
+    ],
+    slots: ['строка о цветке из огня', 'строки о латинском слове', 'последние строки побега'],
+    see: [['avtostopnaya', 'первая «Автостопная»'], ['avtostopnaya-znacheniya', 'все «Автостопные»'], ['motivy#Остановленное время', 'сквозной мотив']],
+    brief: () => `Продолжение «Автостопной»: плутовская сказка о беглеце, похитившем огонь у ложных богов, за которым гонятся бесы в облике проверяющих. Мир, по песне, устроен мелким божком, разделившим людей.
+
+- **Главная мысль**: спасают крест, огонь и стихи — рифма останавливает время.
+- **Как звучит**: ямб разной длины, от считалочного до длинного распева.
+- **Отсылки**: Прометей, Маугли, «Аленький цветочек», «Вий», «Снежная королева».`,
+  },
+
+  // ------------------------------------------------------------------ Новые похождения Буратино
+  {
+    slug: 'buratino', title: 'Новые похождения Буратино', order: 9, img: 'puppet', caption: 'Очаг на холсте и золотой ключик',
+    year: '1999', ysrc: 's96',
+    albums: (r) => `[[albomy#Поражение (2000)|«Поражение»]] (2000)${r('r7')}; [[albomy#У Морриса (2000)|«У Морриса»]] (2000)${r('r27')}`,
+    size: 'около 80 строк, прозаический эпиграф', meter: 'акцентный стих; финал — восьмистопный хорей', rhyme: 'нерегулярная; финал — парная',
+    subject: 'рассказчик-скоморох; адресат — активист', motifs: ['sistema', 'ogon', 'voyna'],
+    summary: 'Сказка А. Н. Толстого как аллегория политики конца 1990-х: Системе нужны деревянные человечки всех мастей, а победа — в том, чтобы перестать быть деревянным.',
+    lead: (r) => `«Новые похождения Буратино» — песня [[ob-avtore|Александра Непомнящего]] (1999 по официальному сайту${r('s96')}) из альбома «Поражение» (2000)${r('r7')}. Сказка А. Н. Толстого становится аллегорией политики конца 1990-х: Система ценит деревянных человечков, а настоящая победа — в том, чтобы перестать быть деревянным. В комментариях к статье на «Автономном действии» песню называют ключевой для понимания отношения поэта к левому движению${r('avtonom')}.`,
+    body: (r) => [
+      T(`## Сюжет и лирический герой
+Сказка А. Н. Толстого становится притчей о политике: ироничный рассказчик-скоморох обращается к «ты» — слушателю-активисту. Песня обрамлена прозаическим эпиграфом о несостоявшейся революции и рефреном из трёх слов. Сатира на революционеров, Систему и телевизионный «спектакль» в третьем куплете уступает место притче: выход — перестать быть деревянным.
+
+## Образы и символы
+**Дерево и огонь.** Деревянная кукла должна сгореть, чтобы ожить; огонь — пламя преображения (Преображение, Пятидесятница). Рефрен допускает оба прочтения: дерево спасает огонь — и огонь спасает дерево.
+
+**Театр и дверь.** Театр Карабаса — власть как кукольный театр, где все стороны играют роли. Нарисованный очаг и дверь за холстом из сказки Толстого становятся дверью домой, а золотой ключик — даром тому, кто устыдился своей деревянности. Охрана, уснувшая на посту и поражённая грозой, — небесный суд.
+
+**Обетование.** Река, текущая в рай, и радуга (Быт. 9:13) — образы обещанной победы; «караул устал» — слова матроса Железнякова (1918), символ конца представления.
+
+**Общество спектакля.** Раёшный финал смешивает «Мастера и Маргариту» (квартира номер пятьдесят, сеанс с разоблачением), пушкинского кота учёного, чеховскую шестую палату и геополитические клише 1990-х: телевизионный мир, где экстремист выскакивает из табакерки по сценарию.`),
+      T(`## Композиция
+Эпиграф → рефрен → три куплета с припевами → раёшный каталог → рефрен. Третий припев преображён, и на третий куплет приходится перелом: сатира впервые уступает место притче. Рамка из рефрена и нарастающая пунктуация превращают песню в заклинание.
+
+## Ритм и размер
+Куплеты — длинные строки [[glossariy#Метрика|акцентного стиха]] с переменным числом ударений; припев — короткие двух-трёхударные строки со [[glossariy#Метрика|стыками ударений]]. Финальный каталог — восьмистопный хорей с цезурой (по сути, пары четырёхстопных хореев) с парными рифмами — ритм ярмарочного [[glossariy#Рифма|раёшника]], балаганного зазывалы. Смена размера совпадает со сменой жанра: из баллады — в балаган.`),
+      scheme(`припев        ∪ ∪ ∪ —́ ∪ ∪ —́ ∪                 2–3 ударения
+каталог       —́ ∪ —́ ∪ ∪ ∪ —́ ∪ | —́ ∪ —́ ∪ ∪ ∪ —́ ∪   хорей 8-ст. с цезурой, женская`, LEGEND),
+      T(`## Рифма
+В куплетах — редкие и неточные созвучия; в припеве — парные рифмы, одна из которых держится на имени Карабаса-Барабаса; в финале — последовательные парные рифмы (AABB), часто составные и каламбурные.
+
+## Интертекст
+- А. Н. Толстой, «Золотой ключик, или Приключения Буратино» (1936).
+- Собственный дебютный альбом автора «Новые похождения А. И. Свидригайлова» (1994)${r('r1')}: формула «новых похождений» — автоцитата, а Свидригайлов отсылает к «Преступлению и наказанию».
+- Ги Дебор, «Общество спектакля» (1967).
+- М. Булгаков, «Мастер и Маргарита»; А. Пушкин, пролог к «Руслану и Людмиле»; А. Чехов, «Палата № 6».
+- «Семнадцать мгновений весны» (Штирлиц); «Неуловимые мстители» (засланный казачок).
+- День гнева — Dies irae (Соф. 1:15; средневековая секвенция).
+- «Манифест коммунистической партии»: призрак, бродящий по Европе.
+- {{layer|intertext|Телепередача «Кабачок „13 стульев“» (кабачок, пани Зося) — гипотеза; эстрадная группа «На-На» (по прозвищу) — гипотеза.}}
+
+## Интерпретации
+1. **Политическая**: разочарование в революционном активизме конца 1990-х; все стороны — патриот и космополит, левый и правый — актёры одного театра. Источники отмечают разочарование автора в деятельности НБП${r('wikiRu')}.
+2. **Религиозная**: деревянность — ветхий человек; огонь — преображающая благодать; золотой ключ — покаяние.
+3. **Медийная**: Россия как телевизионный спектакль, где экстремист выскакивает из табакерки по сценарию.`),
+      comment('Двусмысленность рефрена — свойство русского свободного порядка слов: подлежащее и дополнение в винительном падеже, совпадающем с именительным, не различаются. Оба прочтения верны одновременно, и, кажется, это и есть смысл: человек сохраняет огонь, а огонь спасает человека.'),
+    ],
+    slots: ['рефрен', 'строки о Двери домой и золотом ключике', 'строка о том, что Буратино всё понял'],
+    see: [['besplatno', 'Страна дураков и Поле чудес'], ['motivy#Система и спектакль', 'сквозной мотив'], ['personazhi', 'Буратино, Карабас, Штирлиц']],
+    brief: () => `Сказка о Буратино как притча о политике: Системе нужны деревянные куклы всех цветов, чтобы изображать свободу. Революция не удалась, все — актёры театра Карабаса.
+
+- **Главная мысль**: выход — устыдиться своей деревянности; тогда получишь золотой ключик от Двери домой.
+- **Как звучит**: свободный стих; финал — раёшная скороговорка в хорее.
+- **Отсылки**: А. Н. Толстой, Булгаков, Ги Дебор, Штирлиц.`,
+  },
+
+  // ------------------------------------------------------------------ О нашем поражении (Танцуй пока)
+  {
+    slug: 'o-nashem-porazhenii', title: 'О нашем поражении (Танцуй пока)', order: 10, img: 'dance', caption: 'Пластинка со сломанной иглой',
+    year: '1999', ysrc: 's89',
+    albums: (r) => `[[albomy#Поражение (2000)|«Поражение»]] (2000), первая песня альбома${r('r7')}; [[albomy#У Морриса (2000)|«У Морриса»]] (2000)${r('r27')}`,
+    size: 'около 90 строк, кольцевая рамка', meter: 'свободный акцентный стих; рефрен — дольник', rhyme: 'нерегулярная; коллаж — парная',
+    subject: 'многоголосие: пророк, сатирик, хор, пародийный голос', motifs: ['voyna', 'porazhenie', 'sistema', 'rynok'],
+    summary: 'Сатира на телевизионные 1990-е, литания и пророчество: большая война уже идёт, суд будет над всеми, а нам, как гоголевскому Хоме, надо продержаться до петушиного крика.',
+    lead: (r) => `«О нашем поражении (Танцуй пока)» — песня [[ob-avtore|Александра Непомнящего]] (1999 по официальному сайту${r('s89')}), открывающая альбом «Поражение» (2000)${r('r7')}. Это самая «газетная» вещь альбома: рецензент «Записной книжки» отмечает, что она собирает забытый телевизионный хлам 1990-х, и связывает её припев с эстрадным шлягером Олега Газманова${r('cahier')}. Сквозь сатиру проступает эсхатология: большая война уже идёт, и суд будет над всеми.`,
+    body: (r) => [
+      T(`## Сюжет и лирический герой
+Самая многоголосая песня цикла: пророк (рамка о большой войне и суде), сатирик (каталог эстрады и телевидения 1990-х), литургический хор (литания с возгласами аллилуйя) и пародийный голос подростка сменяют друг друга, как в радиоэфире. Адресат рефрена — юноша, которому предлагают веселиться, пока есть молодость. Сквозь сатиру проступает эсхатология: мир глумится над любовью, но любовь поругана быть не может, а суд ждёт и рабов, и хозяев.
+
+## Образы и символы
+**История как мерило.** Нюрнберг и Брестская крепость — суд и стойкость: XX век задаёт меру сдавшимся и устоявшим; взрослые идеологии уменьшены до игрушек из песочницы. Знамения времени — Мф. 16:3.
+
+**Любовь, которую нельзя поругать**, — формула по образцу Гал. 6:7 (Бог поругаем не бывает); вокруг неё строится вся сатира.
+
+**Театр масок.** Кукловод, Пьеро, змея-богиня и Лилит, «красный фонарь» и телесериал «Улицы разбитых фонарей» (с 1998) — эпоха как балаган; в пламени суда сгорит весь театр.
+
+**Выстоять до утра.** Хома и петушиный крик — «Вий» Гоголя: Хома Брут должен продержаться ночь до рассвета (ср. Вия в [[avtostopnaya-2|«Цветочке»]]). Сломанная патефонная игла — конец «пластинки» эпохи; тишина, поющая соловьями, — райская музыка.`),
+      T(`## Композиция
+Кольцевая рамка с вариацией (война из грядущей становится идущей), три блока куплетов, разделённых рефреном, литания и пародийный коллаж. Это монтаж, почти радиоэфир, где проповедь перебивается рекламой. Вариация рамки повторяет приём [[vsemirnoe-gosudarstvo|«Всемирного государства»]] того же года, где будущее время в финальном повторе тоже становится настоящим.
+
+## Ритм и размер
+Свободный [[glossariy#Метрика|акцентный стих]]: длинные строки разной длины без устойчивого метра, местами речитатив; рефрен — короткий [[glossariy#Метрика|дольник]] с подвижным ударением. Коллажный блок сдвигается к рэп-подобной скороговорке с парными рифмами.
+
+## Рифма
+В рамке и каталоге рифма почти отсутствует — работают повтор и параллелизм; в коллаже — парные, нарочито «попсовые» рифмы и ассонансы; литания держится на [[glossariy#Композиция|эпифоре]] — повторе одного и того же конечного слова.
+
+## Интертекст
+- Мф. 16:3; Гал. 6:7; Откровение.
+- Н. Гоголь, «Вий».
+- Нюрнбергский процесс (1945–1946); оборона Брестской крепости (1941).
+- Миф о Лилит; З. Фрейд.
+- Поп-культура 1990-х: «Мумий Тролль», Шура, «Киндер-сюрприз», латиноамериканские сериалы, промоакции газировки; по рецензии — шлягер О. Газманова${r('cahier')}.
+- {{layer|intertext|А. Блок, «Балаганчик» — Пьеро как маска поэта Серебряного века (гипотеза).}}
+
+## Интерпретации
+1. **Публицистическая**: портрет 1990-х, где политика стала шоу, а выборы — дискотекой.
+2. **Эсхатологическая**: поражение в мире — условие победы в вечности (ср. [[apofatiya|«Апофатию»]], где побеждают погибшие). Название альбома «Поражение» прочитывается в этом же ключе.
+3. **Исторический контекст**: в 1999 году автор организовал в Иванове фестиваль против бомбардировок Югославии${r('wikiRu')}; война, о которой говорит рамка, может откликаться на эти события — но это интерпретация, а не факт.`),
+      comment(`Рецензент «Записной книжки» замечает, что приметы 1990-х есть лишь в двух песнях альбома, а остальное — чистая лирика, которая с годами стала только лучше${r('cahier')}. Эта песня — одна из двух; её «устаревание» входит в замысел: хлам эпохи сгорает, остаётся рамка.`),
+    ],
+    slots: ['рамочная строфа (первое проведение)', 'строки о Хоме и петушином крике', 'рефрен'],
+    see: [['tantsuy-poka', 'перенаправление по второму названию'], ['apofatiya', 'победа погибших'], ['motivy#Последняя война', 'сквозной мотив']],
+    brief: () => `Песня, открывающая альбом «Поражение»: рамка о большой войне и суде, сатира на телевидение и эстраду 1990-х, пародийный монолог подростка и литания с возгласами аллилуйя.
+
+- **Главная мысль**: поражение в мире — победа в вечности; нам, как гоголевскому Хоме, надо лишь продержаться до петушиного крика.
+- **Как звучит**: свободный акцентный стих, коллаж голосов, рефрен-приказ танцевать.
+- **Отсылки**: Евангелие, «Вий», Нюрнберг, поп-культура 1990-х.`,
+  },
+
+  // ------------------------------------------------------------------ Всемирное государство
+  {
+    slug: 'vsemirnoe-gosudarstvo', title: 'Всемирное государство', order: 11, img: 'bricks', caption: 'Кирпичная стена и всевидящее око',
+    year: '1999', ysrc: 's99',
+    albums: (r) => `[[albomy#Поражение (2000)|«Поражение»]] (2000)${r('r7')}; [[albomy#У Морриса (2000)|«У Морриса»]] (2000)${r('r27')}`,
+    size: 'около 80 строк, рефрен после каждой строфы', meter: 'верлибр с элементами акцентного стиха', rhyme: 'практически нет; функцию рифмы выполняет рефрен',
+    subject: 'частное «я» → хроникёр и пророк', motifs: ['sistema', 'rynok', 'porazhenie', 'ogon'],
+    summary: 'Антиутопия-литания: Государство кормит, усыпляет, лечит и ставит печать на каждого; победить его можно только внутри себя. Рамка — строка Pink Floyd о кирпиче в стене.',
+    lead: (r) => `«Всемирное государство» — песня [[ob-avtore|Александра Непомнящего]] (1999 по официальному сайту${r('s99')}) из альбома «Поражение» (2000)${r('r7')}. Это антиутопия в форме литании: строфы одна за другой упираются в рефрен — имя Государства, которое кормит, усыпляет, лечит и в конце концов ставит печать на каждого. Рамкой служит английская строка из Pink Floyd о кирпиче в стене.`,
+    body: (r) => [
+      T(`## Сюжет и лирический герой
+Антиутопия в форме литании. Начавшись с частного «я» у окна, песня переходит к голосу хроникёра и пророка, который описывает Государство через его роли — заботливой матери, наркотика, надзирателя, рынка — и обращается к «ты», которого Государство хочет усыпить. Финал отвергает все внешние способы борьбы: Государство побеждается только внутри человека, как это знали святые и мученики.
+
+## Образы и символы
+**Сад и асфальт.** Срубленное ради проводов плодовое дерево — изгнание из Эдема; асфальт вместо земли. Малый бунт совершает юноша, похожий на Алёшу Карамазова, — праведник-диверсант.
+
+**Забота как власть.** Мать, кормящая только послушных, наркотик, сны и снотворное — забота, купленная свободой; ср. «Легенду о Великом инквизиторе» (хлеб в обмен на свободу) и сому в «О дивном новом мире» Хаксли.
+
+**Стандарт и печать.** Кирпич в стене (Pink Floyd, «The Wall») — человек как стандартный элемент; печать, без которой нельзя ни купить, ни продать, — Откр. 13:16–17, почти пересказ. Литания предотвращений (ковровый аминазин, усреднённое вероисповедание, всевидящее око) превращает гуманные цели в орудия контроля.
+
+**Соблазн.** Дудочка, ведущая крыс к огням, — Гамельнский крысолов с перевёрнутыми ролями (крысы — люди); русалочий смех сэмплера — сирены электронной музыки; серый пастырь — антипод Доброго Пастыря (Ин. 10).
+
+**Свет, сияющий над бездною** (Быт. 1:2; Ин. 1:5), — единственное, что неподвластно Государству.`),
+      T(`## Композиция
+Самая «грамматическая» композиция цикла: почти каждая строфа синтаксически не закончена и завершается рефреном — именем Государства. Рефрен меняет падеж: сначала родительный (всё принадлежит Государству), затем именительный (Государство действует само), в финале — винительный (Государство — объект, который надо уничтожить внутри себя). Падежная эволюция рефрена и есть сюжет песни.
+
+Апокалиптическая вставка звучит дважды: сначала в будущем времени, затем в настоящем. Тот же ход — в [[o-nashem-porazhenii|«О нашем поражении»]].
+
+## Ритм и размер
+[[glossariy#Метрика|Верлибр]] с элементами акцентного стиха: ритм создают не стопы, а синтаксический параллелизм, [[glossariy#Композиция|анафора]] (литания, цепочки однородных членов) и [[glossariy#Композиция|эпифора]] рефрена. Библейская вставка написана в ритме церковного чтения: однородные пары противоположностей.
+
+## Рифма
+Рифма практически отсутствует; изредка возникают ассонансы и внутренние созвучия. Функцию рифмы выполняет рефрен.
+
+## Интертекст
+- Pink Floyd, «Another Brick in the Wall» (альбом «The Wall», 1979) — эпиграф и финальная строка по-английски.
+- Откровение Иоанна (13:16–17); Быт. 1:2; Ин. 1:5; Ин. 10.
+- О. Хаксли: «О дивный новый мир» (Мировое Государство — так называется власть в романе) и эссе «Двери восприятия» (1954); отсюда же название группы The Doors.
+- Ф. Достоевский, «Братья Карамазовы»: Алёша; «Легенда о Великом инквизиторе».
+- Р. Генон, Ги Дебор, К. Маркс — названы прямо.
+- Легенда о Гамельнском крысолове.
+- Публицистический штамп 1990-х о «золотом миллиарде».
+- {{layer|intertext|Г. Маркузе, «Одномерный человек» (одномерность) и Дж. Оруэлл, «1984» (всевидящий надзор) — гипотезы.}}
+
+## Интерпретации
+1. **Антиглобалистская**: песня о глобальном рынке, где всё товар; 1999 год — время войны НАТО против Югославии и споров о «новом мировом порядке».
+2. **Эсхатологическая**: Всемирное государство — царство Зверя из Откровения; освобождение — только в святости.
+3. **Экзистенциальная**: Государство нужно уничтожить в самом себе — главная битва внутренняя, и это прямо заявляет финал.`),
+      comment('Кто такой «Ермен», установить не удалось. {{placeholder|уточнить: опечатка, персонаж, реальное лицо?}} Сочетание с Алёшей Карамазовым подсказывает, что это тоже фигура праведника или юродивого.'),
+    ],
+    slots: ['строки о срубленном дереве', 'одна строка из литании предотвращений', 'строки о святых и мучениках'],
+    see: [['avtostopnaya', 'печать Зверя на магнитной карте'], ['motivy#Система и спектакль', 'сквозной мотив'], ['intertekst', 'Хаксли, Pink Floyd, Достоевский']],
+    brief: () => `Антиутопия о глобальном Государстве, которое заботится, как мать, и усыпляет, как наркотик, а в конце ставит на всех печать (как в Откровении). Каждая строфа кончается его именем.
+
+- **Главная мысль**: бороться с Государством извне бесполезно — его надо уничтожить в самом себе, как святые.
+- **Как звучит**: верлибр без рифмы; ритм держат повторы и рефрен.
+- **Отсылки**: Pink Floyd, Хаксли, Достоевский, Апокалипсис.`,
+  },
+);
+
+// ---------------------------------------------------------------------------------------------
+// Concept maps
+
+const SHORT = {
+  partizanskaya: 'Партизанская', 'po-odnomu': 'По одному', konets: 'Конец', 'zemlyanichnye-polyany': 'Земляничные поляны', avtostopnaya: 'Автостопная', apofatiya: 'Апофатия',
+  besplatno: 'Бесплатно', 'avtostopnaya-2': 'Цветочек', buratino: 'Буратино', 'o-nashem-porazhenii': 'Танцуй пока', 'vsemirnoe-gosudarstvo': 'Всемирное государство',
+};
+const MOTIF_KEYS = Object.keys(MOTIF);
+
+// Motifs in the middle, songs above and below; edges = a motif appears in a song.
+function motifMap() {
+  const top = ['partizanskaya', 'po-odnomu', 'konets', 'zemlyanichnye-polyany', 'avtostopnaya', 'apofatiya'];
+  const bottom = ['besplatno', 'avtostopnaya-2', 'buratino', 'o-nashem-porazhenii', 'vsemirnoe-gosudarstvo'];
+  const items = [
+    ...top.map((s, i) => ({ id: s, shape: 'rect', x: 1 + i * 16.5, y: 2, w: 15, h: 12, label: SHORT[s], link: s, color: '#3b4a8a' })),
+    ...bottom.map((s, i) => ({ id: s, shape: 'rect', x: 8 + i * 17, y: 86, w: 15, h: 12, label: SHORT[s], link: s, color: '#3b4a8a' })),
+    ...MOTIF_KEYS.map((k, i) => ({ id: k, shape: 'rect', x: i < 5 ? 2 + i * 20 : 11 + (i - 5) * 20, y: i < 5 ? 32 : 56, w: 17, h: 12, label: MOTIF[k], link: `[[motivy#${MOTIF[k]}]]`, color: '#c8632b' })),
+  ];
+  const edges = [];
+  for (const s of SONGS) for (const m of s.motifs) edges.push({ from: m, to: s.slug, style: s.motifs.indexOf(m) < 2 ? 'line' : 'dashed' });
+  return { type: 'diagram', aspect: '16:9', labels: 'always', align: 'full', items, edges, caption: 'Карта мотивов: оранжевые узлы — мотивы, синие — песни; сплошная линия — мотив ведущий, пунктир — второстепенный. Узлы — ссылки.' };
+}
+
+// Home page: nine motifs around the list of songs.
+function motifRing() {
+  const items = [{ id: 'c', shape: 'rect', x: 41, y: 42, w: 18, h: 16, label: 'Все песни', link: 'pesni', color: '#3b4a8a' }];
+  MOTIF_KEYS.forEach((k, i) => {
+    const a = (i * 40 * Math.PI) / 180;
+    const cx = 50 + 38 * Math.cos(a), cy = 50 + 36 * Math.sin(a);
+    items.push({ id: k, shape: 'rect', x: +(cx - 8.5).toFixed(1), y: +(cy - 6).toFixed(1), w: 17, h: 12, label: MOTIF[k], link: `[[motivy#${MOTIF[k]}]]`, color: '#c8632b' });
+  });
+  return { type: 'diagram', aspect: '16:9', labels: 'always', align: 'center', items, edges: MOTIF_KEYS.map((k) => ({ from: 'c', to: k, style: 'line' })), caption: 'Девять сквозных мотивов. Подробная карта со связями песен — на странице [[motivy|Мотивы]].' };
+}
+
+// Space: the three tiers of the world of the songs, regions on a picture.
+const SPACE_DIAGRAM = {
+  type: 'diagram', media: 'vertical', labels: 'always', align: 'center', caption: 'Вертикаль мира песен: небо — земля — подземелье. Области ведут к разделам этой страницы.',
+  items: [
+    { shape: 'rect', x: 1, y: 2, w: 98, h: 30, lx: 12, ly: 10, label: 'Небо', link: '[[prostranstvo#Небо]]', note: 'трамвай, кони, звёзды, иное небо' },
+    { shape: 'point', x: 70, y: 13, lx: 84, ly: 22, label: 'Небесный трамвай', link: 'besplatno' },
+    { shape: 'rect', x: 2, y: 37, w: 30, h: 34, lx: 16, ly: 44, label: 'Город', link: '[[prostranstvo#Город]]', note: 'дома-коробки, очередь к кассе, телеэкран' },
+    { shape: 'poly', pts: [[38, 71], [62, 71], [51, 38], [49, 38]], lx: 50, ly: 52, label: 'Дорога', link: '[[prostranstvo#Дорога]]', note: 'трасса, автостоп, побег' },
+    { shape: 'rect', x: 66, y: 46, w: 32, h: 25, lx: 84, ly: 52, label: 'Лес и поле', link: '[[prostranstvo#Лес и поле]]', note: 'партизанский лес, Русское поле' },
+    { shape: 'rect', x: 1, y: 73, w: 98, h: 25, lx: 40, ly: 84, label: 'Подземелье, ров, тюрьма', link: '[[prostranstvo#Подземелье, ров, тюрьма]]' },
+  ],
+};
+
+// ---------------------------------------------------------------------------------------------
+// Pages
+
+function pages() {
+  const r = refs;
+  const P = [];
+
+  // --- Home
+  {
+    const f = r();
+    P.push({
+      slug: 'zaglavnaya', title: 'Заглавная', toc: 'off', summary: 'Авторский разбор одиннадцати песен Александра Непомнящего: образы, мотивы, метрика, интертекст.',
+      blocks: [
+        { type: 'banner', style: 'overlay', media: 'banner', title: 'Песни Александра Непомнящего', text: 'Авторский разбор: образы, мотивы, метрика и интертекст одиннадцати песен 1995–1999 годов.', link: 'pesni', button: 'К списку песен' },
+        T(`Эта база — авторский разбор песен [[ob-avtore|Александра Евгеньевича Непомнящего]] (1968–2007), поэта и рок-барда из Коврова и Иванова${f('wikiRu')}. Каждой песне посвящена отдельная статья в двух версиях — подробной и краткой, — а сквозные страницы собирают мотивы, образы, пространство, персонажей, метрику и интертекстуальные связи.
+
+Тексты песен в базе **не приводятся**: они защищены авторским правом. Анализ написан своими словами, а для коротких цитат на каждой странице оставлены пустые слоты — как их заполнить, рассказано на странице [[kak-polzovatsya|Как пользоваться разбором]].`),
+        { type: 'pagelist', title: 'Избранные разборы', source: 'links', style: 'hero', links: [{ link: 'zemlyanichnye-polyany' }, { link: 'apofatiya' }, { link: 'vsemirnoe-gosudarstvo' }, { link: 'avtostopnaya-2' }] },
+        T('## Песни'),
+        { type: 'pagelist', source: 'category', category: 'pesni', style: 'cards', sort: 'order', limit: 20, summary: false },
+        T('## Карта мотивов'),
+        motifRing(),
+        { type: 'columns', ratio: '1:1:1', cols: [
+          { blocks: [T(`### Сквозные страницы
+- [[motivy|Мотивы]]
+- [[obrazy-i-simvoly|Образы и символы]]
+- [[prostranstvo|Пространство и места]]
+- [[personazhi|Персонажи и адресаты]]
+- [[intertekst|Интертекстуальные связи]]`)] },
+          { blocks: [T(`### Теория
+- [[metrika|Метрика и ритм]]
+- [[glossariy|Глоссарий]]
+- [[kak-polzovatsya|Как пользоваться разбором]]
+- [[category:teoriya|Категория «Теория»]]`)] },
+          { blocks: [T(`### Об авторе
+- [[ob-avtore|Биография]]
+- [[albomy|Альбомы и записи]]
+- [[hronologiya|Хронология]]
+- [[avtostopnaya-znacheniya|Автостопная (значения)]]`)] },
+        ] },
+        { type: 'callout', kind: 'info', title: 'Слои и версии', text: 'Над каждой статьёй есть переключатели слоёв: **Метрика** (ритмические схемы), **Интертекст** (отсылки и гипотезы) и **Комментарий аналитика** (рабочие замечания, по умолчанию скрыты). У статей о песнях две версии — «Подробный разбор» и «Кратко».' },
+      ],
+    });
+  }
+
+  // --- About the author
+  {
+    const f = r();
+    P.push({
+      slug: 'ob-avtore', title: 'Об авторе', cats: ['ob-avtore'], order: 20,
+      summary: 'Александр Евгеньевич Непомнящий (1968–2007) — поэт, автор-исполнитель и рок-бард из Коврова; краткая биография по источникам и список того, что не удалось проверить.',
+      blocks: [
+        { type: 'hatnote', kind: 'about', text: 'Статья о поэте и рок-барде А. Е. Непомнящем (1968–2007), авторе песен, разобранных в этой базе. О других людях с той же фамилией см. справочные издания.' },
+        { type: 'infobox', title: 'Александр Непомнящий', subtitle: 'поэт, автор-исполнитель', image: 'guitar', caption: 'Иллюстрация-символ (не портрет)', rows: [
+          { label: 'Полное имя', value: `Александр Евгеньевич Непомнящий${f('wikiRu')}` },
+          { label: 'Родился', value: '16 февраля 1968, Ковров' },
+          { label: 'Умер', value: '20 апреля 2007, Иваново' },
+          { label: 'Род деятельности', value: 'поэт, певец, автор песен, гитарист, публицист' },
+          { label: 'Жанры', value: 'авторская песня, рок' },
+          { label: 'Коллективы', value: '«Троица», «Dead Mazay & Зайцы», совместная работа с группой «Кранты»' },
+          { label: 'Лейблы', value: 'Студия «Колокол», «Выргород», Bull Terrier Records' },
+          { label: 'Сайт', value: `[nepomn.ru](https://www.nepomn.ru/)${f('site')}` },
+        ] },
+        T(`**Александр Евгеньевич Непомнящий** (16 февраля 1968, Ковров — 20 апреля 2007, Иваново) — русский поэт, автор-исполнитель и рок-бард${f('wikiRu')}${f('wikiEn')}. Его ранние песни социально-бунтарские, поздние — православные: так эволюцию его творчества описывают исследователи${f('militchuk')}.
+
+## Биография
+По данным Википедии, Непомнящий учился в ковровской школе № 1; в 1985 году не поступил на юридический факультет Ивановского университета и учился в техникуме, в 1987–1989 годах служил во внутренних войсках в Кемерове, в 1997 году окончил филологический факультет ИвГУ; богословское образование начинал, но не закончил${f('wikiRu')}. В 1991 году был приглашён на рок-фестиваль «Оскольская лира», получил премию и позднее входил в его жюри${f('wikiRu')}.
+
+## Творческий путь
+Номерные альбомы выходили в 1994–2003 годах, в 1990-е — на аудиокассетах (см. [[albomy|Альбомы и записи]])${f('audio')}. С 1996 года Непомнящий выступал с московской группой «Кранты»; полуэлектрический альбом «Полюс» (1997) записан при её участии${f('wikiRu')}. Состав «Полюса» по сайту: соло-гитара А. Булычёв, гитара и звукорежиссура А. Вертоградов${f('r5')}. Альбом «Поражение» (2000) записан на студии «Форпост» под одну акустическую гитару${f('r7')}${f('cahier')}.
+
+## Взгляды
+Источники описывают эволюцию взглядов автора. Он был членом НБП и руководил её ковровским отделением, затем разочаровался в деятельности партии${f('wikiRu')}; 1 мая 1998 года вместе с Егором Летовым организовал концерт-митинг на Васильевском спуске, в 1999 году — фестиваль в Иванове против бомбардировок Югославии${f('wikiRu')}. Ранние песни звучат как упрёк Богу и полны мотивов богооставленности; после воцерковления на первый план вышла православная и патриотическая тематика (по Википедии — начиная с «Полюса»), а в 2000 году автор назвал себя православным${f('wikiRu')}. А. А. Милитчук рассматривает его как православного рок-барда, настаивавшего на сдержанности в разговоре о Боге в искусстве${f('militchuk')}.
+
+## Болезнь и смерть
+Весной 2004 года у Непомнящего диагностировали глиобластому; летом того же года его прооперировали. Он умер 20 апреля 2007 года в Иванове, отпет и похоронен в Коврове${f('wikiRu')}.
+
+## Память и издания
+Эдуард Лимонов посвятил ему главу в «Книге мёртвых 2»; изданы сборник «Рок-поэзия Александра Непомнящего: исследования и материалы» (Иваново, 2009) и книга «Стихи» («Выргород», 2013); вышли трибьюты 2014 и 2024 годов${f('wikiRu')}${f('wikiEn')}. Альбомы переиздаются на CD (см. [[hronologiya|Хронология]]).`),
+        { type: 'callout', kind: 'warning', title: 'Что не удалось проверить', text: `- Точные даты записи каждой песни и их длительность — {{placeholder|уточнить по записям и буклетам «Выргорода»}}.
+- Что именно означает год под текстом на официальном сайте — дату написания или первого исполнения — {{placeholder|уточнить}}.
+- Год написания песни «Бесплатно» — {{placeholder|уточнить}}.
+- Авторские комментарии к песням этой базы — {{placeholder|найти интервью и буклеты}}.` },
+        { type: 'references', title: 'Источники' },
+        { type: 'seealso', items: [{ link: 'albomy' }, { link: 'hronologiya' }, { link: 'pesni', note: 'разборы песен' }] },
+        NAVBOX,
+      ],
+    });
+  }
+
+  // --- Albums
+  {
+    const f = r();
+    P.push({
+      slug: 'albomy', title: 'Альбомы и записи', parent: 'ob-avtore', cats: ['ob-avtore'], order: 21,
+      summary: 'Альбомы Александра Непомнящего, в которые вошли разобранные песни: «Экстремизм», «Полюс», «Земляника», «Поражение», «У Морриса» и другие.',
+      blocks: [
+        { type: 'media', media: 'cassette', align: 'right', width: 260, caption: 'Большинство альбомов 1990-х выходили на аудиокассетах.' },
+        T(`Альбомы [[ob-avtore|Александра Непомнящего]] в 1990-е выходили на аудиокассетах; CD-издания появились позже, в основном после смерти автора${f('cahier')}. Ниже — альбомы по списку официального сайта${f('audio')}, с отметкой песен, разобранных в этой базе.`),
+        { type: 'table', caption: 'Альбомы и песни этой базы', head: 'row', striped: true, rows: [
+          ['Альбом', 'Год', 'Песни из этой базы'],
+          ['Новые похождения А. И. Свидригайлова (1968–1994)', '1994', '— (формула названия отозвалась в [[buratino|«Буратино»]])'],
+          ['[[albomy#Экстремизм (1995)|Экстремизм]]', '1995', '[[partizanskaya|Партизанская]]'],
+          ['Тёмная сторона любви', '1996', '—'],
+          ['[[albomy#Полюс (1997)|Полюс]]', '1997', '[[zemlyanichnye-polyany|Земляничные поляны]], [[konets|Конец]], [[avtostopnaya|Автостопная]], [[partizanskaya|Партизанская]], [[besplatno|Бесплатно]], [[po-odnomu|По одному]]'],
+          ['[[albomy#Земляника (1999)|Земляника]]', '1999', '[[zemlyanichnye-polyany|Земляничные поляны]], [[avtostopnaya-2|Автостопная №2 (Цветочек)]]'],
+          ['[[albomy#Поражение (2000)|Поражение]]', '2000', '[[o-nashem-porazhenii|О нашем поражении]], [[apofatiya|Апофатия]], [[buratino|Новые похождения Буратино]], [[vsemirnoe-gosudarstvo|Всемирное государство]]'],
+          ['[[albomy#У Морриса (2000)|У Морриса]]', '2000', 'Цветочек, Автостопная, О нашем поражении, Буратино, Всемирное государство'],
+          ['[[albomy#Зелёные холмы (2001)|Зелёные холмы]] (бутлег)', '2001', '[[po-odnomu|По одному]]'],
+          ['Хлеб земной', '2003', '— («Автостопная 3», см. [[avtostopnaya-znacheniya|значения]])'],
+        ] },
+        T(`## Экстремизм (1995)
+Кассетный альбом, записанный на студии MW records; открывается «Синим автобусом», вторая песня — [[partizanskaya|«Партизанская»]]${f('r3')}. В альбом вошёл и «Конец русского рок-н-ролла», перекликающийся с [[konets|«Концом»]].
+
+## Полюс (1997)
+Полуэлектрический альбом, записанный с участием группы «Кранты»${f('wikiRu')}; соло-гитара — А. Булычёв, гитара и звукорежиссура — А. Вертоградов${f('r5')}. Шесть из четырнадцати песен альбома разобраны здесь; рецензент KM.RU называет его переломным: от богемной «тусовки» — к метафизике${f('kmPolus')}.
+
+## Земляника (1999)
+Двухчастный кассетный альбом${f('r6')}; позже вышел на двух CD${f('r18')}, переиздан Bull Terrier Records${f('kmZem')}. Рецензент KM.RU видит в нём поворот от политики к борьбе с идеями, а не с людьми${f('kmZem')}.
+
+## Поражение (2000)
+Записан на студии «Форпост» (звукорежиссёр С. Киселёв, продюсер К. Кудрячев)${f('r7')}; голос и акустическая гитара. Первое CD-издание вышло на «Выргороде» уже после смерти автора; рецензент «Записной книжки» ставит альбом рядом с «Земляникой» как лучшие работы автора${f('cahier')}.
+
+## У Морриса (2000)
+Домашняя запись в Иванове: пять песен этой базы в одной программе${f('r27')}.
+
+## Зелёные холмы (2001)
+Неофициальный сборник, где есть [[po-odnomu|«По одному»]]${f('r9')}.`),
+        { type: 'references', title: 'Источники' },
+        NAVBOX,
+      ],
+    });
+  }
+
+  // --- Chronology
+  {
+    const f = r();
+    const songAt = (slug) => `[[${slug}|«${SHORT[slug]}»]]`;
+    P.push({
+      slug: 'hronologiya', title: 'Хронология', parent: 'ob-avtore', cats: ['ob-avtore'], order: 22,
+      summary: 'Документированные события жизни Александра Непомнящего и датировки песен этой базы; неизвестные даты отмечены плашками.',
+      blocks: [
+        T(`Хронология объединяет документированные события жизни [[ob-avtore|автора]] и датировки песен этой базы. Год песни — тот, что указан под текстом на официальном сайте; что он означает (написание или первое исполнение), ещё нужно уточнить.`),
+        { type: 'timeline', style: 'line', items: [
+          { date: '1968', title: 'Рождение', text: `16 февраля, Ковров${f('wikiRu')}.` },
+          { date: '1987–1989', title: 'Армия', text: `Служба во внутренних войсках, Кемерово${f('wikiRu')}.` },
+          { date: '1991', title: '«Оскольская лира»', text: `Премия фестиваля; позднее — член жюри${f('wikiRu')}.` },
+          { date: '1994', title: 'Первый номерной альбом', text: `«Новые похождения А. И. Свидригайлова (1968–1994)»${f('r1')}.` },
+          { date: '1995', title: '«Экстремизм»', text: `Датировка ${songAt('partizanskaya')}${f('s28')}.`, link: 'partizanskaya' },
+          { date: '1996', title: '«Тёмная сторона любви»; «Кранты»', text: `Альбом${f('r4')}; начало совместной работы с группой «Кранты»${f('wikiRu')}. Датировки ${songAt('po-odnomu')} и ${songAt('konets')}.` },
+          { date: '1997', title: '«Полюс»; диплом ИвГУ', text: `Датировки ${songAt('apofatiya')}, ${songAt('avtostopnaya')}, ${songAt('zemlyanichnye-polyany')}. ${songAt('besplatno')} вошла в «Полюс» — значит, написана не позднее 1997; точный год {{placeholder|уточнить}}.`, link: 'albomy' },
+          { date: '1998', title: 'Концерт на Васильевском спуске', text: `1 мая — концерт-митинг с Егором Летовым${f('wikiRu')}. На сайте есть вариант «Цветочка» с пометкой «Форпост 1998»${f('s85')} — {{placeholder|уточнить, что это за запись}}.` },
+          { date: '1999', title: '«Земляника»; фестиваль в Иванове', text: `Альбом${f('r6')}; фестиваль против бомбардировок Югославии${f('wikiRu')}. Датировки ${songAt('avtostopnaya-2')}, ${songAt('buratino')}, ${songAt('o-nashem-porazhenii')}, ${songAt('vsemirnoe-gosudarstvo')}.` },
+          { date: '2000', title: '«Поражение», «У Морриса»', text: `Студийный и домашний альбомы${f('r7')}${f('r27')}; автор называет себя православным${f('wikiRu')}.` },
+          { date: '2001', title: '«Зелёные холмы»', text: `Неофициальный сборник${f('r9')}.` },
+          { date: '2003', title: '«Хлеб земной»', text: `Номерной альбом${f('r10')}; запись следующего, «Я потом расскажу тебе, Родина…», не была завершена из-за болезни (издан в 2022 году)${f('wikiRu')}.` },
+          { date: '2004', title: 'Болезнь', text: `Диагноз — глиобластома; операция${f('wikiRu')}.` },
+          { date: '2007', title: 'Смерть', text: `20 апреля, Иваново; похоронен в Коврове${f('wikiRu')}.` },
+          { date: '2009–2013', title: 'Книги', text: `Сборник исследований (Иваново, 2009) и книга «Стихи» (2013)${f('wikiEn')}.` },
+          { date: '2014–2024', title: 'Трибьюты и переиздания', text: `Трибьюты 2014 и 2024 годов, CD-переиздания${f('wikiRu')}${f('kmZem')}.` },
+        ] },
+        { type: 'references', title: 'Источники' },
+        NAVBOX,
+      ],
+    });
+  }
+
+  // --- Songs index
+  P.push({
+    slug: 'pesni', title: 'Песни', cats: ['pesni'], order: 10,
+    summary: 'Список одиннадцати разобранных песен с датировками, альбомами, размером и ведущими мотивами.',
+    blocks: [
+      T(`В базе разобраны одиннадцать песен [[ob-avtore|Александра Непомнящего]], написанных, по датировкам официального сайта, в 1995–1999 годах. У двух песен есть вторые названия: [[cvetochek|«Цветочек»]] и [[tantsuy-poka|«Танцуй пока»]] ведут на полные статьи. Песни с общим заглавием перечислены на странице [[avtostopnaya-znacheniya|Автостопная (значения)]].`),
+      { type: 'table', caption: 'Сводная таблица песен', head: 'row', sortable: true, striped: true, rows: [
+        ['Песня', 'Год', 'Альбомы', 'Размер', 'Ведущие мотивы'],
+        ...SONGS.map((s) => [`[[${s.slug}|${s.title}]]`, /^\d{4}$/.test(s.year) ? s.year : '—', s.albums(() => '').replace(/\[\[[^|\]]*\|([^\]]*)\]\]/g, '$1'), s.meter, s.motifs.slice(0, 2).map(motifLink).join(', ')]),
+      ] },
+      { type: 'pagelist', title: 'Статьи о песнях', source: 'children', style: 'list', sort: 'order', limit: 20 },
+      NAVBOX,
+    ],
+  });
+
+  // --- Motifs
+  P.push({
+    slug: 'motivy', title: 'Мотивы', cats: ['motivy'], order: 30,
+    summary: 'Девять сквозных мотивов песен — огонь, дорога, последняя война, весна и снег, поражение как победа и другие — и карта их связей с песнями.',
+    blocks: [
+      T(`Песни этой базы связаны общими мотивами — повторяющимися образами и сюжетными ходами. Карта показывает, какие мотивы ведут в каких песнях; каждый узел — ссылка. Под картой мотивы описаны по отдельности; отдельные образы собраны на странице [[obrazy-i-simvoly|Образы и символы]].`),
+      motifMap(),
+      T(`## Огонь и свет
+Главный мотив: огонь гаснет, чтобы вспыхнул свет иного порядка. Внутреннее солнце в [[apofatiya|«Апофатии»]], цветок-огонь в [[avtostopnaya-2|«Цветочке»]], костёр с мотыльками в [[po-odnomu|«По одному»]], горящие скиты в [[konets|«Конце»]], пламя преображения в [[buratino|«Буратино»]], залитый костёр и новорождённый свет в [[partizanskaya|«Партизанской»]], свет во тьме в [[zemlyanichnye-polyany|«Земляничных полянах»]] и над бездной во [[vsemirnoe-gosudarstvo|«Всемирном государстве»]].
+
+## Дорога и бегство
+Трасса — дом и способ жизни ([[avtostopnaya|«Автостопная»]]); бег с украденным огнём ([[avtostopnaya-2|«Цветочек»]]); бегство мальчика на войну ([[partizanskaya|«Партизанская»]]); небесный трамвай ([[besplatno|«Бесплатно»]]); поезд конца ([[konets|«Конец»]]). Дорога почти всегда ведёт за пределы мира.
+
+## Последняя война
+Все войны — одна: партизаны Белоруссии и Батый ([[partizanskaya|«Партизанская»]]), война у Берлина ([[konets|«Конец»]]), большая война, для которой прежние были репетициями ([[o-nashem-porazhenii|«О нашем поражении»]]), обоз, ждущий Дня гнева ([[buratino|«Буратино»]]).
+
+## Весна и снег
+Зима — время испытания, весна — обетование: поляны под снегом ([[zemlyanichnye-polyany|«Земляничные поляны»]]), талая вода и весенний поход ([[avtostopnaya|«Автостопная»]]), ласточка, приносящая весну ([[apofatiya|«Апофатия»]]), партизанская весна, весна, ставшая вечным летом в «Цветочке».
+
+## Поражение как победа
+Апофатический парадокс: побеждают погибшие ([[apofatiya|«Апофатия»]]), честь — расстрелянным и забытым ([[o-nashem-porazhenii|«О нашем поражении»]]), «наша» Победа за осыпавшейся штукатуркой ([[konets|«Конец»]]), святые и мученики, убившие Государство в себе ([[vsemirnoe-gosudarstvo|«Всемирное государство»]]). Отсюда и название альбома «Поражение».
+
+## Купля и продажа
+Мир как рынок и отказ продаваться: рамка [[avtostopnaya|«Автостопной»]], бесплатная игра в [[besplatno|«Бесплатно»]], печать для купли-продажи во [[vsemirnoe-gosudarstvo|«Всемирном государстве»]], эстрада как товар в [[o-nashem-porazhenii|«О нашем поражении»]].
+
+## Система и спектакль
+Власть как театр и машина: театр Карабаса ([[buratino|«Буратино»]]), биороботы ([[konets|«Конец»]]), кукловод и Пьеро ([[o-nashem-porazhenii|«О нашем поражении»]]), Государство-мать и надзиратель ([[vsemirnoe-gosudarstvo|«Всемирное государство»]]), Система, купившая поп-звезду ([[besplatno|«Бесплатно»]]). Общий источник формулы — «Общество спектакля» Ги Дебора.
+
+## Остановленное время
+Время ломается, останавливается или идёт вспять: сломанные часы и побег сквозь промежутки секунд ([[avtostopnaya-2|«Цветочек»]]), ослепшее и замершее время ([[zemlyanichnye-polyany|«Земляничные поляны»]]), пуля, возвращающаяся в патрон ([[besplatno|«Бесплатно»]]), спешащие часы ([[partizanskaya|«Партизанская»]]).
+
+## Небо и полёт
+Птица, трамвай, кони: подстреленная ласточка возвращается в небо ([[apofatiya|«Апофатия»]]), гордая птица гибнет, но свет приказывает долететь ([[zemlyanichnye-polyany|«Земляничные поляны»]]), птиц учат летать ужи ([[besplatno|«Бесплатно»]]), мотыльки летят на огонь ([[po-odnomu|«По одному»]]), путникам не нужно небо — оно под ногами ([[avtostopnaya|«Автостопная»]]).`),
+      { type: 'seealso', items: [{ link: 'obrazy-i-simvoly' }, { link: 'prostranstvo' }, { link: 'personazhi' }, { link: 'intertekst' }] },
+      NAVBOX,
+    ],
+  });
+
+  // --- Images and symbols
+  P.push({
+    slug: 'obrazy-i-simvoly', title: 'Образы и символы', parent: 'motivy', cats: ['motivy'], order: 31,
+    summary: 'Словарь ключевых образов песен: огонь и солнце, птица, снег и зеркало, дерево, транспорт, стена и печать, театр, часы.',
+    blocks: [
+      T(`Словарь ключевых образов. В отличие от [[motivy|мотивов]] (сюжетных ходов), здесь собраны отдельные предметы и фигуры и то, что они значат в разных песнях.
+
+## Огонь, солнце, свет
+Огонь двойствен: он губит (мотыльки, скиты, суд) и преображает (пламя, цветок, солнце внутри). Солнце у Непомнящего почти всегда — знамя или внутренний источник, а не небесное тело.
+
+## Птица
+Ласточка, жар-птица, гордая птица, убитая птичка, птицы, которых учат летать ужи. Птица — душа и песня; её гибель и воскресение отмечают поворот сюжета.
+
+## Снег, лёд, зеркало
+Снег хранит землянику; лёд сковывает сердце (Андерсен); разбитое зеркальце надо сложить заново ([[zemlyanichnye-polyany|«Земляничные поляны»]], [[avtostopnaya-2|«Цветочек»]]).
+
+## Дерево и древесина
+Срубленная яблоня ([[vsemirnoe-gosudarstvo|«Всемирное государство»]]), деревянные человечки и поленница ([[buratino|«Буратино»]]), ольха над спящим мальчиком ([[partizanskaya|«Партизанская»]]). Дерево — живое против проводов и асфальта.
+
+## Транспорт
+Небесный трамвай ([[besplatno|«Бесплатно»]]), бешеный поезд совести ([[konets|«Конец»]]), попутки трассы ([[avtostopnaya|«Автостопная»]]), чёрный воронок ([[avtostopnaya-2|«Цветочек»]]). Транспорт — способ уйти за предел или быть увезённым против воли.
+
+## Стена, кирпич, печать
+Кирпич в стене, печать и магнитная карта, помеченная именем Зверя, — знаки включённости в Систему ([[vsemirnoe-gosudarstvo|«Всемирное государство»]], [[avtostopnaya|«Автостопная»]]).
+
+## Театр, кукла, экран
+Театр Карабаса, кукловод и Пьеро, телевизионная вечность, кино с трупами солдат: мир как спектакль ([[buratino|«Буратино»]], [[o-nashem-porazhenii|«О нашем поражении»]], [[besplatno|«Бесплатно»]]).
+
+## Часы и время
+Сломанные часы, патефонная игла, спешащие часики: время — механизм, который можно и нужно сломать.`),
+      { type: 'gallery', title: 'Иллюстрации к песням', style: 'grid', size: 's', items: [
+        { media: 'sunswallow', caption: 'Апофатия', link: 'apofatiya' }, { media: 'snowberry', caption: 'Земляничные поляны', link: 'zemlyanichnye-polyany' },
+        { media: 'flower', caption: 'Цветочек', link: 'avtostopnaya-2' }, { media: 'moths', caption: 'По одному', link: 'po-odnomu' },
+        { media: 'tram', caption: 'Бесплатно', link: 'besplatno' }, { media: 'bricks', caption: 'Всемирное государство', link: 'vsemirnoe-gosudarstvo' },
+      ] },
+      NAVBOX,
+    ],
+  });
+
+  // --- Space and places
+  P.push({
+    slug: 'prostranstvo', title: 'Пространство и места', parent: 'motivy', cats: ['motivy'], order: 32,
+    summary: 'Как устроен мир песен: вертикаль неба, земли и подземелья, город, дорога, лес и поле, дом — и карта названных мест от Беловодья до Брайтон-Бич.',
+    blocks: [
+      T('Пространство песен устроено вертикально: небо — земля — подземелье. Земля делится на город, дорогу и лес с полем; движение героя почти всегда направлено из города по дороге — в лес или в небо.'),
+      SPACE_DIAGRAM,
+      T(`## Вертикаль мира
+Верх — свобода и суд, низ — тюрьма и общий ров; середина — место выбора. Переходы между ярусами совершаются через смерть, полёт или чудо (пройти сквозь стену, ускользнуть сквозь промежутки времени).
+
+## Небо
+Небесный трамвай ([[besplatno|«Бесплатно»]]), алые кони и окопы за небом ([[partizanskaya|«Партизанская»]]), иное небо за скалами ([[zemlyanichnye-polyany|«Земляничные поляны»]]). Небо может оказаться и под ногами — в звёздах на асфальте ([[avtostopnaya|«Автостопная»]]).
+
+## Город
+Квадратные дома, каменные берлоги, очередь к кассе, квартира с котом учёным, телеэкран. Город — пространство Системы и спектакля.
+
+## Дорога
+Трасса, ночное шоссе, оцеплённый район, конечная остановка. Дорога — дом путников ([[avtostopnaya|«Автостопная»]]) и путь бегства ([[avtostopnaya-2|«Цветочек»]]).
+
+## Лес и поле
+Белорусские леса и Русское поле ([[partizanskaya|«Партизанская»]]), лес, выросший на месте тюрьмы, и лес-дом, где героя никто не отыщет ([[avtostopnaya-2|«Цветочек»]]), земляничные поляны. Лес — укрытие и родина.
+
+## Подземелье, ров, тюрьма
+Общий ров ([[po-odnomu|«По одному»]]), подземелье, где пуля находит охотника, тюрьма с хозяином ([[apofatiya|«Апофатия»]]), смирительный чулан ([[konets|«Конец»]]).
+
+## Дом
+Дом не совпадает с жилищем: дом — дорога, лес или Дверь за нарисованным очагом ([[buratino|«Буратино»]]); снесённый дом — знак гибели мира ([[po-odnomu|«По одному»]]).`),
+      { type: 'table', caption: 'Названные места', head: 'row', striped: true, compact: true, rows: [
+        ['Место', 'Песня', 'Значение'],
+        ['Беловодье', '[[avtostopnaya|Автостопная]]', 'утопия праведной земли'],
+        ['Китеж', '[[partizanskaya|Партизанская]]', 'град, открывающийся праведным'],
+        ['Белорусские леса, Русское поле', '[[partizanskaya|Партизанская]]', 'партизанская и эпическая война'],
+        ['Волга', '[[buratino|Новые похождения Буратино]]', 'река, текущая в рай'],
+        ['Олимп', '[[avtostopnaya-2|Цветочек]]', 'дом ложных богов'],
+        ['Нюрнберг, Брест', '[[o-nashem-porazhenii|О нашем поражении]]', 'суд и крепость'],
+        ['Берлин', '[[konets|Конец]]', 'конец войны и мира'],
+        ['Брайтон-Бич, Кремль', '[[besplatno|Бесплатно]]', 'эмиграция и власть денег'],
+        ['Замок', '[[apofatiya|Апофатия]]', 'кафкианский лабиринт'],
+      ] },
+      NAVBOX,
+    ],
+  });
+
+  // --- Characters and addressees
+  P.push({
+    slug: 'personazhi', title: 'Персонажи и адресаты', parent: 'motivy', cats: ['motivy'], order: 33,
+    summary: 'Кто говорит в песнях и к кому обращается: «я», «мы», рассказчик; персонажи от Буратино и Хомы до Ооки Исаны и Евпатия Коловрата.',
+    blocks: [
+      T(`## Лирический субъект
+В песнях этой базы три основных типа говорящего (термины — в [[glossariy#Субъект и адресат|глоссарии]]): пророческое или исповедальное «я», хоровое «мы» андеграунда и эпический рассказчик, говорящий о герое в третьем лице. Многие песни переходят от одного типа к другому, и этот переход значим.`),
+      { type: 'table', caption: 'Субъект и адресат по песням', head: 'row', striped: true, compact: true, rows: [
+        ['Песня', 'Кто говорит', 'К кому обращено'],
+        ...SONGS.map((s) => [`[[${s.slug}|${SHORT[s.slug]}]]`, s.subject.split(';')[0], s.subject.includes('адресат') ? s.subject.split('адресат')[1].replace(/^[\s—-]+/, '') : '—']),
+      ] },
+      T(`## Персонажи
+Персонажи почти всегда заимствованы — из сказки, Библии, литературы, кино. Их функция — сделать частную ситуацию мифологической.`),
+      { type: 'table', caption: 'Персонажи песен', head: 'row', striped: true, compact: true, sortable: true, rows: [
+        ['Персонаж', 'Откуда', 'Песня', 'Роль'],
+        ['Буратино, Карабас-Барабас', 'А. Н. Толстой', '[[buratino|Буратино]], [[besplatno|Бесплатно]]', 'кукла, которая может ожить; хозяин театра'],
+        ['Хома, Вий', 'Н. Гоголь', '[[o-nashem-porazhenii|Танцуй пока]], [[avtostopnaya-2|Цветочек]]', 'выстоять до петухов; слепое зло'],
+        ['Фродо', 'Дж. Р. Р. Толкин', '[[partizanskaya|Партизанская]]', 'оставшийся без кораблей'],
+        ['Евпатий Коловрат', 'древнерусская повесть', '[[partizanskaya|Партизанская]]', 'стояние насмерть'],
+        ['Ооки Исана', 'К. Оэ', '[[konets|Конец]]', 'отшельник, принявший бой'],
+        ['Штирлиц, засланный казачок', 'советское кино', '[[buratino|Буратино]]', 'маски разведчика'],
+        ['Алёша Карамазов', 'Ф. Достоевский', '[[vsemirnoe-gosudarstvo|Всемирное государство]]', 'праведник-диверсант'],
+        ['Мессир, Иуда', 'Булгаков; Евангелие', '[[besplatno|Бесплатно]]', 'победитель телеигры; предатель без раскаяния'],
+        ['Снежная королева', 'Г. Х. Андерсен', '[[zemlyanichnye-polyany|Земляничные поляны]]', 'невольное орудие очищения'],
+        ['Пьеро, кукловод, Лилит', 'комедия дель арте; миф', '[[o-nashem-porazhenii|Танцуй пока]]', 'маски эпохи'],
+        ['Божок запертого неба', 'Платон; гностики', '[[avtostopnaya-2|Цветочек]]', 'ложный творец'],
+        ['Мальчик', '—', '[[partizanskaya|Партизанская]]', 'наследник деда'],
+      ] },
+      NAVBOX,
+    ],
+  });
+
+  // --- Intertext
+  P.push({
+    slug: 'intertekst', title: 'Интертекстуальные связи', parent: 'motivy', cats: ['motivy'], order: 34,
+    summary: 'Сводная таблица отсылок: Библия, русская и мировая литература, фольклор, рок и массовая культура, философия — с оценкой надёжности каждой связи.',
+    blocks: [
+      T(`Непомнящий — филолог по образованию, и его песни насыщены отсылками. Таблицы ниже различают **явные** связи (имя или заглавие названо прямо, сюжет пересказан) и **вероятные** (узнаваемая формула без называния). Гипотезы вынесены в отдельную таблицу слоя «Интертекст». Термины — в [[glossariy#Интертекст и стиль|глоссарии]].`),
+      { type: 'table', caption: 'Явные и вероятные связи', head: 'row', striped: true, compact: true, sortable: true, rows: [
+        ['Источник', 'Песня', 'Связь'],
+        ['Откровение Иоанна, 13:16–17 (печать)', '[[vsemirnoe-gosudarstvo|Всемирное государство]], [[avtostopnaya|Автостопная]]', 'явная'],
+        ['Откровение, 21:1 (новое небо и земля)', '[[konets|Конец]], [[zemlyanichnye-polyany|Земляничные поляны]]', 'вероятная'],
+        ['Мф. 16:3; Гал. 6:7', '[[o-nashem-porazhenii|О нашем поражении]]', 'вероятная'],
+        ['Н. Гоголь, «Вий»', '[[o-nashem-porazhenii|О нашем поражении]], [[avtostopnaya-2|Цветочек]]', 'явная'],
+        ['А. Н. Толстой, «Золотой ключик»', '[[buratino|Буратино]], [[besplatno|Бесплатно]]', 'явная'],
+        ['М. Булгаков, «Мастер и Маргарита»', '[[buratino|Буратино]], [[besplatno|Бесплатно]]', 'вероятная'],
+        ['А. Пушкин: Лукоморье, «Пир во время чумы»', '[[avtostopnaya|Автостопная]], [[buratino|Буратино]]', 'вероятная'],
+        ['А. Блок, «Двенадцать»', '[[besplatno|Бесплатно]]', 'вероятная'],
+        ['Н. Гумилёв, «Заблудившийся трамвай»', '[[besplatno|Бесплатно]]', 'вероятная'],
+        ['М. Салтыков-Щедрин, «Премудрый пискарь»', '[[apofatiya|Апофатия]]', 'явная'],
+        ['Ф. Кафка, «Замок»', '[[apofatiya|Апофатия]]', 'вероятная'],
+        ['Ф. Достоевский, «Братья Карамазовы»', '[[vsemirnoe-gosudarstvo|Всемирное государство]]', 'явная'],
+        ['О. Хаксли, «Двери восприятия», «О дивный новый мир»', '[[vsemirnoe-gosudarstvo|Всемирное государство]]', 'явная / вероятная'],
+        ['Дж. Р. Р. Толкин', '[[partizanskaya|Партизанская]]', 'явная'],
+        ['К. Оэ, «Объяли меня воды до души моей»', '[[konets|Конец]]', 'явная'],
+        ['Г. Х. Андерсен, «Снежная королева»', '[[zemlyanichnye-polyany|Земляничные поляны]], [[avtostopnaya-2|Цветочек]]', 'явная'],
+        ['«Младшая Эдда»: Глейпнир, Фенрир', '[[zemlyanichnye-polyany|Земляничные поляны]]', 'вероятная'],
+        ['Платон, «Пир»; миф о Прометее; Киплинг', '[[avtostopnaya-2|Цветочек]]', 'вероятная'],
+        ['Китеж, Беловодье, Евпатий Коловрат', '[[partizanskaya|Партизанская]], [[avtostopnaya|Автостопная]]', 'явная'],
+        ['Pink Floyd, «Another Brick in the Wall»', '[[vsemirnoe-gosudarstvo|Всемирное государство]]', 'явная'],
+        ['The Beatles, «Strawberry Fields Forever»', '[[zemlyanichnye-polyany|Земляничные поляны]]', 'вероятная'],
+        ['Ги Дебор, «Общество спектакля»', '[[buratino|Буратино]], [[vsemirnoe-gosudarstvo|Всемирное государство]]', 'явная'],
+        ['«Караул устал» (А. Железняков, 1918)', '[[buratino|Буратино]], [[zemlyanichnye-polyany|Земляничные поляны]]', 'вероятная'],
+      ] },
+      { type: 'table', layer: 'intertext', caption: 'Гипотезы (слой «Интертекст»)', head: 'row', striped: true, compact: true, rows: [
+        ['Возможный источник', 'Песня', 'На чём основано'],
+        ['Гёте — Жуковский, «Лесной царь»', '[[partizanskaya|Партизанская]]', 'ольха и гибель ребёнка'],
+        ['Ч. Милош, «Песенка о конце света»', '[[konets|Конец]]', 'конец, которого никто не замечает (типологически)'],
+        ['П. Б. Шелли, «Озимандия»', '[[po-odnomu|По одному]]', 'развалины, заметённые песком'],
+        ['И. Бергман, «Земляничная поляна»', '[[zemlyanichnye-polyany|Земляничные поляны]]', 'заглавие, тема памяти и смерти'],
+        ['Стругацкие, «Пикник на обочине»', '[[avtostopnaya|Автостопная]]', 'пикник у дороги'],
+        ['Г. Маркузе, «Одномерный человек»; Оруэлл', '[[vsemirnoe-gosudarstvo|Всемирное государство]]', 'одномерность, всевидящий надзор'],
+        ['А. Блок, «Балаганчик»', '[[o-nashem-porazhenii|О нашем поражении]]', 'Пьеро'],
+      ] },
+      { type: 'callout', kind: 'tip', title: 'Как проверять гипотезы', text: 'Связь считается надёжной, если совпадает не один образ, а их сочетание (например, цепь из невозможных материалов и волк, ставший псом, — это Глейпнир и Фенрир). Своё мнение и находки удобно записывать в слой «Комментарий аналитика».' },
+      NAVBOX,
+    ],
+  });
+
+  // --- Metre and rhythm
+  {
+    const f = r();
+    P.push({
+      slug: 'metrika', title: 'Метрика и ритм', cats: ['teoriya'], order: 40,
+      summary: 'Сравнение размеров, рифмовки и строфики одиннадцати песен: от правильного ямба «Цветочка» до верлибра «Всемирного государства».',
+      blocks: [
+        T(`Страница сравнивает стиховую форму песен. Разбор сделан по слуху и по слогам, без цитирования текста: ритм записан схемами, где ∪ — безударный слог, —́ — ударный, | — цезура. Поскольку это песни, реальное звучание зависит от мелодии; схемы описывают текст. Классификация размеров следует традиции М. Л. Гаспарова${f('gasparov1')}.`),
+        { type: 'media', media: 'metre', align: 'center', caption: 'Пять классических размеров: ударные слоги — высокие столбики.' },
+        { type: 'table', caption: 'Сравнительная таблица', head: 'row', striped: true, compact: true, rows: [
+          ['Песня', 'Размер', 'Рифмовка', 'Строение'],
+          ...SONGS.map((s) => [`[[${s.slug}|${SHORT[s.slug]}]]`, s.meter, s.rhyme, s.size]),
+        ] },
+        T(`## Наблюдения
+- **Три полюса**. Строгий классический метр ([[avtostopnaya-2|«Цветочек»]] — ямб; [[avtostopnaya|«Автостопная»]] — дактиль; припев [[partizanskaya|«Партизанской»]] — анапест), [[glossariy#Метрика|дольник и тактовик]] (большинство песен 1995–1997 годов) и свободный стих ([[vsemirnoe-gosudarstvo|«Всемирное государство»]], [[o-nashem-porazhenii|«О нашем поражении»]]).
+- **Смена метра — смысловой сигнал**. Припев «По одному» переходит на длинный хорей, финал «Буратино» — на раёшный хорей, сказочная часть «Автостопной» — с дактиля на хорей.
+- **Хорей сказки**. Четырёхстопный хорей и его удвоение (восьмистопник с цезурой) появляются там, где песня говорит языком сказки или балагана: «Земляничные поляны», «Буратино», «Апофатия».
+- **Трёхсложники войны**. Анапест и дактиль «Партизанской» связывают её с традицией военной песни; о «семантическом ореоле» размеров см. Гаспарова${f('gasparov2')}.
+- **Рифма**. От строгой схемы AABBA в [[besplatno|«Бесплатно»]] и сквозного монорима в «По одному» до полного отказа от рифмы во «Всемирном государстве», где её роль берёт рефрен.`),
+        scheme('ямб          ∪ —́ ∪ —́ ∪ —́ ∪ —́\nхорей        —́ ∪ —́ ∪ —́ ∪ —́ ∪\nдактиль      —́ ∪ ∪ —́ ∪ ∪ —́ ∪ ∪\nамфибрахий   ∪ —́ ∪ ∪ —́ ∪ ∪ —́ ∪\nанапест      ∪ ∪ —́ ∪ ∪ —́ ∪ ∪ —́\nдольник      ∪ —́ ∪ —́ ∪ ∪ —́ ∪ —́   (интервал 1–2 слога)\nтактовик     —́ ∪ ∪ ∪ —́ ∪ —́ ∪ ∪ —́  (интервал 1–3 слога)', 'Справочные схемы'),
+        { type: 'references', title: 'Литература' },
+        NAVBOX,
+      ],
+    });
+  }
+
+  // --- Glossary
+  {
+    const g = (title, items, extra = {}) => ({ type: 'glossary', title, layout: 'table', items: items.map(([term, meaning, note]) => ({ term, meaning, note: note || '' })), ...extra });
+    P.push({
+      slug: 'glossariy', title: 'Глоссарий', cats: ['teoriya'], order: 41,
+      summary: 'Термины разбора: размеры (ямб, хорей, дактиль, анапест, дольник, тактовик), рифма, композиция (анафора, рефрен, подхват), лирический субъект, интертекст.',
+      blocks: [
+        T('Термины, которыми пользуется разбор. Колонка «Примечание» показывает, где термин встречается в базе (в разделе «Метрика» она относится к слою «Метрика»).'),
+        T('## Метрика'),
+        g('', [
+          ['Ямб', 'двусложный размер с ударением на втором слоге стопы', 'весь [[avtostopnaya-2|«Цветочек»]]'],
+          ['Хорей', 'двусложный размер с ударением на первом слоге', '[[apofatiya|«Апофатия»]], финал [[buratino|«Буратино»]]'],
+          ['Дактиль', 'трёхсложный размер с ударением на первом слоге', '[[avtostopnaya|«Автостопная»]]'],
+          ['Амфибрахий', 'трёхсложный размер с ударением на втором слоге', 'строка побега в «Цветочке»'],
+          ['Анапест', 'трёхсложный размер с ударением на третьем слоге', 'припев [[partizanskaya|«Партизанской»]]'],
+          ['Пиррихий, пэон', 'пропуск ударения на сильном месте; ритм с ударением через три слога', 'длинный хорей «Земляничных полян»'],
+          ['Дольник', 'тонический стих: между ударениями 1–2 безударных', '[[po-odnomu|«По одному»]]'],
+          ['Тактовик', 'тонический стих: между ударениями 1–3 безударных', '[[konets|«Конец»]]'],
+          ['Акцентный стих', 'стих, где постоянно только число ударений, а интервалы свободны', '«Бесплатно», «Буратино»'],
+          ['Верлибр', 'свободный стих без метра и рифмы', '[[vsemirnoe-gosudarstvo|«Всемирное государство»]]'],
+          ['Цезура', 'постоянный словораздел внутри длинной строки', 'диалоги «Цветочка»'],
+          ['Клаузула', 'окончание строки: мужская (ударение на последнем слоге), женская, дактилическая', 'все песни'],
+          ['Стык ударений', 'два ударных слога подряд, «сбой» ритма', 'зачин «Апофатии»'],
+        ], { noteLayer: 'meter' }),
+        T('## Рифма'),
+        g('', [
+          ['Парная, перекрёстная, опоясывающая', 'схемы AABB, ABAB, ABBA', '[[metrika|Метрика и ритм]]'],
+          ['Лимерик', 'пятистишие с рифмовкой AABBA', '[[besplatno|«Бесплатно»]]'],
+          ['Монорим', 'одна рифма на протяжении многих строк', '[[po-odnomu|«По одному»]]'],
+          ['Внутренняя рифма', 'созвучие внутри строки, обычно на цезуре', '[[zemlyanichnye-polyany|«Земляничные поляны»]]'],
+          ['Грамматическая рифма', 'рифма одинаковых форм (глагол с глаголом)', 'рамка «Автостопной»'],
+          ['Неточная рифма, ассонанс', 'совпадают ударные гласные, но не согласные', '«Апофатия», «Партизанская»'],
+          ['Раёшник', 'ярмарочный стих с парными рифмами, речь балаганного зазывалы', 'финал «Буратино»'],
+        ]),
+        T('## Композиция'),
+        g('', [
+          ['Рефрен', 'повторяющаяся строка или группа строк', 'все песни'],
+          ['Анафора', 'повтор начала строк', '«Автостопная», «Всемирное государство»'],
+          ['Эпифора', 'повтор конца строк или строф', '«Всемирное государство», литания «О нашем поражении»'],
+          ['Подхват (анадиплосис)', 'конец строки повторяется в начале следующей', '[[konets|«Конец»]]'],
+          ['Кольцевая композиция', 'финал повторяет начало', '«Автостопная», «О нашем поражении», «Цветочек»'],
+          ['Коллаж', 'монтаж чужих голосов и речевых жанров', '[[o-nashem-porazhenii|«О нашем поражении»]]'],
+        ]),
+        T('## Субъект и адресат'),
+        g('', [
+          ['Лирический субъект', 'тот, кто говорит в стихотворении (не равен автору)', '[[personazhi|Персонажи и адресаты]]'],
+          ['Лирический герой', 'устойчивый образ «я», переходящий из текста в текст', 'беглец «Автостопных»'],
+          ['Ролевая лирика', 'речь от лица персонажа, отличного от автора', 'голос подростка в «О нашем поражении»'],
+          ['Адресат', 'тот, к кому обращена речь', '«ты» в «Конце» и «Бесплатно»'],
+        ]),
+        T('## Интертекст и стиль'),
+        g('', [
+          ['Интертекст', 'связи текста с другими текстами', '[[intertekst|Интертекстуальные связи]]'],
+          ['Аллюзия, реминисценция', 'намёк на другой текст; узнаваемый отголосок без цитаты', 'Глейпнир в «Земляничных полянах»'],
+          ['Апофатика', 'познание Бога через отрицание определений', '[[apofatiya|«Апофатия»]]'],
+          ['Эсхатология', 'учение о конце мира', '[[konets|«Конец»]]'],
+          ['Оксюморон, парадокс', 'соединение несовместимого', 'победа погибших'],
+          ['Хронотоп', 'единство времени и пространства в тексте', '[[prostranstvo|Пространство и места]]'],
+          ['Семантический ореол метра', 'смысловые ассоциации, которые размер несёт из прежних текстов (М. Л. Гаспаров)', '[[metrika|Метрика и ритм]]'],
+        ]),
+        NAVBOX,
+      ],
+    });
+  }
+
+  // --- How to use
+  P.push({
+    slug: 'kak-polzovatsya', title: 'Как пользоваться разбором', cats: ['teoriya'], order: 50,
+    summary: 'Как устроены статьи (версии, слои), как заполнять пустые слоты для цитат, что значат плашки «уточнить» и как открыть 451-страницу черновых заметок.',
+    blocks: [
+      T(`## Что здесь есть
+Статья о каждой песне, сквозные страницы ([[motivy|мотивы]], [[obrazy-i-simvoly|образы]], [[prostranstvo|пространство]], [[personazhi|персонажи]], [[intertekst|интертекст]]), теория ([[metrika|метрика]], [[glossariy|глоссарий]]) и справка [[ob-avtore|об авторе]].
+
+## Версии статьи
+Над статьёй о песне есть переключатель версий: **«Подробный разбор»** (все разделы) и **«Кратко»** (несколько фраз для первого знакомства). Ссылка на версию сохраняется в адресе страницы.
+
+## Слои
+Переключатели слоёв показывают и прячут части текста:
+
+- **Метрика** — ритмические схемы и строки инфобокса о размере и рифме;
+- **Интертекст** — отсылки и гипотезы внутри текста;
+- **Комментарий аналитика** — рабочие замечания и открытые вопросы (по умолчанию скрыт).
+
+## Как заполнять слоты для цитат
+Тексты песен защищены авторским правом и в базу не включены. В разделе «Место для цитат» каждой статьи стоят пустые слоты с подсказкой, какая строка нужна. Чтобы заполнить слот:
+
+1. Откройте статью в редакторе и замените текст плашки своей цитатой.
+2. Цитируйте коротко — строку или две, ровно столько, сколько нужно для разбора.
+3. В поле источника укажите песню, альбом и год записи.
+4. Если база публикуется, проверьте, что объём цитат оправдан целью разбора (в России это регулирует статья 1274 Гражданского кодекса о свободном использовании произведений в научных и критических целях).
+
+## Плашки «уточнить»
+Жёлтые плашки отмечают то, что не удалось проверить по источникам: длительности, даты записи, неясные имена. Заменяйте их фактами только со ссылкой на источник.
+
+## Черновые заметки (451)
+В базе есть закрытая страница с рабочими гипотезами аналитика. Без пароля она не существует (ошибка 404). Откройте любую страницу, добавив к адресу \`#?451=razbor451\`, или введите пароль **razbor451** на служебной странице [[special:unlock|разблокировки]].`),
+      NAVBOX,
+    ],
+  });
+
+  // --- Disambiguation and redirects
+  P.push({
+    slug: 'avtostopnaya-znacheniya', title: 'Автостопная (значения)', order: 60,
+    summary: 'Песни Александра Непомнящего с заглавием «Автостопная».',
+    blocks: [
+      { type: 'disambig', intro: 'Заглавие «Автостопная» носят несколько песен Александра Непомнящего:', items: [
+        { link: 'avtostopnaya', label: 'Автостопная', desc: 'песня 1997 года из альбома «Полюс»' },
+        { link: 'avtostopnaya-2', label: 'Автостопная №2 (Цветочек)', desc: 'песня 1999 года из альбома «Земляника»; также [[cvetochek|«Цветочек»]]' },
+        { link: 'albomy', label: 'Автостопная 3', desc: 'песня из альбома «Хлеб земной» (2003), в этой базе не разобрана' },
+      ] },
+    ],
+  });
+  P.push({ slug: 'cvetochek', title: 'Цветочек', kind: 'redirect', target: 'avtostopnaya-2', hidden: true });
+  P.push({ slug: 'tantsuy-poka', title: 'Танцуй пока', kind: 'redirect', target: 'o-nashem-porazhenii', hidden: true });
+
+  // --- 451: the analyst's working notes
+  P.push({
+    slug: 'chernovye-zametki', title: 'Черновые заметки', order: 90, cats: ['teoriya'],
+    secret: { password: 'razbor451', note: 'Рабочие гипотезы аналитика' },
+    summary: 'Рабочие гипотезы аналитика: циклы, автоцитаты, неясные места.',
+    blocks: [
+      { type: 'callout', kind: 'warning', title: 'Черновик', text: 'Здесь собраны рабочие гипотезы — ещё не проверенные и не вошедшие в статьи. Не цитируйте их как установленные факты.' },
+      T(`## Гипотезы о циклах
+1. **Будущее становится настоящим.** Две песни 1999 года — [[o-nashem-porazhenii|«О нашем поражении»]] и [[vsemirnoe-gosudarstvo|«Всемирное государство»]] — кончаются повтором с одной переменой: то, что было впереди, уже наступило. Возможно, это общий композиционный «часовой механизм» альбома «Поражение».
+2. **Гоголевская пара.** Хома и Вий разнесены по двум песням 1999 года; вместе они дают сюжет «Вия» целиком: певец как Хома, читающий над гробом эпохи, и рифма как молитвенный круг.
+3. **«Караул устал»** в «Буратино» и «Земляничных полянах» — общая формула конца представления; проверить, нет ли её в других песнях.
+4. **Кот учёный** в «Автостопной» и «Буратино»: Лукоморье с цепью как образ замкнутого круга, из которого надо выйти.
+5. **Формула «Новые похождения»** — автоцитата дебютного альбома: Буратино как новая маска автора после Свидригайлова?
+6. **Апофатика как ключ ко всему.** Бесплатное — бесценное, поражение — победа, слепота — зрение: может быть, вся поэтика держится на этом приёме.
+
+## Открытые вопросы
+- [ ] Кто такой «Ермен» во «Всемирном государстве»?
+- [ ] Порядок песен на «Полюсе»: есть ли сюжет от «Земляничных полян» к финалу?
+- [ ] Что означают годы под текстами на сайте?
+- [ ] Сравнить редакции «Партизанской» 1995 и 1997 годов.
+- [ ] Найти интервью, где автор комментирует песни этой базы.`),
+      { type: 'seealso', items: [{ link: 'motivy' }, { link: 'intertekst' }] },
+    ],
+  });
+
+  return [...P.slice(0, 4), P[4], ...SONGS.map(songPage), ...P.slice(5)];
+}
+
+// ---------------------------------------------------------------------------------------------
+
+export default {
+  id: 'songs',
+  icon: 'music',
+  name: { en: 'Song analysis', ru: 'Разбор песен', uk: 'Розбір пісень', de: 'Liedanalyse', fr: 'Analyse de chansons', es: 'Análisis de canciones', ka: 'სიმღერების ანალიზი' },
+  desc: {
+    en: 'An analysis of Alexander Nepomnyashchy’s songs (in Russian) with empty quote slots.',
+    ru: 'Авторский разбор песен Александра Непомнящего: образы, метрика, интертекст, слоты для цитат.',
+    uk: 'Авторський розбір пісень Олександра Непомнящого (російською) з порожніми місцями для цитат.',
+    de: 'Analyse der Lieder von Alexander Nepomnjaschtschi (auf Russisch) mit leeren Zitatfeldern.',
+    fr: 'Analyse des chansons d’Alexandre Nepomniachtchi (en russe) avec des emplacements de citation vides.',
+    es: 'Análisis de las canciones de Alexandr Nepomniashchi (en ruso) con espacios vacíos para citas.',
+    ka: 'ალექსანდრ ნეპომნიაშჩის სიმღერების ანალიზი (რუსულად) ციტატების ცარიელი ადგილებით.',
+  },
+  spec() {
+    return {
+      title: 'Песни Непомнящего: разбор',
+      tagline: 'Авторский разбор песен Александра Непомнящего',
+      lang: 'ru', uiLang: 'ru', theme: 'scholarly', accent: '#8a3b2e', logo: 'logo', home: 'zaglavnaya',
+      nav: [
+        { label: 'Песни', link: 'pesni' }, { label: 'Мотивы', link: 'motivy' }, { label: 'Метрика', link: 'metrika' }, { label: 'Интертекст', link: 'intertekst' },
+        { label: 'Глоссарий', link: 'glossariy' }, { label: 'Об авторе', link: 'ob-avtore' }, { label: 'Справка', link: 'kak-polzovatsya' },
+      ],
+      footer: 'Авторский разбор песен Александра Непомнящего. Тексты песен не воспроизводятся; короткие цитаты пользователь добавляет сам в пустые слоты.\n\nФакты биографии — по источникам, указанным на страницах (просмотрены в октябре 2026 года); непроверенное отмечено плашками «уточнить».',
+      license: 'Текст разбора — CC BY-SA 4.0. Песни А. Е. Непомнящего © правообладатели; в базе не приводятся.',
+      layers: [
+        { id: 'meter', label: 'Метрика', on: true },
+        { id: 'intertext', label: 'Интертекст', on: true },
+        { id: 'comment', label: 'Комментарий аналитика', on: false },
+      ],
+      cats: [
+        { slug: 'pesni', name: 'Песни', desc: 'Статьи о песнях: подробный разбор и краткая версия, инфобокс, слоты для цитат.' },
+        { slug: 'motivy', name: 'Мотивы', desc: 'Сквозные страницы: мотивы, образы, пространство, персонажи, интертекст.' },
+        { slug: 'teoriya', name: 'Теория', desc: 'Метрика, глоссарий терминов и справка о том, как устроен разбор.' },
+        { slug: 'ob-avtore', name: 'Об авторе', desc: 'Биография по источникам, альбомы и хронология.' },
+      ],
+      media: MEDIA,
+      pages: pages(),
+    };
+  },
+};

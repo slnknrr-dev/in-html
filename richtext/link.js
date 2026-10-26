@@ -1,0 +1,203 @@
+// richtext/link.js - the link dialog (URL, e-mail, phone, attachment, document section).
+import { t } from '../ui/i18n.js';
+import { openDialog, toast } from '../ui/overlays.js';
+import { S } from '../studio/state.js';
+import { attList, blockAnchors } from '../studio/doc.js';
+import { rtSafeHref } from './sanitize.js';
+import { rtActive, rtCaretEnd, rtCommitNow, rtEl, rtFlush, rtKind, rtMark, rtNormalizeEl, rtRestoreSel, rtSetRange, rtUnwrap, rtUp } from './field.js';
+import { rtExecNative, rtStrip, rtTexts, rtWrap } from './ops.js';
+import { rtSchedUpdate } from './toolbar.js';
+import { tblMultiCells } from './table-ui.js';
+
+// ---------- Link dialog (URL / E-mail / Phone / Attachment / Section) ----------
+
+function rtI18nStr(v) {
+  if (v && typeof v === 'object') return v[S.lang] || v[S.doc && S.doc.defaultLang] || Object.values(v).find((x) => x) || '';
+  return v ? String(v) : '';
+}
+function rtFmtSize(n) {
+  if (!(n >= 0)) return '';
+  return n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
+}
+/** Build an href from the dialog inputs; null when invalid. */
+// Builds and validates an href per dialog tab; null means invalid (the dialog stays open with an error).
+// URL tab heuristics: a bare e-mail becomes mailto:, a scheme-less value gets https://, and a hostname without a dot
+// (typo "exampl") is refused except localhost. Every result passes rtSafeHref, the same allowlist the sanitizer
+// applies, so the dialog cannot produce a link the sanitizer would later strip.
+// Phone: keep digits and a single leading '+' (tel: URIs reject spaces and punctuation in many dialers).
+function rtBuildHref(kind, v, extra) {
+  v = String(v || '').trim();
+  if (kind === 'url') {
+    if (!v) return null;
+    if (/^[^\s@/]+@[^\s@/]+\.[^\s@/]+$/.test(v)) return 'mailto:' + v;
+    if (/^#(att|b)-/.test(v)) return rtSafeHref(v);
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(v)) v = 'https://' + v.replace(/^\/+/, '');
+    const h = rtSafeHref(v);
+    if (!h) return null;
+    if (/^https?:/i.test(h)) { try { const u = new URL(h); if (!u.hostname.includes('.') && u.hostname !== 'localhost') return null; } catch { return null; } }
+    return h;
+  }
+  if (kind === 'email') {
+    v = v.replace(/^mailto:/i, '');
+    if (!/^[^\s@]+@[^\s@]+$/.test(v)) return null;
+    const subj = String(extra || '').trim();
+    return 'mailto:' + v + (subj ? '?subject=' + encodeURIComponent(subj) : '');
+  }
+  if (kind === 'phone') {
+    const d = v.replace(/^tel:/i, '').replace(/[^\d+]/g, '').replace(/(?!^)\+/g, '');
+    return d.replace(/\D/g, '').length >= 3 ? 'tel:' + d : null;
+  }
+  if (kind === 'att') return v ? '#att-' + v : null;
+  if (kind === 'sec') return v ? '#b-' + v : null;
+  return null;
+}
+function rtHrefLabel(href, att, sec) {
+  if (/^#att-/.test(href)) { const x = att.find((a) => '#att-' + a.id === href); return x ? x.label : href; }
+  if (/^#b-/.test(href)) { const x = sec.find((a) => '#b-' + a.id === href); return x ? x.label : href; }
+  return href.replace(/^(mailto:|tel:)/i, '').replace(/^https?:\/\//i, '').replace(/\?subject=.*$/, '').replace(/\/$/, '');
+}
+// The range is cloned BEFORE the dialog opens: the dialog takes focus and the live selection is lost. After the
+// dialog closes the field may have been re-rendered (f.isConnected check) or the range may no longer be inside it.
+// Three apply paths: edit an existing <a>, insert a new <a> at a collapsed caret, or wrap a selection
+// (execCommand createLink first, because it handles selections crossing element boundaries; manual per-text-node
+// wrapping as fallback).
+// KNOWN DEFECT: decodeURIComponent(em0[1]) below is not guarded (the subject decode is): editing an existing
+// mailto: link with a malformed percent escape (mailto:a%E0@b.c) throws URIError and the dialog never opens.
+// Fix: wrap it in try/catch like subj0.
+async function rtLinkDialog() {
+  const f = rtActive();
+  if (!f || rtKind(f) === 'plain' || tblMultiCells()) return;
+  rtFlush();
+  rtRestoreSel(f);
+  const sel = getSelection();
+  if (!sel.rangeCount) return;
+  const range = sel.getRangeAt(0).cloneRange();
+  const a0 = rtUp(range.startContainer, f, (a) => a.localName === 'a');
+  const href0 = a0 ? a0.getAttribute('href') || '' : '';
+  const text0 = a0 ? a0.textContent : range.toString();
+  const needText = !!a0 || range.collapsed;
+  let tab = 'url';
+  if (/^mailto:/i.test(href0)) tab = 'email';
+  else if (/^tel:/i.test(href0)) tab = 'phone';
+  else if (/^#att-/.test(href0)) tab = 'att';
+  else if (/^#b-/.test(href0)) tab = 'sec';
+  const atts = (attList() || []).map((x) => ({ id: x.id, label: rtI18nStr(x.title) || x.name || x.id,
+    meta: [x.name, rtFmtSize(x.size)].filter(Boolean).join(' · ') }));
+  const secs = (blockAnchors() || []).map((x) => ({ id: x.id, label: rtI18nStr(x.label) || x.id, meta: '' }));
+  const inp = (attrs) => rtEl('input', { class: 'rt-input', ...attrs });
+  const fText = inp({ type: 'text', value: text0, placeholder: t('rt.link.textPh') });
+  const fUrl = inp({ type: 'url', value: tab === 'url' ? href0 : '', placeholder: 'https://' });
+  const em0 = /^mailto:([^?]*)(?:\?subject=(.*))?$/i.exec(href0) || [];
+  const fMail = inp({ type: 'email', value: em0[1] ? decodeURIComponent(em0[1]) : '', placeholder: 'name@example.com' });
+  let subj0 = '';
+  try { subj0 = em0[2] ? decodeURIComponent(em0[2]) : ''; } catch { subj0 = em0[2] || ''; }
+  const fSubj = inp({ type: 'text', value: subj0 });
+  const fTel = inp({ type: 'tel', value: tab === 'phone' ? href0.replace(/^tel:/i, '') : '', placeholder: '+1 555 123 4567' });
+  const field = (label, el, hint) => rtEl('label', { class: 'rt-field' }, rtEl('span', { text: label }), el, hint ? rtEl('small', { text: hint }) : null);
+  const list = (items, name, cur, empty) => {
+    const box = rtEl('div', { class: 'rt-list', role: 'radiogroup' });
+    if (!items.length) box.append(rtEl('p', { class: 'rt-empty', text: empty }));
+    for (const it of items) {
+      const r = rtEl('input', { type: 'radio', name: 'rt-' + name, value: it.id, checked: cur === it.id });
+      r.addEventListener('change', () => { if (needText && (!fText.value.trim() || fText.dataset.auto)) { fText.value = it.label; fText.dataset.auto = '1'; } });
+      box.append(rtEl('label', { class: 'rt-opt' }, r, rtEl('span', { text: it.label }), it.meta ? rtEl('small', { text: it.meta }) : null));
+    }
+    return box;
+  };
+  const curAtt = /^#att-(.+)$/.exec(href0);
+  const curSec = /^#b-(.+)$/.exec(href0);
+  const panes = {
+    url: rtEl('div', {}, field(t('rt.link.url'), fUrl, t('rt.link.urlHint'))),
+    email: rtEl('div', {}, field(t('rt.link.email'), fMail), field(t('rt.link.subject'), fSubj)),
+    phone: rtEl('div', {}, field(t('rt.link.phone'), fTel)),
+    att: rtEl('div', {}, rtEl('p', { class: 'rt-hint', text: t('rt.link.attHint') }), list(atts, 'att', curAtt && curAtt[1], t('rt.link.noAtt'))),
+    sec: rtEl('div', {}, rtEl('p', { class: 'rt-hint', text: t('rt.link.secHint') }), list(secs, 'sec', curSec && curSec[1], t('rt.link.noSec'))),
+  };
+  const tabs = rtEl('div', { class: 'rt-tabs', role: 'tablist' });
+  const show = (k) => {
+    tab = k;
+    for (const [key, pane] of Object.entries(panes)) pane.hidden = key !== k;
+    for (const b of tabs.children) b.setAttribute('aria-selected', b.dataset.tab === k ? 'true' : 'false');
+  };
+  for (const k of ['url', 'email', 'phone', 'att', 'sec']) {
+    const b = rtEl('button', { type: 'button', class: 'rt-tab', role: 'tab', 'data-tab': k, text: t('rt.link.tab.' + k) });
+    b.addEventListener('click', () => { show(k); hideErr(); const first = panes[k].querySelector('input'); if (first) first.focus(); });
+    tabs.append(b);
+  }
+  // Inline error: an invalid target keeps the dialog open (Enter in an input clicks Apply: openDialog).
+  // role="alert": screen readers announce the error text as soon as it is unhidden.
+  const err = rtEl('p', { class: 'rt-err', role: 'alert', hidden: true });
+  const body = rtEl('div', { class: 'rt-link' }, tabs, ...Object.values(panes).map((p) => { p.className = 'rt-pane'; return p; }),
+    needText ? field(t('rt.link.text'), fText) : null, err);
+  fText.addEventListener('input', () => { delete fText.dataset.auto; });
+  const pick = (name) => { const r = body.querySelector(`input[name="rt-${name}"]:checked`); return r ? r.value : ''; };
+  const curVal = () => ({ url: fUrl.value, email: fMail.value, phone: fTel.value, att: pick('att'), sec: pick('sec') }[tab]);
+  const hideErr = () => {
+    err.hidden = true;
+    for (const x of body.querySelectorAll('[aria-invalid]')) x.removeAttribute('aria-invalid');
+  };
+  body.addEventListener('input', hideErr);
+  body.addEventListener('change', hideErr);
+  const validate = () => {
+    if (rtBuildHref(tab, curVal(), fSubj.value)) return true;
+    const v = String(curVal() || '').trim();
+    // A scheme other than http(s) / mailto / tel (javascript:, data:, file:…) is refused with its own message.
+    const badScheme = tab === 'url' && /^[a-z][a-z0-9+.-]*:/i.test(v) && !/^(https?|mailto|tel):/i.test(v);
+    err.textContent = t(badScheme ? 'rt.link.badScheme' : 'rt.link.invalid');
+    err.hidden = false;
+    const inp = { url: fUrl, email: fMail, phone: fTel }[tab];
+    if (inp) { inp.setAttribute('aria-invalid', 'true'); inp.focus(); }
+    return false;
+  };
+  show(tab);
+  requestAnimationFrame(() => { const first = panes[tab].querySelector('input:not([type=radio])') || panes[tab].querySelector('input'); if (first) first.focus(); });
+  const buttons = [{ label: t('rt.cancel'), value: null }];
+  if (a0) buttons.push({ label: t('rt.link.remove'), value: 'remove', danger: true });
+  buttons.push({ label: t('rt.link.apply'), value: 'ok', primary: true, onClick: validate });
+  const res = await openDialog({ title: t(a0 ? 'rt.link.edit' : 'rt.link.insert'), body, buttons });
+  if (!f.isConnected) return;
+  f.focus({ preventScroll: true });
+  if (f.contains(range.startContainer)) rtSetRange(range); else rtCaretEnd(f);
+  if (res !== 'ok' && res !== 'remove') return;
+  if (res === 'remove') {
+    if (a0 && a0.isConnected) {
+      rtMark(range);
+      rtUnwrap(a0);
+      rtNormalizeEl(f, true);
+      rtCommitNow(f, t('rt.h.link'));
+    }
+    rtSchedUpdate();
+    return;
+  }
+  const href = rtBuildHref(tab, curVal(), fSubj.value);
+  if (!href) { toast(t('rt.link.invalid'), 'error'); return; }
+  const text = fText.value.trim();
+  if (a0 && a0.isConnected) {
+    a0.setAttribute('href', href);
+    if (text && text !== text0) a0.textContent = text;
+    const r = document.createRange();
+    r.selectNodeContents(a0);
+    rtSetRange(r);
+  } else if (range.collapsed) {
+    const a = document.createElement('a');
+    a.setAttribute('href', href);
+    a.textContent = text || rtHrefLabel(href, atts, secs);
+    range.insertNode(a);
+    const r = document.createRange();
+    r.setStartAfter(a);
+    r.collapse(true);
+    rtSetRange(r);
+  } else if (!rtExecNative('createLink', href)) {
+    for (const n of rtTexts(f, range)) {
+      rtStrip(n, f, (x) => x.localName === 'a');
+      rtWrap(n, 'a', { href });
+    }
+  }
+  rtNormalizeEl(f, true);
+  rtCommitNow(f, t('rt.h.link'));
+  rtSchedUpdate();
+}
+
+export {
+  rtLinkDialog
+};

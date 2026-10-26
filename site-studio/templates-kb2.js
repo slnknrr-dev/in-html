@@ -1,0 +1,88 @@
+// site-studio/templates-kb2.js - Site Studio templates of the group "Knowledge base & wiki" made in the site editor:
+// product documentation (nested sections in Markdown with code, diagrams and formulas, a search box, a site map) and
+// a team knowledge base whose sections open by role on the team's own server. Every name is FICTIONAL.
+//
+// Contract of a template module: each exported template object carries an id, localized names and build(V, ...) ->
+// a fresh document; templates.js adds catalogue metadata (group, mode, modules) where the module does not declare it,
+// and studio/gallery.js shows the catalogue.
+// The viewer API arrives as the argument V instead of an import, so templates are pure document builders that tests
+// (test.js renders every template) and the gallery can run without the editor. Generated artwork and sample data are
+// derived from seeds (tplHash / tplRand where used), so a template builds the same document on every run.
+// Data file: names, texts, figures and art specs dominate; comments mark sections, not individual values.
+import { siteKit } from './templates-site-kit.js';
+import { both } from './templates-landing2.js';
+import { accountPages } from './templates-backend.js';
+
+const md = (en, ru) => ({ en, ru });
+
+function tplBuildDocs(V) {
+  const K = siteKit(V);
+  const { B, L, T, P, page, sec } = K;
+  const d = K.doc({ name: 'Orbit Docs', preset: 'clean', theme: { accent: '#4f46e5', scheme: 'auto' },
+    title: T('Orbit — documentation', 'Orbit — документация'), description: T('Guides, API reference and architecture of the Orbit scheduler.', 'Руководства, справочник API и архитектура планировщика Orbit.'),
+    output: { switcher: 'buttons', langLabels: 'code', themeToggle: true, backToTop: true } });
+  d.regions.header = [B('nav', { brand: L('Orbit Docs'), variant: 'bar', sticky: true, pages: true, items: [] })];
+  const doc = (slug, title, en, ru, extra = [], o = {}) => page(slug, title, [sec({ width: 'narrow' }, [B('markdown', { text: md(en, ru) }), ...extra])], o);
+  d.regions.main = [
+    page('', T('Overview', 'Обзор'), [
+      B('hero', { layout: 'left', eyebrow: L('v2.3'), title: L(T('Orbit schedules jobs across your machines', 'Orbit распределяет задачи по вашим машинам')), text: L(P('Start with the quick start, then read the guides.', 'Начните с быстрого старта, затем читайте руководства.')),
+        items: [K.btn(T('Quick start', 'Быстрый старт'), '#/guide/quick-start', 'primary'), K.btn(T('API', 'API'), '#/api', 'secondary')] }),
+      sec({}, [B('features', { variant: 'cards', columns: 3, items: [
+        K.item({ icon: 'rocket', title: L(T('Quick start', 'Быстрый старт')), html: L(P('<a href="#/guide/quick-start">Five minutes to the first job</a>', '<a href="#/guide/quick-start">Пять минут до первой задачи</a>')) }),
+        K.item({ icon: 'code', title: L(T('API', 'API')), html: L(P('<a href="#/api">Every endpoint with examples</a>', '<a href="#/api">Все методы с примерами</a>')) }),
+        K.item({ icon: 'chart', title: L(T('Architecture', 'Архитектура')), html: L(P('<a href="#/architecture">How the scheduler decides</a>', '<a href="#/architecture">Как решает планировщик</a>')) })] })]),
+    ]),
+    doc('guide', T('Guides', 'Руководства'), '# Guides\n\n- [Quick start](#/guide/quick-start)\n- [Retries](#/guide/retries)', '# Руководства\n\n- [Быстрый старт](#/guide/quick-start)\n- [Повторы](#/guide/retries)'),
+    doc('guide/quick-start', T('Quick start', 'Быстрый старт'), '# Quick start\n\n```sh\ncurl -fsSL https://orbit.example/install | sh\norbit agent --join 10.0.0.1\norbit run --every 5m ./backup.sh\n```\n\n> [!NOTE]\n> The agent needs port 7070 open between machines.',
+      '# Быстрый старт\n\n```sh\ncurl -fsSL https://orbit.example/install | sh\norbit agent --join 10.0.0.1\norbit run --every 5m ./backup.sh\n```\n\n> [!NOTE]\n> Агенту нужен открытый порт 7070 между машинами.', [], { nav: false }),
+    doc('guide/retries', T('Retries', 'Повторы'), '# Retries\n\nA failed job waits $t_k = t_0 \\cdot 2^k$ before attempt $k$, at most 10 minutes.\n\n| attempt | wait |\n|---|---|\n| 1 | 5 s |\n| 2 | 10 s |\n| 3 | 20 s |',
+      '# Повторы\n\nУпавшая задача ждёт $t_k = t_0 \\cdot 2^k$ перед попыткой $k$, не больше 10 минут.\n\n| попытка | ожидание |\n|---|---|\n| 1 | 5 с |\n| 2 | 10 с |\n| 3 | 20 с |', [], { nav: false }),
+    doc('api', T('API', 'API'), '# API\n\n## `POST /jobs`\n\n```json\n{ "cmd": "./backup.sh", "every": "5m", "on": ["db-*"] }\n```\n\nReturns `201` with the job id.\n\n## `GET /jobs/{id}/runs`\n\nThe last 100 runs, newest first.',
+      '# API\n\n## `POST /jobs`\n\n```json\n{ "cmd": "./backup.sh", "every": "5m", "on": ["db-*"] }\n```\n\nВозвращает `201` с id задачи.\n\n## `GET /jobs/{id}/runs`\n\nПоследние 100 запусков, новые первыми.', [
+        B('diagram', { mode: 'text', src: 'sequenceDiagram\n  participant C as CLI\n  participant S as Scheduler\n  participant A as Agent\n  C->>S: POST /jobs\n  S-->>C: 201 id\n  S->>A: run\n  A-->>S: exit 0', caption: L(T('A job from the CLI to an agent', 'Задача от CLI до агента')) })]),
+    doc('architecture', T('Architecture', 'Архитектура'), '# Architecture\n\nThe scheduler keeps a ring of agents and places every job on the least loaded one that matches its labels.',
+      '# Архитектура\n\nПланировщик держит кольцо агентов и ставит задачу на наименее загруженного агента с подходящими метками.', [
+        B('diagram', { mode: 'text', src: 'flowchart TB\n  subgraph Control\n    S[Scheduler] --- DB[(State)]\n  end\n  S --> A1[Agent db-1]\n  S --> A2[Agent db-2]\n  S --> A3[Agent web-1]' }),
+        B('diagram', { mode: 'sitemap', caption: L(T('Map of these docs', 'Карта этой документации')), download: true })]),
+    V.notFoundPage(d, K.langs),
+  ];
+  d.regions.footer = [B('footer', { variant: 'simple', brand: L('Orbit'), copy: L(T('Apache-2.0 · fictional demo project', 'Apache-2.0 · вымышленный проект')) })];
+  return V.normalizeDoc(d);
+}
+
+function tplBuildTeamKB(V) {
+  const K = siteKit(V);
+  const { B, L, T, P, page, sec } = K;
+  const d = K.doc({ name: 'Northwind team handbook', preset: 'folio', theme: { scheme: 'auto' },
+    title: T('Northwind — team handbook', 'Northwind — справочник команды'), description: T('How we work: open to the team, some sections only for leads.', 'Как мы работаем: открыто команде, некоторые разделы — только руководителям.') });
+  d.auth = { signup: 'invite', password: true, link: true, defaultRole: 'member', roles: [{ id: 'lead', name: { en: 'Team lead', ru: 'Руководитель' }, parent: 'member' }] };
+  d.regions.header = [B('nav', { brand: L('Northwind handbook'), variant: 'bar', sticky: true, pages: true, items: [] })];
+  const kb = (slug, title, en, ru, extra = [], o = {}) => page(slug, title, [sec({ width: 'narrow' }, [B('markdown', { text: md(en, ru) }), ...extra])], { access: 'members', ...o });
+  d.regions.main = [
+    page('', T('Welcome', 'Добро пожаловать'), [sec({ width: 'narrow' }, [K.text(P('This handbook is for the Northwind team. Sign in with your work e-mail — we send a link.', 'Этот справочник — для команды Northwind. Войдите по рабочей почте — пришлём ссылку.')),
+      B('account', { view: 'signin', password: false, link: true, title: L(T('Sign in', 'Вход')), after: '#/onboarding' })])]),
+    kb('onboarding', T('Onboarding', 'Первые дни'), '# First week\n\n- [ ] Laptop and accounts\n- [ ] Meet your buddy\n- [ ] Ship one small change', '# Первая неделя\n\n- [ ] Ноутбук и аккаунты\n- [ ] Встреча с наставником\n- [ ] Выпустить одно маленькое изменение'),
+    kb('process', T('How we ship', 'Как мы выпускаем'), '# Release flow', '# Процесс выпуска', [B('diagram', { mode: 'text', src: 'gitGraph\n  commit\n  branch feature\n  commit\n  commit\n  checkout main\n  merge feature tag: "v1.4"\n  commit' })]),
+    kb('leads', T('Leads only', 'Для руководителей'), '# Salary bands\n\n| level | range, GEL |\n|---|---|\n| junior | 2 000–3 000 |\n| middle | 3 500–5 500 |\n| senior | 6 000–9 000 |', '# Вилки зарплат\n\n| уровень | диапазон, лари |\n|---|---|\n| junior | 2 000–3 000 |\n| middle | 3 500–5 500 |\n| senior | 6 000–9 000 |', [], { access: 'roles', roles: 'lead' }),
+    ...accountPages(K, { navAccount: false }),
+    V.notFoundPage(d, K.langs),
+  ];
+  d.regions.footer = [B('footer', { variant: 'simple', brand: L('Northwind'), copy: L(T('Internal · fictional demo team', 'Внутреннее · вымышленная команда')) })];
+  return V.normalizeDoc(d);
+}
+
+const TPL_DOCS = {
+  id: 'docs', group: 'kb', mode: 'offline', langs: ['en', 'ru'], build: tplBuildDocs,
+  modules: { req: ['markdown', 'diagram', 'pages'], opt: ['formula', 'seo', 'search'] },
+  name: both('Product documentation', 'Документация продукта', 'Документація продукту', 'Produktdokumentation', 'Documentation produit', 'Documentación del producto', 'პროდუქტის დოკუმენტაცია'),
+  desc: both('Nested guide pages in Markdown with code, alerts and formulas, an API reference with a sequence diagram, architecture and a map of the docs.', 'Вложенные страницы руководств в Markdown с кодом, врезками и формулами, справочник API с диаграммой последовательности, архитектура и карта документации.', 'Вкладені сторінки посібників у Markdown з кодом, врізками й формулами, довідник API з діаграмою послідовності, архітектура й мапа документації.'),
+};
+const TPL_TEAMKB = {
+  id: 'team-kb', group: 'kb', mode: 'backend', langs: ['en', 'ru'], build: tplBuildTeamKB,
+  modules: { req: ['accounts', 'roles', 'markdown'], opt: ['diagram'] },
+  name: both('Team handbook', 'Справочник команды', 'Довідник команди', 'Team-Handbuch', 'Manuel d’équipe', 'Manual del equipo', 'გუნდის სახელმძღვანელო'),
+  desc: both('A closed knowledge base: sign-in by an e-mail link for the team, sections for team leads only, onboarding checklists and diagrams.', 'Закрытая база знаний: вход по ссылке из письма для команды, разделы только для руководителей, чек-листы и схемы.', 'Закрита база знань: вхід за посиланням з листа для команди, розділи лише для керівників, чек-листи й схеми.'),
+  note: both('Without its server the pages show a note instead of the handbook.', 'Без своего сервера страницы показывают пояснение вместо справочника.'),
+};
+
+export { TPL_DOCS, TPL_TEAMKB };

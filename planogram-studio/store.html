@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- planogram-studio/store.html: the store floor plan page of Planogram Studio. Empty shell: store.js renders into <main>.
+     ap-wide lifts the shell's content max-width: the three-column work grid needs the whole screen. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Planogram Studio · Store</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23b45309'/%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2' d='M7 5v22M25 5v22M7 12h18M7 19h18M7 26h18'/%3E%3Cpath fill='%23fde68a' d='M9 7h4v5H9zM14 8h3v4h-3zM19 9h4v3h-4zM9 14h3v5H9zM13 15h5v4h-5zM20 14h3v5h-3z'/%3E%3C/svg%3E">
+<!-- Cascade order: shared tokens/primitives, app shell, then this app (pgs-); later file wins equal-specificity ties. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- Page registry read by common.js (getAttribute keeps the relative href); the build rewrites these hrefs. -->
+<a id="pg-plan" href="index.html" hidden></a>
+<a id="pg-store" href="store.html" hidden></a>
+<main class="ap-main ap-wide" id="main"></main>
+<!-- Entry module of this page (deferred, strict, relative imports). -->
+<script type="module" src="./store.js"></script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- durak-game/index.html - the whole game is one page: home, setup, table, replays, profile, online and the
+     constructor are screens rendered by main.js into <main> (hash routing), so state and assets load once and the
+     single-file build stays one document. Build (singlefile.js) strips every comment of this file. -->
+<html lang="en">
+<!-- lang is the static default; ui/i18n.js rewrites it when the UI language changes. -->
+<head>
+<meta charset="utf-8">
+<!-- viewport-fit=cover: in fullscreen / standalone mode the table extends under the notch and rounded corners; the
+     CSS keeps controls clear with env(safe-area-inset-*). Without it those insets are always 0. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Durak</title>
+<meta name="description" content="Durak, the Russian card game: classic throw-in and transfer durak, jokers, double decks, teams and exclusive variants; strategist bots with different principles and difficulty levels; replays with a game notation and the entropy of the public course; online rooms with invite links; a constructor for your own decks, cards, rules and looks.">
+<!-- color-scheme: native controls and scrollbars follow light/dark before CSS loads (no white flash in dark mode).
+     theme-color = the dark felt (#0e4029, --dk-felt2): the mobile browser bar blends with the table. -->
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0e4029">
+<!-- Icon: two cards and a spade as a URL-encoded data: URI (zero requests, works offline; '#' encoded as %23). -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231e6b46'/%3E%3Crect x='6' y='7' width='13' height='18' rx='2' fill='%23fff' transform='rotate(-12 12 16)'/%3E%3Crect x='13' y='6' width='13' height='18' rx='2' fill='%23fffdf8' stroke='%23c9c3b6' transform='rotate(10 19 15)'/%3E%3Cpath d='M20.5 11.5c-1.6 1.7-3.6 3-3.6 4.6a1.9 1.9 0 0 0 3.2 1.3c-.2 1-.7 1.6-1.4 2h3.6c-.7-.4-1.2-1-1.4-2a1.9 1.9 0 0 0 3.2-1.3c0-1.6-2-2.9-3.6-4.6z' fill='%23111' transform='rotate(10 19 15)'/%3E%3C/svg%3E">
+<!-- Cascade order is a contract: shared base, then shell, then this app (later file wins on equal specificity). -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- Single mount point; no page-registry anchors because the game has one page. -->
+<main class="ap-main" id="main"></main>
+<!-- Without JS nothing renders; say so instead of showing an empty page. -->
+<noscript><div class="ed-noscript">Durak needs JavaScript.</div></noscript>
+<!-- type="module": deferred (runs after parsing), strict mode, ES imports. -->
+<script type="module" src="./main.js"></script>
+</body>
+</html>

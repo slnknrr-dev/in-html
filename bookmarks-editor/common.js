@@ -1,0 +1,188 @@
+// bookmarks-editor/common.js - state shared by the modules of the page (the library, the current view, selection,
+// settings, undo), actions that several places offer (menus, keys, bulk bar) and small view helpers (avatars,
+// dates, icons).
+//
+// Design rules:
+// - One mutable state object `S`, imported by every module, instead of a store library: the page is small, and a
+//   single object makes "what does the page know" greppable. Mutation is followed by UI.render() / renderSoon().
+// - `UI` is a hook table filled by main.js. Leaf modules (list.js, dialogs.js) call UI.edit() etc. without
+//   importing main.js, which would create an import cycle (main imports them).
+// - Every mutating action takes a snapshot first and hands it to done(): one undo path for menus, keys and bulk bar.
+import { h, lsGet, lsSet } from '../ui/dom.js';
+import { addIcons } from '../ui/icons.js';
+import { t, UI_STATE } from '../ui/i18n.js';
+import { toast } from '../ui/overlays.js';
+import { copyText } from '../ui/app.js';
+import { hostOf, isLinkable } from '../bookmarks/url.js';
+
+// App-specific stroke icons (24x24 viewBox path data) registered into the shared ui/icons.js table by name.
+addIcons({
+  bookmark: 'M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1z',
+  inbox: 'M3 13h5l1.5 3h5L16 13h5M5 5h14l2 8v6a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-6z',
+  archive: 'M3 4h18v4H3zM5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4',
+  dot: 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z',
+  cards: 'M3 4h8v7H3zM13 4h8v7h-8zM3 13h8v7H3zM13 13h8v7h-8z',
+  rows: 'M3 5h18M3 12h18M3 19h18',
+  compact: 'M3 4h18M3 8h18M3 12h18M3 16h18M3 20h18',
+  selectAll: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6zM5.5 7l1.5 1.5L9 6',
+  checkSq: 'M4 4h16v16H4zM8 12l3 3 5-6',
+  cloud: 'M7 18a4.5 4.5 0 0 1-.5-9A6 6 0 0 1 18 9.5a4 4 0 0 1 0 8.5z',
+  cloudOff: 'M3 3l18 18M7 18a4.5 4.5 0 0 1-1.7-8.6M9.7 6.3A6 6 0 0 1 18 9.5a4 4 0 0 1 2.5 7.1M18 18H7',
+  sync: 'M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4',
+  dupes: 'M8 8h11v11H8zM5 16H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1',
+  bolt: 'M13 2 4 14h7l-1 8 9-12h-7z',
+  folderPlus: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM12 10v6M9 13h6',
+  move: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM10 13h6M13 10l3 3-3 3',
+  read: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM9 12l2 2 4-4',
+  keyboard: 'M3 6h18v12H3zM7 10h.01M11 10h.01M15 10h.01M7 14h10',
+});
+
+// Mode of this artifact (targets.js): offline | standalone | backend | serverless | dev (sources).
+// The build injects IN_HTML_ARTIFACT into generated artifacts; its absence means the raw sources (dev server).
+const ART = globalThis.IN_HTML_ARTIFACT || null;
+export const MODE = ART ? ART.mode : 'dev';
+
+// sort / layout / settings persist in localStorage (per browser, not per account): they are view preferences,
+// not library data, so they are not synced. Object.assign over defaults: a key added in a later version gets its
+// default even when an older settings object is stored.
+export const S = {
+  lib: null, store: null, account: null,
+  view: { kind: 'all', id: '', tag: '' },
+  query: '',
+  sort: lsGet('bm-sort', 'new'),
+  layout: lsGet('bm-layout', 'list'),
+  selection: new Set(), anchor: '', focus: '', selectMode: false,
+  settings: Object.assign({ stripTracking: true, markReadOnOpen: true, dupScheme: true, dupWww: true, confirmDelete: false }, lsGet('bm-settings', {})),
+  history: [],
+  features: { meta: false, public: false, sync: false },
+  storage: 'memory',
+};
+
+export const saveSettings = () => lsSet('bm-settings', S.settings);
+
+// Hooks the page sets up (main.js): render after changes, open dialogs from menus.
+export const UI = { render() {}, renderSoon() {}, edit() {}, tags() {}, move() {}, newFolder() {}, renameFolder() {}, folderMenu() {}, setView() {} };
+
+// --- undo ---------------------------------------------------------------------------------------------------------------
+// Undo stack of record snapshots (pre-change copies returned by lib.*). Capped at 40 entries so a long session does
+// not hold every old version in memory. Empty snapshot = nothing changed = no entry (no no-op undos).
+export function pushUndo(label, snapshot) {
+  if (!snapshot || !snapshot.length) return;
+  S.history.push({ label, snapshot });
+  if (S.history.length > 40) S.history.shift();
+}
+// restore() writes the old versions back as new edits (fresh timestamps), so the undo also syncs to other devices
+// instead of being overwritten by the server's copy.
+export function undo() {
+  const last = S.history.pop();
+  if (!last) { toast(t('bm.undo.none'), 'info'); return; }
+  S.lib.restore(last.snapshot);
+  toast(t('bm.undo.done', { what: last.label }), 'ok');
+}
+// A change with an Undo button in its toast.
+export function done(label, snapshot, msg) {
+  pushUndo(label, snapshot);
+  toast(msg || label, 'ok', snapshot && snapshot.length ? { label: t('dlg.undo'), fn: undo } : null);
+}
+
+// --- actions ----------------------------------------------------------------------------------------------------------------
+// Resolve ids to live bookmark records; folders and deleted ids drop out, so callers can pass a raw selection.
+export const items = (ids) => [...ids].map((id) => S.lib.get(id)).filter((b) => b && b.type === 'bookmark');
+
+export function removeBookmarks(ids) {
+  const list = items(ids);
+  if (!list.length) return;
+  const snap = S.lib.remove(list.map((b) => b.id));
+  for (const b of list) S.selection.delete(b.id);
+  done(t('bm.act.deleted', { n: list.length }), snap);
+}
+
+export function setFlag(ids, field, value) {
+  const list = items(ids);
+  const snap = S.lib.snapshot(list.map((b) => b.id));
+  const n = S.lib.updateMany(list.map((b) => b.id), { [field]: value });
+  if (n) done(t(`bm.act.${field}.${value ? 'on' : 'off'}`, { n }), snap);
+}
+
+// Mixed selection: if every item has the flag, clear it; otherwise set it on all. Matches mail clients and
+// guarantees one press always leaves the whole selection in the same state.
+export function toggleFlag(ids, field) {
+  const list = items(ids);
+  if (!list.length) return;
+  setFlag(ids, field, !list.every((b) => b[field]));
+}
+
+export function moveBookmarks(ids, folder) {
+  const list = items(ids);
+  const snap = S.lib.snapshot(list.map((b) => b.id));
+  const n = S.lib.updateMany(list.map((b) => b.id), { folder });
+  if (n) done(t('bm.act.moved', { n, folder: folder ? S.lib.tree().pathString(folder) : t('bm.side.unfiled') }), snap);
+}
+
+// isLinkable guards against javascript:/data: URLs (stored bookmarklets): opening those from our origin would run
+// them with this page's privileges. noopener,noreferrer: the opened page gets no window.opener handle (reverse
+// tabnabbing) and no Referer. Note: with 'noopener' window.open returns null by spec, so `w` is always null and the
+// refocus below never runs.
+// KNOWN DEFECT: background opening is a no-op because `w` is null under 'noopener'. Fix: drop the `&& w` check, or
+// open about:blank, null its opener and then set location.
+export function openBookmark(b, { background = false } = {}) {
+  if (!b || !isLinkable(b.url)) return false;
+  const w = window.open(b.url, '_blank', 'noopener,noreferrer');
+  const f = { visited: Date.now() };
+  if (S.settings.markReadOnOpen && b.unread) f.unread = false;
+  S.lib.update(b.id, f);
+  if (background && w) { try { window.focus(); } catch { /* ignore */ } }
+  return true;
+}
+
+// Markdown link: escape \ [ ] in the text; percent-encode ( ) and whitespace in the URL, which would end the link.
+export const mdLink = (b) => `[${(b.title || b.url).replace(/([\\[\]])/g, '\\$1')}](${String(b.url).replace(/[()\s]/g, (c) => encodeURIComponent(c))})`;
+export function copyItems(list, what) {
+  const text = list.map((b) => (what === 'url' ? b.url : what === 'title' ? b.title || b.url : mdLink(b))).join('\n');
+  copyText(text, t(list.length > 1 ? 'bm.copied.n' : 'bm.copied.' + what, { n: list.length }));
+}
+
+// --- view helpers ------------------------------------------------------------------------------------------------------------
+// Java-style string hash (x*31 + c), kept 32-bit unsigned with >>> 0 so it never overflows into floats. Stable per
+// host: the same site always gets the same avatar colour on every device.
+export function hueOf(s) {
+  let x = 0;
+  for (const c of String(s)) x = (x * 31 + c.codePointAt(0)) >>> 0;
+  return x % 360;
+}
+
+// Favicon, or a letter on a colour derived from the host.
+// Favicon at 62% of the tile, lazy-decoded (long lists). The letter skips www./m. so "www.github.com" shows G.
+// Array.from splits by code point, so an emoji or astral first letter is not cut in half.
+export function avatar(b, size = 32) {
+  if (b.icon) return h('span', { class: 'bm-av bm-av-img', style: { width: size + 'px', height: size + 'px' } }, h('img', { src: b.icon, alt: '', width: Math.round(size * 0.62), height: Math.round(size * 0.62), loading: 'lazy', decoding: 'async' }));
+  const host = hostOf(b.url) || (isLinkable(b.url) ? '' : 'js') || b.title || '?';
+  const letter = (Array.from(host.replace(/^(www|m)\./, ''))[0] || '?').toUpperCase();
+  return h('span', { class: 'bm-av', 'aria-hidden': 'true', style: { width: size + 'px', height: size + 'px', '--bm-hue': String(hueOf(host)) } }, letter);
+}
+
+// Intl.RelativeTimeFormat per language, cached: constructing formatters is costly and when() runs per list row.
+// Falls back to 'en' if the UI language tag is unsupported (constructor throws RangeError).
+const rtf = new Map();
+export function when(ms) {
+  if (!ms) return '';
+  const lang = UI_STATE.lang;
+  const diff = ms - Date.now();
+  const abs = Math.abs(diff);
+  let f = rtf.get(lang);
+  if (!f) { try { f = new Intl.RelativeTimeFormat(lang, { numeric: 'auto' }); } catch { f = new Intl.RelativeTimeFormat('en', { numeric: 'auto' }); } rtf.set(lang, f); }
+  // numeric:'auto' turns 0 seconds into "now" and -1 day into "yesterday". Beyond 30 days an absolute date reads better.
+  if (abs < 60000) return f.format(0, 'second');
+  if (abs < 3600000) return f.format(Math.round(diff / 60000), 'minute');
+  if (abs < 86400000) return f.format(Math.round(diff / 3600000), 'hour');
+  if (abs < 30 * 86400000) return f.format(Math.round(diff / 86400000), 'day');
+  return dateText(ms);
+}
+export function dateText(ms, withTime = false) {
+  if (!ms) return '';
+  try { return new Intl.DateTimeFormat(UI_STATE.lang, withTime ? { dateStyle: 'medium', timeStyle: 'short' } : { dateStyle: 'medium' }).format(new Date(ms)); } catch { return new Date(ms).toISOString().slice(0, 10); }
+}
+
+// Evaluated on each call (not cached): a convertible laptop can switch between touch and mouse at runtime.
+export const isTouch = () => matchMedia('(pointer: coarse)').matches;
+export const fineMouse = () => matchMedia('(pointer: fine)').matches;

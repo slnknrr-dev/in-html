@@ -1,0 +1,200 @@
+/* seo-kit/app.css - SEO Kit: site page (site, organization and pages on the left, generated files in tabs on the
+   right), card page (controls, the 1200 × 630 card, share previews) and checker page (source, result). Needs
+   ui/base.css + ui/app.css. */
+
+   /* CONTRACT
+      - Namespace: every class of this app starts with `sk-`. Shared primitives are `ed-` (ui/base.css), shell is `ap-`
+        (ui/app.css). Prefix = ownership: grep `sk-x` finds every user, and no rule here restyles another app.
+        Two deliberate exceptions re-tune shared primitives (.ed-fields gap, .ed-field spacing); they are safe only because
+        this file is loaded by SEO Kit pages alone, so "global" here means "this app".
+      - Specificity budget: one class (0,1,0); two or three for state/context (.sk-tab.sk-on, .sk-details[open] > summary).
+        No ids, no tag anchors except where the element type is the point (summary, legend, img, svg, td).
+      - Colours only via tokens (--ed-*), so both themes follow ui/base.css. Tints are color-mix() of a token with
+        transparent: a derivative of the theme colour, not a second palette to keep in sync.
+        One raw colour: .sk-swatch text #fff, on top of user-chosen gradients that are never theme-dependent.
+      - No !important anywhere: every override wins by equal specificity plus later source order (see index.html).
+      - State classes: .sk-on (selected tab, chip or swatch), -bad / -warn / -ok suffixes for severity.
+      - Layout: grid for column templates, flex for one axis. min-width: 0 on every flex/grid child that can hold a URL or
+        a code line: default min-width:auto = min-content, and one unbreakable URL would push the column off screen.
+        minmax(0, 1fr), never bare 1fr (= minmax(auto, 1fr)), for the same reason. */
+
+/* Page roots (class added by each entry script to #main). 1440px: the site page needs a form column plus readable
+   generated files side by side; wider lines of XML stop being scannable. */
+.sk-site, .sk-og, .sk-check { max-width: 1440px; }
+.sk-mono { font-family: var(--ed-mono); }
+/* For URLs and ids: overflow-wrap:anywhere breaks inside a token AND lets min-content shrink (break-word alone does not
+   lower min-content, so a grid column would still be forced wide). word-break: break-word is the legacy alias kept for
+   older engines. */
+.sk-wrap { overflow-wrap: anywhere; word-break: break-word; }
+.sk-mt { margin-top: 12px; }
+/* Vertical stack. gap instead of margins: no collapsing, no :last-child fixups. min-width:0, see CONTRACT. */
+.sk-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.sk-grid2 { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.sk-grid3 { display: grid; gap: 10px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* ui/app.css adds `.ap-card .ed-field + .ed-field { margin-top: 10px }` (0,3,0) for stacked fields. In a grid the
+   second field sits beside the first, so that margin would misalign the row. Same weight (0,3,0), later file: wins. */
+.sk-grid2 > .ed-field + .ed-field, .sk-grid3 > .ed-field + .ed-field { margin-top: 0; }
+/* Below 560px two inputs side by side get under ~250px each, too narrow for URLs; collapse to one column. */
+@media (max-width: 560px) { .sk-grid2, .sk-grid3 { grid-template-columns: minmax(0, 1fr); } }
+/* Re-tunes the shared primitive (ui/base.css: gap 12px) to a denser 10px for the long site form, and cancels the shell's
+   sibling margin so gap is the single source of spacing (margin + gap would double it). */
+.ed-fields { display: flex; flex-direction: column; gap: 10px; }
+.ed-fields > .ed-field + .ed-field { margin-top: 0; }
+/* :empty hides the hint box when JS writes nothing, so no blank padded strip and no JS show/hide toggling. Note :empty
+   fails on whitespace text nodes; h() never emits them. */
+.sk-warn-hint:empty { display: none; }
+.sk-warn-hint { color: var(--ed-danger); }
+.sk-count { font-variant-numeric: tabular-nums; }
+/* Over-limit counter uses the warn token, not danger: a long title is a recommendation miss, not an invalid value. */
+.sk-count-bad { color: var(--ed-warn); font-weight: 600; }
+
+/* Two-column work areas: bounded form column + fluid output. align-items:start keeps each column at its own height
+   (stretch would pad the short one). The card page form is narrower (fewer, shorter fields).
+   960px: below it 320px + gap leaves the output column too narrow for file panes, so stack (form first, DOM order). */
+/* layout */
+.sk-work, .sk-c-work { display: grid; gap: 18px; align-items: start; grid-template-columns: minmax(320px, 440px) minmax(0, 1fr); }
+.sk-og-work { display: grid; gap: 18px; align-items: start; grid-template-columns: minmax(300px, 400px) minmax(0, 1fr); }
+@media (max-width: 960px) { .sk-work, .sk-c-work, .sk-og-work { grid-template-columns: minmax(0, 1fr); } }
+
+/* <details>/<summary>: native disclosure, keyboard and a11y for free, no JS state. list-style:none removes the
+   marker in Firefox/Chromium; ::-webkit-details-marker covers Safari, which ignores list-style on summary. Our own
+   chevron icon rotates 90deg on [open]; the transition is on transform only (compositor-friendly, no layout). */
+/* collapsible */
+.sk-details > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; font-weight: 600; font-size: 13px; }
+.sk-details > summary::-webkit-details-marker { display: none; }
+.sk-details > summary .ap-card-h { margin: 0; }
+.sk-details > summary .ed-ic { transition: transform .15s; }
+.sk-details[open] > summary .ed-ic { transform: rotate(90deg); }
+/* Spacing only when open: content after summary, never the summary itself. */
+.sk-details[open] > :not(summary) { margin-top: 10px; }
+/* Dashed border = drop/paste target convention, distinct from solid card borders. */
+.sk-paste { margin-bottom: 10px; padding: 8px 10px; border: 1px dashed var(--ed-border-strong); border-radius: 10px; }
+
+/* One <details> per site page. --ed-panel-2 with a --ed-panel fallback: the var() fallback guards against a theme that
+   omits the secondary panel token. */
+/* pages */
+.sk-count-h { color: var(--ed-faint); font-weight: 500; }
+.sk-pages { display: flex; flex-direction: column; gap: 6px; }
+.sk-page { border: 1px solid var(--ed-border); border-radius: 10px; background: var(--ed-panel-2, var(--ed-panel)); }
+.sk-page > summary { display: flex; align-items: center; gap: 6px; padding: 8px 10px; cursor: pointer; list-style: none; min-width: 0; }
+.sk-page > summary::-webkit-details-marker { display: none; }
+.sk-page > summary > .ed-ic { flex: none; transition: transform .15s; }
+.sk-page[open] > summary > .ed-ic { transform: rotate(90deg); }
+.sk-page[open] { border-color: var(--ed-border-strong); }
+/* Path and title wrap as two inline items; row gap 4px, column gap 8px. min-width:0 so the ellipsis below can work. */
+.sk-page-sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
+.sk-page-path { font: 600 12.5px var(--ed-mono); overflow-wrap: anywhere; }
+/* Single-line ellipsis needs all three: overflow hidden, nowrap, text-overflow; max-width:100% bounds it inside the
+   wrapping flex row (a flex item would otherwise size to its full text). */
+.sk-page-title { color: var(--ed-muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.sk-page-body { padding: 4px 10px 12px; }
+/* Pill labels (post, noindex, language). radius 999px = fully round at any height; 50% would give ellipses. */
+.sk-tag { font-size: 11px; font-weight: 650; padding: 1px 7px; border-radius: 999px; background: var(--ed-accent-weak); color: var(--ed-accent); }
+.sk-tag-off { background: var(--ed-danger-weak); color: var(--ed-danger); }
+.sk-tag-l { background: var(--ed-hover); color: var(--ed-muted); font-family: var(--ed-mono); }
+
+/* outputs */
+.sk-out-h { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.sk-stats { display: flex; flex-wrap: wrap; gap: 6px; }
+.sk-chip { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: var(--ed-panel); border: 1px solid var(--ed-border); color: var(--ed-muted); }
+/* Severity chips: text in the full token, border at 45% mix so the outline reads as tinted, not as a second heavy line. */
+.sk-chip-bad { color: var(--ed-danger); border-color: color-mix(in srgb, var(--ed-danger) 45%, transparent); }
+.sk-chip-warn { color: var(--ed-warn); border-color: color-mix(in srgb, var(--ed-warn) 45%, transparent); }
+.sk-chip-ok { color: var(--ed-ok); border-color: color-mix(in srgb, var(--ed-ok) 45%, transparent); }
+/* Horizontal scroll instead of wrap: tabs keep one row on phones. scrollbar-width:none hides the bar (Firefox/new
+   Chromium); swipe still works. The 1px bottom border is the rail the active tab's 2px underline sits on. */
+.sk-tabs { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--ed-border); }
+/* Reset button chrome (border 0, background none). flex:none: tabs never shrink, the bar scrolls instead.
+   Transparent 2px bottom border reserves the underline space, so switching tabs never shifts layout by 2px. */
+.sk-tab { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 8px 12px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--ed-muted); font-weight: 600; font-size: 13px; cursor: pointer; }
+.sk-tab:hover { color: var(--ed-text); }
+/* (0,2,0) beats .sk-tab:hover (0,2,0) by later order, so the active tab stays accent-coloured under the pointer. */
+.sk-tab.sk-on { color: var(--ed-accent); border-bottom-color: var(--ed-accent); }
+.sk-panel { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.sk-files { display: flex; flex-direction: column; gap: 12px; }
+/* Generated file pane (common.js filePane): header row + <pre>. min-width:0 so long XML lines scroll or wrap inside. */
+.sk-file { border: 1px solid var(--ed-border); border-radius: 12px; background: var(--ed-panel); min-width: 0; }
+.sk-file-h { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--ed-border); }
+.sk-file-name { font: 600 13px var(--ed-mono); overflow-wrap: anywhere; }
+.sk-file-size { font-size: 12px; color: var(--ed-faint); }
+.sk-file-note { padding: 6px 12px 0; }
+/* Overrides .ap-pre: square top corners join the header; max-height bounds a 50k-URL sitemap (the pane scrolls).
+   pre-wrap keeps indentation but wraps long lines; break-word splits unbreakable URLs. */
+.sk-pre { border: 0; border-radius: 0 0 12px 12px; max-height: 420px; margin: 0; white-space: pre-wrap; word-break: break-word; }
+.sk-warns:empty { display: none; }
+/* Issue list (common.js issueList, sorted error > warn > info). Severity is carried by tinted border and icon colour,
+   with text left at body colour for warn/info so a long list stays readable; only errors turn the text red. */
+.sk-issues { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.sk-iss { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--ed-border); background: var(--ed-panel); overflow-wrap: anywhere; }
+/* flex:none + margin-top: icon never shrinks and aligns with the first text line, not the block centre. */
+.sk-iss .ed-ic { flex: none; margin-top: 1px; }
+.sk-iss-error { border-color: color-mix(in srgb, var(--ed-danger) 45%, transparent); color: var(--ed-danger); }
+.sk-iss-warn { border-color: color-mix(in srgb, var(--ed-warn) 50%, transparent); }
+.sk-iss-warn .ed-ic { color: var(--ed-warn); }
+.sk-iss-info .ed-ic { color: var(--ed-muted); }
+.sk-ok { display: flex; align-items: center; gap: 8px; color: var(--ed-ok); font-size: 13px; font-weight: 600; }
+.sk-groups { display: flex; flex-direction: column; gap: 10px; }
+/* <fieldset> per robots.txt group; legend names it for screen readers. position:relative anchors the remove button
+   in the top corner; inset-inline-end flips correctly in RTL, unlike right. */
+.sk-group { position: relative; margin: 0; padding: 8px 12px 12px; border: 1px solid var(--ed-border); border-radius: 10px; }
+.sk-group legend { font-size: 12px; font-weight: 650; color: var(--ed-muted); padding: 0 4px; }
+.sk-group > .ed-iconbtn { position: absolute; top: 4px; inset-inline-end: 6px; }
+.sk-group > .sk-grid2 + .sk-grid2 { margin-top: 10px; }
+/* Robots tester answer. Colour + 13% tint of the same token; meaning is also in the text and data-state (e2e.js reads it). */
+.sk-verdict { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 10px 12px; border-radius: 10px; font-weight: 600; overflow-wrap: anywhere; }
+.sk-verdict-ok { color: var(--ed-ok); background: color-mix(in srgb, var(--ed-ok) 13%, transparent); }
+.sk-verdict-no { color: var(--ed-danger); background: color-mix(in srgb, var(--ed-danger) 13%, transparent); }
+.sk-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+/* Toggle chips (preset bot lists). .sk-on (0,2,0) beats :hover (0,2,0) by order, like the tabs. */
+.sk-chipbtn { padding: 6px 11px; border-radius: 999px; border: 1px solid var(--ed-border); background: var(--ed-panel); color: var(--ed-muted); font-size: 12.5px; font-weight: 600; cursor: pointer; }
+.sk-chipbtn:hover { color: var(--ed-text); border-color: var(--ed-border-strong); }
+.sk-chipbtn.sk-on { color: var(--ed-accent); border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+
+/* Mock of a link unfurl (common.js sharePreview). aspect-ratio 1200/630 = 1.91:1, the Open Graph large image ratio,
+   so the preview crops exactly like the platforms. overflow:hidden clips the image to the rounded corners. */
+/* share preview */
+.sk-share-box { display: flex; flex-direction: column; gap: 6px; }
+.sk-share { margin: 0; max-width: 520px; border: 1px solid var(--ed-border); border-radius: 12px; overflow: hidden; background: var(--ed-panel); }
+.sk-share-img { aspect-ratio: 1200 / 630; background: var(--ed-stage); }
+/* object-fit:cover fills the box like platforms do; display:block kills the inline-image baseline gap. */
+.sk-share-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.sk-share-none { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--ed-muted); font-size: 12px; padding: 12px; text-align: center; overflow-wrap: anywhere; }
+.sk-share-txt { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; }
+.sk-share-domain { font-size: 11.5px; color: var(--ed-muted); text-transform: uppercase; letter-spacing: .03em; }
+.sk-share-title { font-size: 15px; line-height: 1.3; }
+/* Two-line clamp: -webkit-box + line-clamp is the only widely supported multi-line ellipsis (all engines accept the
+   prefixed form). Platforms cut descriptions similarly. */
+.sk-share-desc { font-size: 13px; color: var(--ed-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* Compact (summary) variant: square thumbnail beside text, accent bar on the start edge. minmax(0,1fr): see CONTRACT. */
+.sk-share-compact { display: grid; grid-template-columns: 112px minmax(0, 1fr); max-width: 460px; border-inline-start: 3px solid var(--ed-accent); }
+.sk-share-compact .sk-share-img { aspect-ratio: 1; }
+
+/* card page */
+/* min-height:0 cancels the stage min-height of .ap-surface; clamp() scales the padding with the viewport, 10..28px. */
+.sk-og-frame { min-height: 0; padding: clamp(10px, 3vw, 28px); }
+/* Preview box locked to 1.91:1 so the SVG (width/height attributes removed in card.js paint) fills it exactly. */
+.sk-og-stage { width: 100%; max-width: 900px; aspect-ratio: 1200 / 630; border-radius: 10px; overflow: hidden; box-shadow: var(--ed-shadow); }
+.sk-og-stage svg { display: block; width: 100%; height: 100%; }
+.sk-og-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sk-og-meta { display: flex; gap: 6px; }
+.sk-og-name { font-size: 12px; color: var(--ed-faint); overflow-wrap: anywhere; }
+.sk-og-shares { display: flex; flex-direction: column; gap: 8px; }
+.sk-swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Theme swatches (role=radio). Background is an inline gradient from JS; #fff for the palette icon is safe on any of
+   the dark-ish theme gradients. Transparent 2px border reserves space for the selected ring (no layout shift). */
+.sk-swatch { width: 38px; height: 38px; border-radius: 10px; border: 2px solid transparent; color: #fff; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+/* Double ring: outer border in text colour + inset panel-coloured shadow, visible on both light and dark gradients. */
+.sk-swatch.sk-on { border-color: var(--ed-text); box-shadow: 0 0 0 2px var(--ed-panel) inset; }
+.sk-logo-row { display: flex; align-items: center; gap: 10px; }
+/* contain: show the whole logo, never crop; stage background shows transparency edges. */
+.sk-logo-thumb { width: 56px; height: 56px; object-fit: contain; border-radius: 8px; border: 1px solid var(--ed-border); background: var(--ed-stage); }
+
+/* checker */
+/* white-space: pre in the textarea: HTML source keeps its lines; wrapping would hide the real structure. */
+.sk-src { min-height: 280px; font-size: 12.5px; white-space: pre; }
+/* Bounds the shell's .ap-table-wrap (70vh) further so result cards below remain reachable. */
+.sk-c-table { max-height: 420px; }
+.sk-c-table td { font-size: 12.5px; }
+.sk-ld-node { border: 1px solid var(--ed-border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.sk-ld-h { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.sk-ld-err { display: flex; gap: 8px; color: var(--ed-danger); font-weight: 600; overflow-wrap: anywhere; }

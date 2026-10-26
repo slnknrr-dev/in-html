@@ -1,0 +1,2 @@
+import{applyFilter}from"./adjust.js";import{resize}from"../raster/resample.js";function runPhotoJob(job){if(job.op==='filter')return{img:applyFilter(job.type,job.img,job.params)};if(job.op==='resize')return{img:resize(job.img,job.width,job.height,job.filter||'lanczos3')};throw new Error('unknown photo job '+job.op);}
+export{runPhotoJob};

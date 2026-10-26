@@ -1,0 +1,730 @@
+// ethereum/abi.js - the Solidity contract ABI: JSON and human-readable ABIs, the standard encoding (head / tail with
+// offsets) of every type except fixed-point numbers, strict decoding, selectors and topics, function calls and
+// results, event logs (indexed parameters), errors (with the built-in Error(string) and Panic(uint256)), the
+// non-standard packed mode of abi.encodePacked, display formatting.
+//
+// Types: uint8..uint256, int8..int256 (uint / int = 256 bits), address, bool, bytes1..bytes32, bytes, string,
+// function (24 bytes), T[k], T[], tuples written '(T a, U b)' / 'tuple(T,U)' or JSON { type: 'tuple', components }.
+// Values: bigint for integers (numbers and decimal / '0x' text accepted when encoding), checksum strings for
+// addresses, booleans, '0x…' hex for bytes / bytesN (Uint8Array accepted), strings, arrays, tuples as arrays (or
+// objects by component name when encoding); decoded arrays carry the parameter names as extra properties.
+//
+//   parseAbi(abi) -> { fragments, functions, events, errors, constructor, fallback, receive,
+//                      byName(nameOrSignature, kind?), bySelector('0x12345678'), byTopic('0x…32'), eventsByTopic }
+//       abi: a JSON array / JSON text, or human-readable lines such as
+//       'function transfer(address to, uint256 amount) returns (bool)', 'event Transfer(address indexed from,
+//       address indexed to, uint256 value)', 'error Insufficient(uint256 need)', 'constructor(string name)'
+//   parseFragment(textOrJson) -> fragment { type, name, inputs, outputs, stateMutability, anonymous, signature,
+//                      selector (functions, errors) | topic (events) }; inputs: [{ name, type, indexed, components }]
+//   formatFragment(fragment, format = 'human' | 'json' | 'signature')    parseParam(text | json) -> param
+//   encodeParameters(types, values) -> '0x…'          decodeParameters(types, data) -> values
+//   functionSelector(signature) -> '0x12345678'       eventTopic(fragmentOrSignature) -> '0x…32'
+//   encodeFunctionData(fragmentOrSignature, args) -> '0x…'      decodeFunctionData(abi, data) -> { fragment, args } | null
+//   encodeFunctionResult(fragment, values), decodeFunctionResult(fragment, data) -> values
+//   encodeDeployData(constructorFragmentOrAbi, bytecode, args) -> '0x…'
+//   encodeEventTopics(fragment, values) -> topics (null = any)   decodeEventLog(abi, { topics, data }) -> { fragment, args } | null
+//       indexed strings, bytes, arrays and tuples decode to their topic (the keccak256 hash)
+//   encodeErrorResult(fragment, args), decodeErrorResult(abi, data) -> { fragment, name, args, reason?, code? } | null
+//       Error(string) gives `reason`, Panic(uint256) `code` and `reason` (PANIC_CODES)
+//   encodePacked(types, values) -> '0x…'               formatAbiValue(value, type?) -> display text
+//
+// Decoding is strict: offsets and lengths must stay inside the data, unused bits must be zero (sign extension for
+// intN, zero padding of bytesN / bytes / string / address / uintN, 0 or 1 for bool), and decoding work is bounded.
+import { keccak256 } from '../crypto/sha3.js';
+import { bytesToHex, bytesToUtf8, concatBytes, utf8ToBytes } from '../crypto/encoding.js';
+import { getAddress, toChecksumAddress } from './address.js';
+import { fromHex, toBigInt } from './units.js';
+
+const abiError = (message) => new Error('abi: ' + message);
+const hex = (b) => '0x' + bytesToHex(b);
+const bytesOf = (v) => (typeof v === 'string' ? fromHex(v) : v instanceof Uint8Array ? v : (() => { throw abiError('bytes expected'); })());
+
+// --- parameter types -------------------------------------------------------------------------------
+
+const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+// Splits "a, (b, c), d" at the commas outside parentheses.
+// A regex cannot split nested tuples correctly (commas inside '(…)' belong to the child); a depth counter can.
+function splitTop(text) {
+  const out = [];
+  let depth = 0, start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '(') depth++;
+    else if (c === ')') { if (--depth < 0) throw abiError('unbalanced parentheses'); }
+    else if (c === ',' && depth === 0) { out.push(text.slice(start, i)); start = i + 1; }
+  }
+  if (depth) throw abiError('unbalanced parentheses');
+  const last = text.slice(start);
+  if (out.length || last.trim()) out.push(last);
+  return out.map((s) => s.trim());
+}
+
+// Index of the parenthesis closing the one at `open`.
+function closing(text, open) {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === '(') depth++;
+    else if (text[i] === ')' && --depth === 0) return i;
+  }
+  throw abiError('unbalanced parentheses');
+}
+
+const ALIAS = { uint: 'uint256', int: 'int256', byte: 'bytes1' };
+
+// One human-readable parameter ('uint256[] amounts', 'address indexed from', '(uint a, bytes b)[] list').
+function parseParamText(text) {
+  let s = text.trim();
+  let base, components;
+  if (s.startsWith('(') || /^tuple\s*\(/.test(s)) {
+    const open = s.indexOf('(');
+    const close = closing(s, open);
+    components = splitTop(s.slice(open + 1, close)).map(parseParamText);
+    base = 'tuple';
+    s = s.slice(close + 1);
+  } else {
+    const m = /^([A-Za-z][A-Za-z0-9]*)/.exec(s);
+    if (!m) throw abiError(`invalid parameter "${text}"`);
+    base = ALIAS[m[1]] || m[1];
+    s = s.slice(m[1].length);
+  }
+  let suffix = '';
+  for (let m; (m = /^\s*\[\s*(\d*)\s*\]/.exec(s)); s = s.slice(m[0].length)) suffix += `[${m[1]}]`;
+  const out = { name: '', type: base + suffix };
+  const words = s.trim() ? s.trim().split(/\s+/) : [];
+  for (const w of words) {
+    if (w === 'indexed') out.indexed = true;
+    else if (w === 'memory' || w === 'calldata' || w === 'storage' || (w === 'payable' && base === 'address')) continue;
+    else if (IDENT.test(w) && !out.name) out.name = w;
+    else throw abiError(`invalid parameter "${text}"`);
+  }
+  if (components) out.components = components;
+  return makeParam(out);
+}
+
+// Normalized parameter: enumerable { name, type, indexed?, components? } (Solidity JSON form) plus hidden
+// kind / size / length / child / canonical.
+// The canonical type string (uint -> uint256, tuples as '(…)', no names) is what selectors and topics hash. Any
+// deviation, e.g. hashing 'uint' or 'tuple(...)', yields a different selector and calls a different function.
+// Hidden (non-enumerable) properties keep JSON.stringify output identical to the Solidity JSON ABI.
+// Array suffixes are peeled from the right: 'uint[2][]' is a dynamic array OF uint[2], not the reverse.
+function makeParam(src, depth = 0) {
+  if (depth > 64) throw abiError('types nested too deeply');
+  if (typeof src === 'string') return parseParamText(src);
+  if (!src || typeof src.type !== 'string') throw abiError('parameter type expected');
+  const type = src.type.replace(/\s+/g, '');
+  const out = { name: src.name || '', type };
+  if (src.indexed) out.indexed = true;
+  const hidden = {};
+  const m = /^(.*)\[(\d*)\]$/.exec(type);
+  if (m) {
+    const child = makeParam({ type: m[1], components: src.components }, depth + 1);
+    const length = m[2] === '' ? -1 : Number(m[2]);
+    if (length === 0) throw abiError('zero-length array type');
+    out.type = child.type + `[${m[2]}]`;
+    if (child.components) out.components = child.components;
+    Object.assign(hidden, { kind: 'array', child, length, canonical: child.canonical + `[${m[2]}]` });
+  } else if (type === 'tuple' || type.startsWith('tuple(') || type.startsWith('(')) {
+    let comps = src.components;
+    if (type !== 'tuple') comps = splitTop(type.slice(type.indexOf('(') + 1, closing(type, type.indexOf('(')))).map(parseParamText);
+    if (!Array.isArray(comps)) throw abiError('tuple without components');
+    out.type = 'tuple';
+    out.components = comps.map((c) => makeParam(c, depth + 1));
+    Object.assign(hidden, { kind: 'tuple', canonical: '(' + out.components.map((c) => c.canonical).join(',') + ')' });
+  } else {
+    let t = ALIAS[type] || type, size = 0, kind;
+    let k;
+    if ((k = /^(u?)int(\d+)$/.exec(t))) {
+      size = Number(k[2]);
+      if (size < 8 || size > 256 || size % 8) throw abiError(`invalid type ${type}`);
+      kind = k[1] ? 'uint' : 'int';
+    } else if ((k = /^bytes(\d+)$/.exec(t))) {
+      size = Number(k[1]);
+      if (size < 1 || size > 32 || String(size) !== k[1]) throw abiError(`invalid type ${type}`);
+      kind = 'fixedbytes';
+    } else if (t === 'function') { kind = 'fixedbytes'; size = 24; }
+    else if (t === 'address' || t === 'bool' || t === 'string' || t === 'bytes') kind = t;
+    else if (/^u?fixed/.test(t)) throw abiError('fixed-point types are not supported');
+    else throw abiError(`unknown type ${type}`);
+    out.type = t;
+    Object.assign(hidden, { kind, size, canonical: t });
+  }
+  for (const [key, v] of Object.entries(hidden)) Object.defineProperty(out, key, { value: v, enumerable: false });
+  return out;
+}
+
+export const parseParam = (src) => makeParam(src);
+
+const params = (list) => (list || []).map((p) => makeParam(p));
+
+// Dynamic = size not known from the type alone. A static array of a dynamic type (string[2]) is dynamic too, and so is
+// any tuple with a dynamic component. Dynamic values go into the tail with an offset in the head.
+function isDynamic(p) {
+  if (p.kind === 'string' || p.kind === 'bytes') return true;
+  if (p.kind === 'array') return p.length < 0 || isDynamic(p.child);
+  if (p.kind === 'tuple') return p.components.some(isDynamic);
+  return false;
+}
+
+// Static values are inlined in the head (a uint[3] takes 96 bytes, not an offset); dynamic ones take one 32-byte offset.
+function headSize(p) {
+  if (isDynamic(p)) return 32;
+  if (p.kind === 'array') return p.length * headSize(p.child);
+  if (p.kind === 'tuple') return p.components.reduce((n, c) => n + headSize(c), 0);
+  return 32;
+}
+
+// --- fragments ---------------------------------------------------------------------------------------
+
+const MUTABILITY = new Set(['view', 'pure', 'payable', 'nonpayable']);
+
+// selector = first 4 bytes of keccak256(signature), topic = all 32. Fragments are frozen: they are shared through
+// parseAbi caches and a mutated signature would corrupt every later lookup.
+function finishFragment(f) {
+  if (f.type === 'event' || f.type === 'function' || f.type === 'error') {
+    if (!f.name || !IDENT.test(f.name)) throw abiError(`invalid ${f.type} name "${f.name}"`);
+    f.signature = `${f.name}(${f.inputs.map((p) => p.canonical).join(',')})`;
+    const h = keccak256(utf8ToBytes(f.signature));
+    if (f.type === 'event') f.topic = hex(h);
+    else f.selector = hex(h.subarray(0, 4));
+  }
+  return Object.freeze(f);
+}
+
+function fragmentFromJson(j) {
+  const type = j.type || 'function';
+  if (!['function', 'event', 'error', 'constructor', 'fallback', 'receive'].includes(type)) throw abiError(`unknown fragment type ${type}`);
+  const f = { type, name: j.name || '', inputs: params(j.inputs) };
+  if (type === 'function') f.outputs = params(j.outputs);
+  if (type === 'event') f.anonymous = !!j.anonymous;
+  if (type !== 'event' && type !== 'error') {
+    let m = j.stateMutability;
+    if (!m) m = j.constant ? 'view' : j.payable ? 'payable' : type === 'receive' ? 'payable' : 'nonpayable';
+    f.stateMutability = m;
+  }
+  if (type !== 'event') for (const p of f.inputs) if (p.indexed) throw abiError('only event parameters can be indexed');
+  return finishFragment(f);
+}
+
+function fragmentFromText(text) {
+  let s = text.trim().replace(/;$/, '').trim();
+  const kw = /^(function|event|error|constructor|fallback|receive)\b/.exec(s);
+  const type = kw ? kw[1] : 'function';
+  if (kw) s = s.slice(kw[1].length).trim();
+  let name = '';
+  if (type !== 'constructor' && type !== 'fallback' && type !== 'receive') {
+    const m = /^([A-Za-z_$][A-Za-z0-9_$]*)\s*\(/.exec(s);
+    if (!m) throw abiError(`invalid fragment "${text}"`);
+    name = m[1];
+    s = s.slice(m[1].length).trim();
+  }
+  if (!s.startsWith('(')) throw abiError(`invalid fragment "${text}"`);
+  const close = closing(s, 0);
+  const inputs = splitTop(s.slice(1, close)).map(parseParamText);
+  s = s.slice(close + 1).trim();
+  const f = { type, name, inputs };
+  let mut = null, outputs = [];
+  while (s) {
+    const m = /^([A-Za-z]+)\s*/.exec(s);
+    if (!m) throw abiError(`invalid fragment "${text}"`);
+    const w = m[1];
+    s = s.slice(m[0].length);
+    if (w === 'returns') {
+      if (!s.startsWith('(')) throw abiError(`invalid returns in "${text}"`);
+      const c = closing(s, 0);
+      outputs = splitTop(s.slice(1, c)).map(parseParamText);
+      s = s.slice(c + 1).trim();
+    } else if (MUTABILITY.has(w)) mut = w;
+    else if (w === 'constant') mut = 'view';
+    else if (w === 'anonymous' && type === 'event') f.anonymous = true;
+    else if (!['external', 'public', 'internal', 'private', 'virtual', 'override'].includes(w)) throw abiError(`unexpected "${w}" in "${text}"`);
+  }
+  if (type === 'function') f.outputs = outputs;
+  if (type === 'event') f.anonymous = !!f.anonymous;
+  if (type !== 'event' && type !== 'error') f.stateMutability = mut || (type === 'receive' ? 'payable' : 'nonpayable');
+  if (type !== 'event') for (const p of inputs) if (p.indexed) throw abiError('only event parameters can be indexed');
+  return finishFragment(f);
+}
+
+// Already-parsed fragments (frozen, with a signature) are returned as-is so callers may pass either form cheaply.
+export function parseFragment(src) {
+  if (typeof src === 'string') return fragmentFromText(src);
+  if (src && Object.isFrozen(src) && Array.isArray(src.inputs) && ('signature' in src || !['function', 'event', 'error'].includes(src.type))) return src;
+  if (src && typeof src === 'object') return fragmentFromJson(src);
+  throw abiError('fragment expected');
+}
+
+const formatParamHuman = (p, withIndexed) => {
+  const t = p.kind === 'tuple' || (p.kind === 'array' && p.components)
+    ? '(' + p.components.map((c) => formatParamHuman(c, false)).join(', ') + ')' + p.type.slice(5)
+    : p.type;
+  return [t, withIndexed && p.indexed ? 'indexed' : '', p.name].filter(Boolean).join(' ');
+};
+
+const paramJson = (p) => {
+  const o = { name: p.name, type: p.type };
+  if (p.indexed) o.indexed = true;
+  if (p.components) o.components = p.components.map(paramJson);
+  return o;
+};
+
+export function formatFragment(fragment, format = 'human') {
+  const f = parseFragment(fragment);
+  if (format === 'signature') return f.signature || `${f.type}(${f.inputs.map((p) => p.canonical).join(',')})`;
+  if (format === 'json') {
+    const o = { type: f.type };
+    if (f.name) o.name = f.name;
+    o.inputs = f.inputs.map(paramJson);
+    if (f.outputs) o.outputs = f.outputs.map(paramJson);
+    if (f.stateMutability) o.stateMutability = f.stateMutability;
+    if (f.type === 'event') o.anonymous = f.anonymous;
+    return o;
+  }
+  let s = f.type + (f.name ? ' ' + f.name : '') + '(' + f.inputs.map((p) => formatParamHuman(p, f.type === 'event')).join(', ') + ')';
+  if (f.type === 'event' && f.anonymous) s += ' anonymous';
+  if (f.stateMutability && f.stateMutability !== 'nonpayable') s += ' ' + f.stateMutability;
+  if (f.outputs && f.outputs.length) s += ' returns (' + f.outputs.map((p) => formatParamHuman(p, false)).join(', ') + ')';
+  return s;
+}
+
+// Selector collisions (4 bytes) are possible between unrelated functions; the first fragment wins in bySelector.
+// Event topics can collide only for anonymous-vs-not or duplicated declarations; all candidates are kept.
+export function parseAbi(abi) {
+  if (abi && abi.fragments && abi.byName) return abi;
+  let list = abi;
+  if (typeof abi === 'string') {
+    const t = abi.trim();
+    list = t.startsWith('[') || t.startsWith('{') ? JSON.parse(t) : t.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('//'));
+  }
+  if (list && !Array.isArray(list)) list = [list];
+  if (!Array.isArray(list)) throw abiError('ABI: array expected');
+  const fragments = list.map(parseFragment);
+  const functions = fragments.filter((f) => f.type === 'function');
+  const events = fragments.filter((f) => f.type === 'event');
+  const errors = fragments.filter((f) => f.type === 'error');
+  const bySel = new Map(), byTop = new Map();
+  for (const f of [...functions, ...errors]) if (!bySel.has(f.selector)) bySel.set(f.selector, f);
+  for (const e of events) { if (!byTop.has(e.topic)) byTop.set(e.topic, []); byTop.get(e.topic).push(e); }
+  return {
+    fragments, functions, events, errors,
+    constructor: fragments.find((f) => f.type === 'constructor') || null,
+    fallback: fragments.find((f) => f.type === 'fallback') || null,
+    receive: fragments.find((f) => f.type === 'receive') || null,
+    // A name ('transfer') or a signature ('transfer(address,uint256)'); an overloaded name throws.
+    byName(name, kind = null) {
+      const pool = [...functions, ...events, ...errors].filter((f) => !kind || f.type === kind);
+      const key = String(name).replace(/\s+/g, '');
+      const hits = key.includes('(') ? pool.filter((f) => f.signature === key) : pool.filter((f) => f.name === key);
+      if (hits.length > 1) throw abiError(`ambiguous name "${name}": ${hits.map((f) => f.signature).join(', ')}`);
+      return hits[0] || null;
+    },
+    bySelector: (sel) => bySel.get(String(sel).slice(0, 10).toLowerCase()) || null,
+    byTopic: (topic) => (byTop.get(String(topic).toLowerCase()) || [])[0] || null,
+    eventsByTopic: (topic) => byTop.get(String(topic).toLowerCase()) || [],
+  };
+}
+
+// --- encoding ------------------------------------------------------------------------------------------
+
+const U256 = 1n << 256n;
+
+// Two's complement for negatives: U256 + n. Big-endian, left-padded with zeros (or with 0xff via the complement).
+function word(n) {
+  const out = new Uint8Array(32);
+  let v = n < 0n ? U256 + n : n;
+  for (let i = 31; i >= 0 && v; i--) { out[i] = Number(v & 0xffn); v >>= 8n; }
+  return out;
+}
+
+// Range check before encoding: an out-of-range value would otherwise be silently truncated by the contract
+// (or rejected by the decoder's dirty-bits check on the other side).
+function intValue(p, v) {
+  if (typeof v === 'boolean') throw abiError(`${p.type}: integer expected, got a boolean`);
+  const n = toBigInt(v, p.type);
+  const bits = BigInt(p.size);
+  if (p.kind === 'uint' ? n < 0n || n >= 1n << bits : n < -(1n << (bits - 1n)) || n >= 1n << (bits - 1n)) throw abiError(`${p.type}: value ${n} out of range`);
+  return n;
+}
+
+const pad32 = (b) => concatBytes(b, new Uint8Array((32 - (b.length % 32)) % 32));
+
+function tupleValues(p, v) {
+  const comps = p.components;
+  if (Array.isArray(v)) {
+    if (v.length !== comps.length) throw abiError(`tuple: ${comps.length} values expected, got ${v.length}`);
+    return v;
+  }
+  if (v && typeof v === 'object') {
+    return comps.map((c, i) => {
+      if (!c.name || !(c.name in v)) throw abiError(`tuple: missing value of component ${c.name || i}`);
+      return v[c.name];
+    });
+  }
+  throw abiError('tuple: array or object expected');
+}
+
+function encodeOne(p, v) {
+  switch (p.kind) {
+    case 'uint': case 'int': return word(intValue(p, v));
+    case 'bool':
+      if (typeof v !== 'boolean') throw abiError(`bool: boolean expected, got ${typeof v}`);
+      return word(v ? 1n : 0n);
+    case 'address': {
+      const b = fromHex(getAddress(v));
+      return concatBytes(new Uint8Array(12), b);
+    }
+    case 'fixedbytes': {
+      const b = bytesOf(v);
+      if (b.length !== p.size) throw abiError(`${p.type}: ${p.size} bytes expected, got ${b.length}`);
+      return pad32(b);
+    }
+    case 'bytes': case 'string': {
+      const b = p.kind === 'string' ? (typeof v === 'string' ? utf8ToBytes(v) : (() => { throw abiError('string expected'); })()) : bytesOf(v);
+      return concatBytes(word(BigInt(b.length)), pad32(b));
+    }
+    case 'array': {
+      if (!Array.isArray(v)) throw abiError(`${p.type}: array expected`);
+      if (p.length >= 0 && v.length !== p.length) throw abiError(`${p.type}: ${p.length} elements expected, got ${v.length}`);
+      const body = encodeTuple(v.map(() => p.child), v);
+      return p.length < 0 ? concatBytes(word(BigInt(v.length)), body) : body;
+    }
+    case 'tuple': return encodeTuple(p.components, tupleValues(p, v));
+    default: throw abiError(`cannot encode ${p.type}`);
+  }
+}
+
+// The head/tail layout: heads in order (static values inline, offsets for dynamic ones), then the tails. Offsets are
+// relative to the START OF THIS TUPLE, not of the whole data; that is what lets nested tuples be encoded recursively.
+function encodeTuple(ps, values) {
+  if (!Array.isArray(values) || values.length !== ps.length) throw abiError(`${ps.length} values expected, got ${Array.isArray(values) ? values.length : typeof values}`);
+  const encoded = ps.map((p, i) => encodeOne(p, values[i]));
+  let offset = ps.reduce((n, p) => n + headSize(p), 0);
+  const heads = [], tails = [];
+  ps.forEach((p, i) => {
+    if (isDynamic(p)) { heads.push(word(BigInt(offset))); tails.push(encoded[i]); offset += encoded[i].length; }
+    else heads.push(encoded[i]);
+  });
+  return concatBytes(...heads, ...tails);
+}
+
+const typeList = (types) => (Array.isArray(types) ? types : [types]).map((t) => makeParam(t));
+
+export const encodeParameters = (types, values) => hex(encodeTuple(typeList(types), values));
+
+// --- decoding ------------------------------------------------------------------------------------------
+
+// Work limit: offsets may point backwards, so a crafted payload of a few KB can make many nested arrays reference the
+// same region and blow up decoding time (a "zip bomb" of ABI). Each word read counts; the budget is proportional to the
+// input size, which is generous for honest data and bounded for hostile data.
+function readWord(ctx, at) {
+  if (at < 0 || at + 32 > ctx.data.length) throw abiError('data too short (read past the end)');
+  if (++ctx.reads > ctx.limit) throw abiError('decoding exceeds its work limit (overlapping offsets?)');
+  return ctx.data.subarray(at, at + 32);
+}
+
+const num = (w) => BigInt('0x' + bytesToHex(w));
+
+// The bigint is compared before Number(): a 2^255 offset converted to a double would round and could pass the check.
+function readOffset(ctx, at, base) {
+  const n = num(readWord(ctx, at));
+  if (n > BigInt(ctx.data.length)) throw abiError('offset out of range');
+  const o = base + Number(n);
+  if (o > ctx.data.length) throw abiError('offset out of range');
+  return o;
+}
+
+function named(values, ps) {
+  ps.forEach((p, i) => { if (p.name && !(p.name in values)) values[p.name] = values[i]; });
+  return values;
+}
+
+// Strict dirty-bits checks: Solidity itself reverts on dirty uint/address bits since 0.8 (ABI coder v2), and accepting
+// them would let two different byte strings decode to the same value (signature / hash confusion).
+function decodeOne(p, ctx, at) {
+  switch (p.kind) {
+    case 'uint': {
+      const v = num(readWord(ctx, at));
+      if (v >> BigInt(p.size)) throw abiError(`${p.type}: value out of range (dirty high bits)`);
+      return v;
+    }
+    case 'int': {
+      let v = num(readWord(ctx, at));
+      if (v >> 255n) v -= U256;
+      const bits = BigInt(p.size);
+      if (v < -(1n << (bits - 1n)) || v >= 1n << (bits - 1n)) throw abiError(`${p.type}: value out of range (bad sign extension)`);
+      return v;
+    }
+    case 'bool': {
+      const v = num(readWord(ctx, at));
+      if (v > 1n) throw abiError('bool: value other than 0 or 1');
+      return v === 1n;
+    }
+    case 'address': {
+      const w = readWord(ctx, at);
+      for (let i = 0; i < 12; i++) if (w[i]) throw abiError('address: dirty high bytes');
+      return toChecksumAddress(w.subarray(12));
+    }
+    case 'fixedbytes': {
+      const w = readWord(ctx, at);
+      for (let i = p.size; i < 32; i++) if (w[i]) throw abiError(`${p.type}: non-zero padding`);
+      return hex(w.subarray(0, p.size));
+    }
+    case 'bytes': case 'string': {
+      const len = num(readWord(ctx, at));
+      const start = at + 32;
+      if (len > BigInt(ctx.data.length - start)) throw abiError(`${p.type}: length past the end of the data`);
+      const end = start + Number(len);
+      const padEnd = Math.min(ctx.data.length, start + Math.ceil(Number(len) / 32) * 32);
+      for (let i = end; i < padEnd; i++) if (ctx.data[i]) throw abiError(`${p.type}: non-zero padding`);
+      ctx.reads += Math.ceil(Number(len) / 32);
+      const b = ctx.data.subarray(start, end);
+      return p.kind === 'string' ? bytesToUtf8(b) : hex(b);
+    }
+    case 'array': {
+      let n = p.length, base = at;
+      if (n < 0) {
+        const len = num(readWord(ctx, at));
+        base = at + 32;
+        // A declared length of 2^64 elements must fail here, before Array.from allocates it.
+        if (len * BigInt(headSize(p.child)) > BigInt(ctx.data.length - base)) throw abiError(`${p.type}: length past the end of the data`);
+        n = Number(len);
+      }
+      return decodeTuple(Array.from({ length: n }, () => p.child), ctx, base);
+    }
+    case 'tuple': return named(decodeTuple(p.components, ctx, at), p.components);
+    default: throw abiError(`cannot decode ${p.type}`);
+  }
+}
+
+function decodeTuple(ps, ctx, base) {
+  const out = [];
+  let o = base;
+  for (const p of ps) {
+    if (isDynamic(p)) out.push(decodeOne(p, ctx, readOffset(ctx, o, base)));
+    else out.push(decodeOne(p, ctx, o));
+    o += headSize(p);
+  }
+  return out;
+}
+
+function decodeData(ps, data) {
+  const b = typeof data === 'string' ? fromHex(data) : data;
+  const ctx = { data: b, reads: 0, limit: 1024 + 4 * Math.ceil(b.length / 32) };
+  return named(decodeTuple(ps, ctx, 0), ps);
+}
+
+export const decodeParameters = (types, data) => decodeData(typeList(types), data);
+
+// --- functions, events, errors -------------------------------------------------------------------------
+
+export function functionSelector(signature) {
+  const f = parseFragment(signature);
+  if (!f.selector) throw abiError('not a function or error');
+  return f.selector;
+}
+
+export function eventTopic(fragment) {
+  const f = parseFragment(typeof fragment === 'string' && !/^\s*event\b/.test(fragment) ? 'event ' + fragment : fragment);
+  if (f.type !== 'event') throw abiError('not an event');
+  return f.topic;
+}
+
+export function encodeFunctionData(fragment, args = []) {
+  const f = parseFragment(fragment);
+  if (!f.selector) throw abiError('not a function');
+  return f.selector + bytesToHex(encodeTuple(f.inputs, args));
+}
+
+// The function of `abi` (a fragment, a signature or an ABI) whose selector starts `data`: { fragment, args } | null.
+export function decodeFunctionData(abi, data) {
+  const b = typeof data === 'string' ? fromHex(data) : data;
+  if (b.length < 4) throw abiError('call data shorter than a selector');
+  const sel = hex(b.subarray(0, 4));
+  const fragment = lookup(abi, sel, 'function');
+  if (!fragment) return null;
+  return { fragment, name: fragment.name, signature: fragment.signature, args: decodeData(fragment.inputs, b.subarray(4)) };
+}
+
+function lookup(abi, selector, kind) {
+  if (typeof abi === 'string' && !abi.trim().startsWith('[') && !abi.includes('\n')) {
+    const f = parseFragment(abi);
+    return f.selector === selector ? f : null;
+  }
+  if (abi && !Array.isArray(abi) && !abi.fragments && abi.inputs) {
+    const f = parseFragment(abi);
+    return f.selector === selector ? f : null;
+  }
+  const f = parseAbi(abi).bySelector(selector);
+  return f && (!kind || f.type === kind) ? f : null;
+}
+
+export const encodeFunctionResult = (fragment, values) => hex(encodeTuple(parseFragment(fragment).outputs || [], values));
+export const decodeFunctionResult = (fragment, data) => decodeData(parseFragment(fragment).outputs || [], data);
+
+export function encodeDeployData(abiOrFragment, bytecode, args = []) {
+  let ctor = null;
+  if (abiOrFragment) {
+    const isFrag = typeof abiOrFragment === 'string' ? /^\s*constructor\b/.test(abiOrFragment) : !Array.isArray(abiOrFragment) && !abiOrFragment.fragments && abiOrFragment.type === 'constructor';
+    ctor = isFrag ? parseFragment(abiOrFragment) : parseAbi(abiOrFragment).constructor;
+  }
+  return hex(concatBytes(bytesOf(bytecode), encodeTuple(ctor ? ctor.inputs : [], args)));
+}
+
+// In-place encoding of an indexed complex value (its topic is the keccak256 of it).
+// Indexed dynamic values are not stored: the topic is keccak256 of their in-place encoding (no length prefix, no
+// offsets; elements padded to 32 bytes). Only the hash can be decoded back, never the value.
+function indexedEncoding(p, v, nested) {
+  if (p.kind === 'string' || p.kind === 'bytes') {
+    const b = p.kind === 'string' ? utf8ToBytes(v) : bytesOf(v);
+    return nested ? pad32(b) : b;
+  }
+  if (p.kind === 'array') {
+    if (!Array.isArray(v) || (p.length >= 0 && v.length !== p.length)) throw abiError(`${p.type}: bad array value`);
+    return concatBytes(...v.map((x) => indexedEncoding(p.child, x, true)));
+  }
+  if (p.kind === 'tuple') return concatBytes(...tupleValues(p, v).map((x, i) => indexedEncoding(p.components[i], x, true)));
+  return encodeOne(p, v);
+}
+
+const hashedTopic = (p) => p.kind === 'string' || p.kind === 'bytes' || p.kind === 'array' || p.kind === 'tuple';
+
+// Topics of an event for log filters: values of the indexed parameters in order, null for "any".
+// Trailing nulls are trimmed because nodes treat a missing topic position as wildcard; topic0 is the event signature
+// hash unless the event is anonymous (then all 4 topic slots are free for indexed params).
+export function encodeEventTopics(fragment, values = []) {
+  const f = parseFragment(typeof fragment === 'string' && !/^\s*event\b/.test(fragment) ? 'event ' + fragment : fragment);
+  const indexed = f.inputs.filter((p) => p.indexed);
+  if (values.length > indexed.length) throw abiError('more values than indexed parameters');
+  const topics = f.anonymous ? [] : [f.topic];
+  indexed.forEach((p, i) => {
+    const v = values[i];
+    if (v == null) topics.push(null);
+    else topics.push(hex(hashedTopic(p) ? keccak256(indexedEncoding(p, v, false)) : encodeOne(p, v)));
+  });
+  while (topics.length && topics[topics.length - 1] === null) topics.pop();
+  return topics;
+}
+
+function decodeWithEvent(f, topics, data) {
+  const indexed = f.inputs.filter((p) => p.indexed);
+  const first = f.anonymous ? 0 : 1;
+  if (topics.length !== first + indexed.length) return null;
+  if (!f.anonymous && String(topics[0]).toLowerCase() !== f.topic) return null;
+  const plain = decodeData(f.inputs.filter((p) => !p.indexed), data);
+  let ti = first, di = 0;
+  const args = f.inputs.map((p) => {
+    if (!p.indexed) return plain[di++];
+    const t = fromHex(topics[ti++]);
+    if (t.length !== 32) throw abiError('topic: 32 bytes expected');
+    return hashedTopic(p) ? hex(t) : decodeOne(p, { data: t, reads: 0, limit: 4 }, 0);
+  });
+  return { fragment: f, name: f.name, signature: f.signature, args: named(args, f.inputs) };
+}
+
+// { fragment, args } of a log ({ topics, data }) from the events of `abi` (an event fragment or an ABI), or null.
+// Anonymous events have no topic0, so they cannot be found by topic and are tried against every log as fallbacks.
+export function decodeEventLog(abi, log) {
+  const topics = log.topics || [];
+  const data = log.data == null ? '0x' : log.data;
+  let candidates;
+  if (abi && !Array.isArray(abi) && !abi.fragments && (typeof abi !== 'string' || /^\s*event\b/.test(abi))) candidates = [parseFragment(abi)];
+  else {
+    const a = parseAbi(abi);
+    candidates = [...(topics.length ? a.eventsByTopic(topics[0]) : []), ...a.events.filter((e) => e.anonymous)];
+  }
+  let lastError = null;
+  for (const f of candidates) {
+    try {
+      const r = decodeWithEvent(f, topics, data);
+      if (r) return r;
+    } catch (e) { lastError = e; }
+  }
+  if (lastError && candidates.length === 1) throw lastError;
+  return null;
+}
+
+export const PANIC_CODES = Object.freeze({
+  0x00: 'generic compiler-inserted panic',
+  0x01: 'assertion failed',
+  0x11: 'arithmetic underflow or overflow',
+  0x12: 'division or modulo by zero',
+  0x21: 'invalid enum value',
+  0x22: 'incorrectly encoded storage byte array',
+  0x31: 'pop() on an empty array',
+  0x32: 'array index out of bounds',
+  0x41: 'out of memory (too much memory allocated or an array too large)',
+  0x51: 'call to a zero-initialized internal function',
+});
+
+export const ERROR_STRING = parseFragment('error Error(string message)');
+export const PANIC = parseFragment('error Panic(uint256 code)');
+
+export function encodeErrorResult(fragment, args = []) {
+  const f = parseFragment(typeof fragment === 'string' && !/^\s*error\b/.test(fragment) ? 'error ' + fragment : fragment);
+  return f.selector + bytesToHex(encodeTuple(f.inputs, args));
+}
+
+// Revert data -> { fragment, name, args, reason?, code? }; null for empty data or an unknown selector.
+export function decodeErrorResult(abi, data) {
+  const b = typeof data === 'string' ? fromHex(data) : data;
+  if (b.length < 4) return null;
+  const sel = hex(b.subarray(0, 4));
+  let fragment = sel === ERROR_STRING.selector ? ERROR_STRING : sel === PANIC.selector ? PANIC : abi ? lookup(abi, sel, 'error') : null;
+  if (!fragment) return null;
+  const args = decodeData(fragment.inputs, b.subarray(4));
+  const out = { fragment, name: fragment.name, signature: fragment.signature, args };
+  if (fragment === ERROR_STRING) out.reason = args[0];
+  if (fragment === PANIC) {
+    out.code = args[0];
+    out.reason = PANIC_CODES[Number(args[0])] || `unknown panic code 0x${args[0].toString(16)}`;
+  }
+  return out;
+}
+
+// --- packed encoding and display ----------------------------------------------------------------------
+
+// abi.encodePacked: minimal widths, no length prefixes, no offsets. Ambiguous by construction: ('a','bc') and ('ab','c')
+// pack identically, so it must never be hashed for signatures over several dynamic values. Array elements are still
+// padded to 32 bytes (Solidity behaviour), which is why inArray switches to encodeOne.
+function packedOne(p, v, inArray) {
+  if (p.kind === 'array') {
+    if (inArray) throw abiError('encodePacked: nested arrays are not supported');
+    if (!Array.isArray(v) || (p.length >= 0 && v.length !== p.length)) throw abiError(`${p.type}: bad array value`);
+    if (isDynamic(p.child)) throw abiError('encodePacked: arrays of dynamic types are not supported');
+    return concatBytes(...v.map((x) => packedOne(p.child, x, true)));
+  }
+  if (p.kind === 'tuple') throw abiError('encodePacked: tuples are not supported');
+  if (inArray) return encodeOne(p, v);
+  switch (p.kind) {
+    case 'uint': case 'int': return word(intValue(p, v)).subarray(32 - p.size / 8);
+    case 'bool': return encodeOne(p, v).subarray(31);
+    case 'address': return encodeOne(p, v).subarray(12);
+    case 'fixedbytes': return encodeOne(p, v).subarray(0, p.size);
+    case 'string': return utf8ToBytes(v);
+    case 'bytes': return bytesOf(v);
+    default: throw abiError(`encodePacked: ${p.type}`);
+  }
+}
+
+export function encodePacked(types, values) {
+  const ps = typeList(types);
+  if (!Array.isArray(values) || values.length !== ps.length) throw abiError(`${ps.length} values expected`);
+  return hex(concatBytes(...ps.map((p, i) => packedOne(p, values[i], false))));
+}
+
+// Display text of a decoded value: decimal integers, checksum addresses, hex bytes, quoted strings, [arrays],
+// (tuples). The type (text or param) is optional.
+export function formatAbiValue(value, type = null) {
+  const p = type == null ? null : makeParam(type);
+  if (p && p.kind === 'tuple' && Array.isArray(value)) return '(' + value.map((v, i) => formatAbiValue(v, p.components[i])).join(', ') + ')';
+  if (Array.isArray(value)) return '[' + value.map((v) => formatAbiValue(v, p && p.kind === 'array' ? p.child : null)).join(', ') + ']';
+  if (typeof value === 'bigint') return value.toString();
+  if (typeof value === 'boolean') return String(value);
+  if (value instanceof Uint8Array) return hex(value);
+  if (typeof value === 'string') {
+    if (p && p.kind === 'address') return getAddress(value);
+    if (p ? p.kind === 'string' : !/^0x[0-9a-fA-F]*$/.test(value)) return JSON.stringify(value);
+    return value;
+  }
+  return String(value);
+}

@@ -1,0 +1,641 @@
+// rental-studio/payouts.js - the payouts page: KPIs of a month (bookings, nights, occupancy, ADR, RevPAR, revenue,
+// the agency's and the owners' money; ledger/kpi.js), the split of every booking of the month through the calculation
+// web with posting to the journal (ref = booking, one posting per booking, reversed as a whole), owner statements with
+// opening and closing balances (ledger/journal.js) as CSV and a printable owner report, the payout plan, building
+// expenses split across flats, the calculation web editor (sources -> pools -> parties with percent / fixed per
+// booking / night / month / rest edges, validation, a diagram drawn by ledger/webview.js + diagram/), parties, the
+// hand-typed exchange rates (ledger/rates.js) and the journal with reversals.
+//
+// Accounting model (why it looks like this): the journal is append-only double-entry-style operations per party
+// (accrual = owed to the party, deduction = withheld, payout = paid). Bookings are not money until posted; posting
+// evaluates the calculation web and appends its operations with ref = booking id. Corrections are reversals, so
+// statements can always be reproduced for any past period. Every panel below is a pure view over P.journal and
+// P.bookings; paintAll() refreshes them together after any journal change so no panel shows a stale total.
+import {
+  LEDGER_ROLE, PARTY_KINDS, bookingCounts, evalBooking, expenseOps, kpiStays, linesByParty, nextId, nightsOf, payoutFor, postBookings,
+  postedRefs, ratesTable, unitOf, unpostBooking, webIssues,
+} from './calc.js';
+import {
+  P, TODAY, articleText, dayInput, dot, equivalents, fmtDay, fmtNum, group, isDark, kindText, lang, money, moneyInput, monthNav, monthTitle,
+  note, numInput, onSchemeChange, partyKindText, partyName, permille, printNode, save, startShell, statBox, table, thisMonth, unitName,
+} from './common.js';
+import { button, card, download, field, seg, select, t, textInput, toast } from '../ui/app.js';
+import { $, h, lsGet, lsSet } from '../ui/dom.js';
+import { iconEl } from '../ui/icons.js';
+import { confirmDialog, openDialog } from '../ui/overlays.js';
+import { dayAdd } from '../booking/days.js';
+import { appendOps, dueByCurrency, reverseOp, reversedIds, statement, byArticle } from '../ledger/journal.js';
+import { periodKpis } from '../ledger/kpi.js';
+import { periodOf, monthEnd } from '../ledger/period.js';
+import { normalizeWeb, starterWeb, WEB_UNITS, webErrors } from '../ledger/web.js';
+import { webGraph } from '../ledger/webview.js';
+import { fromPct, toPct } from '../ledger/split.js';
+import { LEDGER_ARTICLES } from '../ledger/parties.js';
+import { crossRate } from '../ledger/rates.js';
+import { csvText, kpiCsv } from '../ledger/export.js';
+import { decimalText } from '../ledger/minor.js';
+import { graphSVG } from '../diagram/graph.js';
+
+const VKEY = 'rs-pay';
+const V = (() => {
+  const v = lsGet(VKEY, null) || {};
+  return {
+    month: /^\d{4}-\d{2}$/.test(v.month) ? v.month : thisMonth(),
+    party: typeof v.party === 'string' ? v.party : '',
+    test: { unit: typeof v.test?.unit === 'string' ? v.test.unit : '', total: Number(v.test?.total) > 0 ? Number(v.test.total) : 50000, surplus: Number(v.test?.surplus) >= 0 ? Number(v.test.surplus) : 0, nights: Number(v.test?.nights) > 0 ? Number(v.test.nights) : 4 },
+    exp: { total: 30000, article: 'utilities', by: 'area', note: '', units: [] },
+    payDay: TODAY,
+  };
+})();
+const keep = () => lsSet(VKEY, { month: V.month, party: V.party, test: V.test });
+
+const main = $('#main');
+main.classList.add('rs-pay');
+const els = {};
+// DRAFT: the web as edited, kept separately from P.web for the same reason as the RAW rules on the prices page -
+// incomplete rows survive while the user is typing; P.web always holds the normalised, valid version.
+let DRAFT = null;   // the web as edited (rows stay while they are not valid yet)
+
+const period = () => periodOf({ month: V.month });
+const live = (o, dead) => !dead.has(String(o.id));
+
+function render() {
+  main.textContent = '';
+  DRAFT = structuredClone(P.web);
+  if (!P.parties.some((p) => p.id === V.party)) V.party = (P.parties.find((p) => p.kind === 'owner') || P.parties[0] || {}).id || '';
+  els.kpi = h('div', { class: 'rs-kpis' });
+  els.split = h('div');
+  els.stmt = h('div');
+  els.plan = h('div');
+  els.journal = h('div');
+  els.issues = h('div', { class: 'rs-warns', 'aria-live': 'polite' });
+  els.diagram = h('div', { class: 'rs-diagram', role: 'img', 'aria-label': t('rs.web.diagram') });
+  els.test = h('div', { class: 'rs-wtest-out' });
+  els.nodes = h('div');
+  els.edges = h('div');
+
+  const top = card('', h('div', { class: 'rs-head' }, h('h2', { class: 'ap-card-h' }, t('rs.pay.period')), monthNav(V.month, (m) => { V.month = m; keep(); render(); }),
+    h('span', { class: 'ed-spacer' }), button('rs.kpi.csv', 'table', () => download(kpiCsv(periodKpis(kpiStays(P), P.journal, kpiOpts())), `kpi-${V.month}.csv`, 'text/csv'))), els.kpi);
+  const split = card('rs.sp.title', els.split);
+  split.id = 'rs-split';
+  const stmt = card('rs.st.title', els.stmt);
+  stmt.id = 'rs-statement';
+  const webCard = card('rs.web.title', h('div', { class: 'ed-hint' }, t('rs.web.lead')), els.issues,
+    h('div', { class: 'rs-webgrid' }, h('div', { class: 'rs-col' }, els.diagram, testBox()), h('div', { class: 'rs-col' }, els.nodes, els.edges)));
+  webCard.id = 'rs-web';
+  main.append(top, split,
+    h('div', { class: 'rs-split rs-split-even' }, stmt, h('div', { class: 'rs-col' }, card('rs.plan.title', els.plan), expenseCard())),
+    webCard,
+    h('div', { class: 'rs-split rs-split-even' }, partiesCard(), ratesCard()),
+    card('rs.j.title', els.journal));
+  paintAll();
+}
+
+function paintAll() { paintKpis(); paintSplit(); paintStatement(); paintPlan(); paintJournal(); paintWeb(); }
+
+// --- KPIs ------------------------------------------------------------------------------------------------------------
+
+// Party ids by role for the KPI library: which accruals count as the agency's income vs the owners' money.
+function kpiOpts(units = P.units.length) {
+  return {
+    period: period(), units,
+    owners: P.parties.filter((p) => p.kind === 'owner').map((p) => p.id),
+    agency: P.parties.filter((p) => p.kind === 'agency').map((p) => p.id),
+  };
+}
+
+// ADR = revenue / sold nights; RevPAR = revenue / available nights (occupancy x ADR) - the two standard lodging KPIs;
+// RevPAR is what an owner compares across flats because it punishes empty nights. Per-flat rows ignore the journal
+// ([]): they are booking-based figures.
+function paintKpis() {
+  const k = periodKpis(kpiStays(P), P.journal, kpiOpts());
+  const c = k.currencies.find((x) => x.currency === P.currency) || { gross: 0, adr: 0, revpar: 0, agency: 0, ownerNet: 0, ownerAccrued: 0, expenses: 0, nightRevenue: 0 };
+  const box = els.kpi;
+  box.textContent = '';
+  box.append(h('div', { class: 'rs-stats' },
+    statBox('rs.kpi.bookings', fmtNum(k.bookings), k.pending ? t('rs.kpi.pending', { n: k.pending }) : ''),
+    statBox('rs.kpi.nights', fmtNum(k.nights), t('rs.kpi.ofNights', { n: k.available })),
+    statBox('rs.kpi.occupancy', permille(k.occupancy), '', { dataset: { kpi: 'occupancy' } }),
+    statBox('rs.kpi.adr', money(c.adr), t('rs.kpi.adrHint')),
+    statBox('rs.kpi.revpar', money(c.revpar), t('rs.kpi.revparHint')),
+    statBox('rs.kpi.gross', money(c.gross), equivalents(c.gross).join(' · ')),
+    statBox('rs.kpi.agency', money(c.agency)),
+    statBox('rs.kpi.owners', money(c.ownerAccrued - (c.ownerDeducted || 0)), t('rs.kpi.ownersHint'))));
+  const rows = P.units.map((u) => {
+    const ku = periodKpis(kpiStays(P, u.id), [], kpiOpts(1));
+    const cu = ku.currencies.find((x) => x.currency === P.currency) || { adr: 0, revpar: 0, gross: 0 };
+    return [h('span', {}, dot(u.color), ' ', u.name), String(ku.bookings), String(ku.nights), permille(ku.occupancy), money(cu.adr), money(cu.revpar), money(cu.gross)];
+  });
+  box.append(table(['rs.cal.flat', 'rs.kpi.bookings', 'rs.kpi.nights', 'rs.kpi.occupancy', 'rs.kpi.adr', 'rs.kpi.revpar', 'rs.kpi.gross'], rows, { num: [1, 2, 3, 4, 5, 6] }),
+    h('div', { class: 'ed-hint' }, t('rs.kpi.hint')));
+}
+
+// --- split of the month's bookings -----------------------------------------------------------------------------------
+
+// The split table evaluates every booking of the month (by check-in day) through the web live, posted or not, so the
+// manager sees what posting would write. Party columns are discovered from the lines and ordered by party kind
+// (owners first). Totals count confirmed bookings only. "stale" = posted bookings that are no longer confirmed:
+// their accruals must be reversed by hand, never silently.
+function paintSplit() {
+  const box = els.split;
+  box.textContent = '';
+  const p = period();
+  const list = P.bookings.filter((b) => b.from >= p.from && b.from <= p.to && b.status !== 'declined').sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0));
+  const errors = webErrors(webIssues(P));
+  const posted = postedRefs(P.journal);
+  const evals = new Map(list.map((b) => [b.id, evalBooking(P, b)]));
+  // Columns: every party that gets or gives money on one of these bookings, owners first.
+  const ids = new Set();
+  for (const e of evals.values()) for (const l of e.lines) if (l.partyId != null) ids.add(String(l.partyId));
+  const order = PARTY_KINDS;
+  const cols = [...ids].sort((a, b) => order.indexOf(P.parties.find((x) => x.id === a)?.kind) - order.indexOf(P.parties.find((x) => x.id === b)?.kind) || a.localeCompare(b));
+  const sums = Object.fromEntries(cols.map((c) => [c, 0]));
+  let total = 0;
+  const rows = list.map((b) => {
+    const e = evals.get(b.id), by = linesByParty(e.lines);
+    const counts = bookingCounts(b);
+    if (counts) { total += b.total; for (const c of cols) sums[c] += by[c] || 0; }
+    const isPosted = posted.has(b.id);
+    const act = isPosted
+      ? h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => unpost(b) }, iconEl('undo'), t('rs.sp.reverse'))
+      : counts ? h('button', { type: 'button', class: 'ed-btn ed-sm', disabled: !!errors.length, onclick: () => post([b.id]) }, iconEl('check'), t('rs.sp.post')) : h('span', { class: 'ed-hint' }, '—');
+    return h('tr', { class: counts ? null : 'rs-row-dim', dataset: { id: b.id, posted: String(isPosted) } },
+      h('td', {}, h('div', {}, b.guest || t('rs.b.noGuest')), h('div', { class: 'ed-hint' }, `${unitName(b.unitId)} · ${fmtDay(b.from)} · ${t('rs.nights', { n: nightsOf(b) })}`)),
+      h('td', {}, h('span', { class: 'rs-chip rs-chip-' + b.status }, t('rs.st.' + b.status))),
+      h('td', { class: 'rs-num rs-nowrap' }, money(b.total), b.surplus ? h('div', { class: 'ed-hint' }, t('rs.sp.surplusIn', { s: money(b.surplus) })) : null),
+      ...cols.map((c) => h('td', { class: 'rs-num rs-nowrap' + ((by[c] || 0) < 0 ? ' rs-neg' : ''), dataset: { party: c, v: String(by[c] || 0) } }, by[c] ? money(by[c]) : '—')),
+      h('td', { class: 'rs-nowrap' }, isPosted ? h('span', { class: 'rs-chip rs-chip-confirmed' }, t('rs.sp.posted')) : null, ' ', act));
+  });
+  const unposted = list.filter((b) => bookingCounts(b) && !posted.has(b.id)).map((b) => b.id);
+  const stale = list.filter((b) => !bookingCounts(b) && posted.has(b.id));
+  const postAll = button('rs.sp.postAll', 'check', () => post(unposted), 'primary');
+  postAll.id = 'rs-post-all';
+  postAll.disabled = !unposted.length || !!errors.length;
+  box.append(h('div', { class: 'ap-row rs-sp-bar' }, postAll, h('span', { class: 'ed-hint' }, t('rs.sp.unposted', { n: unposted.length }))));
+  if (errors.length) box.append(note('error', t('rs.sp.webBad')));
+  for (const b of stale) box.append(note('warn', t('rs.sp.stale', { who: b.guest || b.id, st: t('rs.st.' + b.status) })));
+  if (!list.length) { box.append(h('div', { class: 'ap-empty' }, t('rs.sp.none'))); return; }
+  const head = ['rs.b.guest', 'rs.b.status', 'rs.b.price', ...cols.map((c) => '=' + partyName(c)), 'rs.sp.journal'];
+  const foot = [h('td', { colspan: '2' }, h('b', {}, t('rs.sp.total'))), h('td', { class: 'rs-num rs-nowrap' }, h('b', {}, money(total))),
+    ...cols.map((c) => h('td', { class: 'rs-num rs-nowrap', dataset: { party: c, sum: String(sums[c]) } }, h('b', {}, money(sums[c])))), h('td')];
+  box.append(table(head, rows, { foot, num: [2, ...cols.map((_, i) => i + 3)], cls: 'rs-sptable' }),
+    h('div', { class: 'ed-hint' }, t('rs.sp.hint')));
+}
+
+// Posting is blocked while the web has errors (UI disables the buttons); postBookings itself also skips anything
+// unbound, so a bad web cannot write a partial split.
+function post(ids) {
+  const r = postBookings(P, ids);
+  P.journal = r.journal;
+  save(true);
+  toast(t('rs.sp.postedN', { n: r.posted.length }) + (r.skipped.length ? ' ' + t('rs.sp.skippedN', { n: r.skipped.length }) : ''), r.posted.length ? 'ok' : 'warn');
+  paintAll();
+}
+
+async function unpost(b) {
+  if (!(await confirmDialog(t('rs.sp.reverseQ'), `${b.guest || b.id} · ${fmtDay(b.from)}`, t('rs.sp.reverse'), true))) return;
+  const r = unpostBooking(P, b.id);
+  P.journal = r.journal;
+  save(true);
+  toast(t('rs.sp.reversedN', { n: r.reversed }), 'ok');
+  paintAll();
+}
+
+// --- statement, report -----------------------------------------------------------------------------------------------
+
+function statementOf(partyId) {
+  const p = period();
+  return statement(P.journal, partyId, { from: p.from, to: p.to, currency: P.currency });
+}
+const refText = (ref) => {
+  const b = P.bookings.find((x) => x.id === ref);
+  return b ? `${b.guest || b.id} · ${unitName(b.unitId)}` : String(ref || '');
+};
+
+// Statement = opening balance (everything before the period) + accrued - deducted - paid = closing. Voided rows stay
+// visible struck through: the reader sees the correction, not a silently changed history.
+function paintStatement() {
+  const box = els.stmt;
+  box.textContent = '';
+  const pick = select(P.parties.map((p) => ({ v: p.id, l: `=${p.name} · ${partyKindText(p.kind)}` })), V.party, (v) => { V.party = v; keep(); paintStatement(); });
+  pick.id = 'rs-st-party';
+  const st = statementOf(V.party);
+  const rows = st.rows.map((r) => h('tr', { class: r.voided ? 'rs-row-void' : null },
+    h('td', { class: 'rs-nowrap' }, fmtDay(r.day)), h('td', {}, kindText(r.kind)), h('td', {}, articleText(r.article), r.reverses ? h('div', { class: 'ed-hint' }, t('rs.j.reverses', { id: r.reverses })) : null),
+    h('td', { class: 'rs-clip2' }, refText(r.ref) || r.note),
+    h('td', { class: 'rs-num rs-nowrap' + (r.kind === 'accrual' ? '' : ' rs-neg') }, (r.kind === 'accrual' ? '' : '− ') + money(r.amount)),
+    h('td', { class: 'rs-num rs-nowrap' }, r.balance == null ? '—' : money(r.balance))));
+  const sums = h('div', { class: 'rs-stmt-sum', id: 'rs-st-sum', dataset: { opening: String(st.opening), accrued: String(st.accrued), deducted: String(st.deducted), paid: String(st.paid), closing: String(st.closing) } },
+    kvLine('rs.st.opening', money(st.opening)), kvLine('rs.op.accrual', money(st.accrued)), kvLine('rs.op.deduction', '− ' + money(st.deducted)), kvLine('rs.op.payout', '− ' + money(st.paid)),
+    kvLine('rs.st.closing', money(st.closing), true));
+  const arts = byArticle(st.rows);
+  const csv = button('rs.st.csv', 'table', () => download(statementCsvText(st), `statement-${V.party}-${V.month}.csv`, 'text/csv'));
+  const print = button('rs.st.print', 'print', () => printNode(ownerReport(V.party, st)));
+  box.append(field('rs.st.party', pick),
+    h('div', { class: 'ed-hint' }, t('rs.st.range', { a: fmtDay(st.from, { year: true }), b: fmtDay(st.to, { year: true }) }) + (st.refs ? ' · ' + t('rs.st.refs', { n: st.refs }) : '')),
+    sums,
+    st.rows.length ? table(['rs.j.day', 'rs.j.kind', 'rs.j.article', 'rs.j.ref', 'rs.j.amount', 'rs.st.balance'], rows, { num: [4, 5] }) : h('div', { class: 'ap-empty' }, t('rs.st.empty')),
+    arts.length ? h('div', { class: 'rs-arts' }, arts.map((a) => h('span', { class: 'rs-art ' + (a.kind === 'accrual' ? '' : 'rs-neg') }, `${articleText(a.article)}: ${a.kind === 'accrual' ? '' : '− '}${money(a.amount)}`))) : null,
+    st.otherCurrency ? note('warn', t('rs.st.other', { n: st.otherCurrency })) : null,
+    h('div', { class: 'ap-actions' }, csv, print));
+}
+const kvLine = (k, v, strong) => h('div', { class: 'rs-kvl' + (strong ? ' rs-strong' : '') }, h('span', {}, t(k)), h('b', { class: 'rs-num' }, v));
+
+// CSV uses decimalText (plain "1234.50", no grouping, no currency sign) so spreadsheets parse numbers in any locale
+// setting; labels are translated, values are not.
+function statementCsvText(st) {
+  const cur = P.currency;
+  const rows = [[t('rs.j.day'), t('rs.j.kind'), t('rs.j.article'), t('rs.j.ref'), t('rs.j.amount'), t('rs.j.currency'), t('rs.j.voided'), t('rs.st.balance'), t('rs.j.note')]];
+  for (const r of st.rows) rows.push([r.day, kindText(r.kind), articleText(r.article), refText(r.ref), decimalText(r.amount, cur), cur, r.voided ? t('rs.yes') : '', r.balance == null ? '' : decimalText(r.balance, cur), r.note]);
+  rows.push([]);
+  rows.push([t('rs.st.opening'), '', '', '', decimalText(st.opening, cur), cur]);
+  rows.push([kindText('accrual'), '', '', '', decimalText(st.accrued, cur), cur]);
+  rows.push([kindText('deduction'), '', '', '', decimalText(st.deducted, cur), cur]);
+  rows.push([kindText('payout'), '', '', '', decimalText(st.paid, cur), cur]);
+  rows.push([t('rs.st.closing'), '', '', '', decimalText(st.closing, cur), cur]);
+  return csvText(rows);
+}
+
+// The printable owner report: the owner's flats with the month's figures, the statement and the balance.
+// Printable report built as a detached element and handed to printNode; voided rows are omitted here (paper is for
+// the owner, the on-screen statement is the audit view).
+function ownerReport(partyId, st) {
+  const party = P.parties.find((p) => p.id === partyId);
+  const flats = P.units.filter((u) => u.ownerId === partyId);
+  const flatRows = flats.map((u) => {
+    const k = periodKpis(kpiStays(P, u.id), [], kpiOpts(1));
+    const c = k.currencies.find((x) => x.currency === P.currency) || { gross: 0, adr: 0 };
+    return [u.name, String(k.bookings), String(k.nights), permille(k.occupancy), money(c.adr), money(c.gross)];
+  });
+  const tbl = (head, rows) => h('table', { class: 'rs-rep-t' }, h('thead', {}, h('tr', {}, head.map((x) => h('th', {}, t(x))))), h('tbody', {}, rows.map((r) => h('tr', {}, r.map((c) => h('td', {}, c))))));
+  return h('article', { class: 'rs-report' },
+    h('header', {}, h('h1', {}, t('rs.rep.title')), h('div', {}, h('b', {}, party ? party.name : partyId), ' · ', partyKindText(party?.kind || 'other')),
+      h('div', {}, monthTitle(V.month), ' · ', P.name), h('div', { class: 'rs-rep-muted' }, t('rs.rep.made', { d: fmtDay(TODAY, { year: true }) }))),
+    flats.length ? h('section', {}, h('h2', {}, t('rs.rep.flats')), tbl(['rs.cal.flat', 'rs.kpi.bookings', 'rs.kpi.nights', 'rs.kpi.occupancy', 'rs.kpi.adr', 'rs.kpi.gross'], flatRows)) : null,
+    h('section', {}, h('h2', {}, t('rs.st.title')),
+      tbl(['rs.j.day', 'rs.j.kind', 'rs.j.article', 'rs.j.ref', 'rs.j.amount', 'rs.st.balance'], st.rows.filter((r) => !r.voided).map((r) => [fmtDay(r.day), kindText(r.kind), articleText(r.article), refText(r.ref) || r.note, (r.kind === 'accrual' ? '' : '− ') + money(r.amount), money(r.balance)]))),
+    h('section', { class: 'rs-rep-sum' },
+      h('div', {}, t('rs.st.opening'), h('b', {}, money(st.opening))), h('div', {}, kindText('accrual'), h('b', {}, money(st.accrued))),
+      h('div', {}, kindText('deduction'), h('b', {}, '− ' + money(st.deducted))), h('div', {}, kindText('payout'), h('b', {}, '− ' + money(st.paid))),
+      h('div', { class: 'rs-rep-total' }, t('rs.st.closing'), h('b', {}, money(st.closing))),
+      h('div', { class: 'rs-rep-muted' }, equivalents(st.closing).join(' · '))),
+    h('footer', { class: 'rs-rep-muted' }, t('rs.rep.foot')));
+}
+
+// --- payout plan, expenses -------------------------------------------------------------------------------------------
+
+// Due per party in the project currency. A negative due (party owes the agency) is shown as debt and cannot be paid
+// out.
+function paintPlan() {
+  const box = els.plan;
+  box.textContent = '';
+  const rows = P.parties.map((p) => {
+    const due = dueByCurrency(P.journal, p.id)[P.currency] || 0;
+    const pay = h('button', { type: 'button', class: 'ed-btn ed-sm', disabled: due <= 0, onclick: () => payOut(p) }, iconEl('send'), t('rs.plan.pay'));
+    return [h('span', {}, p.name, h('div', { class: 'ed-hint' }, partyKindText(p.kind))), h('td', { class: 'rs-num rs-nowrap' + (due < 0 ? ' rs-neg' : ''), dataset: { due: String(due), party: p.id } }, money(due), due < 0 ? h('div', { class: 'ed-hint' }, t('rs.plan.debt')) : null), pay];
+  });
+  box.append(field('rs.plan.day', dayInput(V.payDay, (v) => { V.payDay = v; })), table(['rs.st.party', 'rs.plan.due', ''], rows, { num: [1] }), h('div', { class: 'ed-hint' }, t('rs.plan.hint')));
+}
+
+// payoutPlan converts dues across currencies at the hand-typed rates when needed; the confirm dialog shows the exact
+// sum before any journal write.
+async function payOut(p) {
+  const r = payoutFor(P, p.id, V.payDay || TODAY, t('rs.plan.note'));
+  if (!r.ops.length) { toast(t('rs.plan.nothing'), 'warn'); return; }
+  const sum = r.plan.reduce((s, x) => s + x.amount, 0);
+  if (!(await confirmDialog(t('rs.plan.confirm'), t('rs.plan.confirmText', { who: p.name, sum: money(sum), d: fmtDay(V.payDay || TODAY, { year: true }) }), t('rs.plan.pay')))) return;
+  const a = appendOps(P.journal, r.ops);
+  if (!a.ok) { toast(t('rs.j.bad'), 'error'); return; }
+  P.journal = a.journal;
+  save(true);
+  toast(t('rs.plan.done', { sum: money(sum) }), 'ok');
+  paintAll();
+}
+
+// Building expense split by area or equally across selected flats; each owner gets a deduction. P.expenses counts
+// postings so each split gets its own ref (x1, x2...) and can be found or reversed as a group.
+function expenseCard() {
+  const E = V.exp;
+  if (!E.day) E.day = monthEnd(V.month);
+  const out = h('div');
+  const paint = () => {
+    out.textContent = '';
+    const r = expenseOps(P, { ...E, units: E.units, day: E.day });
+    const rows = r.rows.map((x) => { const u = unitOf(P, x.id); return [u.name, partyName(u.ownerId), E.by === 'area' ? fmtNum(u.area, 1) + ' m²' : '1', money(x.amount)]; });
+    const sum = r.rows.reduce((s, x) => s + x.amount, 0);
+    out.append(table(['rs.cal.flat', 'rs.u.owner', 'rs.ex.weight', 'rs.j.amount'], rows, { num: [2, 3], foot: [h('td', { colspan: '3' }, t('rs.sp.total')), h('td', { class: 'rs-num' }, money(sum))] }));
+  };
+  const flats = h('div', { class: 'rs-checks' }, P.units.map((u) => {
+    const c = h('input', { type: 'checkbox', checked: !E.units.length || E.units.includes(u.id) });
+    c.addEventListener('change', () => {
+      const on = [...flats.querySelectorAll('input')].map((x, i) => (x.checked ? P.units[i].id : null)).filter(Boolean);
+      E.units = on.length === P.units.length ? [] : on;
+      paint();
+    });
+    return h('label', { class: 'rs-check' }, c, dot(u.color), h('span', {}, u.name));
+  }));
+  const go = button('rs.ex.post', 'check', async () => {
+    const r = expenseOps(P, { ...E, units: E.units.length ? E.units : P.units.map((u) => u.id) });
+    if (!r.ops.length) { toast(t('rs.ex.nothing'), 'warn'); return; }
+    if (!(await confirmDialog(t('rs.ex.post'), t('rs.ex.confirm', { sum: money(E.total), n: r.ops.length }), t('rs.ex.post')))) return;
+    const a = appendOps(P.journal, r.ops);
+    if (!a.ok) { toast(t('rs.j.bad'), 'error'); return; }
+    P.journal = a.journal; P.expenses++;
+    save(true);
+    toast(t('rs.ex.done'), 'ok');
+    paintAll();
+  }, 'primary');
+  const arts = ['utilities', 'repair', 'supplies', 'cleaning', 'tax', 'other'];
+  paint();
+  return card('rs.ex.title',
+    h('div', { class: 'ed-grid2' },
+      field('=' + t('rs.j.amount') + ', ' + P.currency, moneyInput(E.total, (v) => { E.total = v ?? 0; paint(); })),
+      field('rs.j.day', dayInput(E.day, (v) => { E.day = v; }))),
+    h('div', { class: 'ed-grid2' },
+      field('rs.j.article', select(arts.map((a) => ({ v: a, l: 'rs.art.' + a })), E.article, (v) => { E.article = v; })),
+      group('rs.ex.by', seg([{ v: 'area', l: 'rs.ex.byArea' }, { v: 'equal', l: 'rs.ex.byEqual' }], E.by, (v) => { E.by = v; paint(); }, 'rs.ex.by'))),
+    field('rs.j.note', textInput(E.note, (v) => { E.note = v; }, { dir: 'auto', placeholder: t('rs.ex.notePh') })),
+    group('rs.ex.flats', flats), out, h('div', { class: 'ap-actions' }, go), h('div', { class: 'ed-hint' }, t('rs.ex.hint')));
+}
+
+// --- journal ---------------------------------------------------------------------------------------------------------
+
+// Latest 40 operations (newest first) for the screen; the CSV exports the full journal. Reversal entries cannot be
+// reversed again (no reverse button) - re-posting is the way to undo a correction.
+function paintJournal() {
+  const box = els.journal;
+  box.textContent = '';
+  const dead = reversedIds(P.journal);
+  const last = [...P.journal].sort((a, b) => b.id - a.id).slice(0, 40);
+  const rows = last.map((o) => h('tr', { class: dead.has(String(o.id)) ? 'rs-row-void' : null },
+    h('td', { class: 'rs-num' }, String(o.id)), h('td', { class: 'rs-nowrap' }, fmtDay(o.day)), h('td', {}, kindText(o.kind)), h('td', {}, partyName(o.partyId)),
+    h('td', {}, articleText(o.article), o.reverses ? h('div', { class: 'ed-hint' }, t('rs.j.reverses', { id: o.reverses })) : null),
+    h('td', { class: 'rs-clip2' }, refText(o.ref) || o.note),
+    h('td', { class: 'rs-num rs-nowrap' }, money(o.amount)),
+    h('td', {}, !o.reverses && !dead.has(String(o.id)) ? h('button', { type: 'button', class: 'ed-iconbtn', title: t('rs.j.reverse'), 'aria-label': t('rs.j.reverse') + ' #' + o.id, onclick: () => reverseOne(o) }, iconEl('undo')) : null)));
+  const csv = button('rs.j.csv', 'table', () => {
+    const head = [t('rs.j.id'), t('rs.j.day'), t('rs.j.kind'), t('rs.st.party'), t('rs.j.article'), t('rs.j.amount'), t('rs.j.currency'), t('rs.j.ref'), t('rs.j.reversesCol'), t('rs.j.voided'), t('rs.j.note')];
+    const data = P.journal.map((o) => [o.id, o.day, kindText(o.kind), partyName(o.partyId), articleText(o.article), decimalText(o.amount, o.currency), o.currency, refText(o.ref), o.reverses || '', dead.has(String(o.id)) ? t('rs.yes') : '', o.note]);
+    download(csvText([head, ...data]), `journal-${TODAY}.csv`, 'text/csv');
+  });
+  box.append(h('div', { class: 'ap-row' }, h('span', { class: 'ed-hint' }, t('rs.j.count', { n: P.journal.length })), h('span', { class: 'ed-spacer' }), csv),
+    last.length ? table(['rs.j.id', 'rs.j.day', 'rs.j.kind', 'rs.st.party', 'rs.j.article', 'rs.j.ref', 'rs.j.amount', ''], rows, { num: [0, 6] }) : h('div', { class: 'ap-empty' }, t('rs.j.empty')),
+    h('div', { class: 'ed-hint' }, t('rs.j.hint')));
+}
+
+async function reverseOne(o) {
+  if (!(await confirmDialog(t('rs.j.reverse'), `#${o.id} · ${kindText(o.kind)} · ${partyName(o.partyId)} · ${money(o.amount)}`, t('rs.j.reverse'), true))) return;
+  const r = reverseOp(P.journal, o.id, { day: TODAY, note: 'manual' });
+  if (!r.ok) { toast(t('rs.j.bad'), 'error'); return; }
+  P.journal = r.journal;
+  save(true);
+  paintAll();
+}
+
+// --- the calculation web ---------------------------------------------------------------------------------------------
+
+// Node names are per-language objects; fallback chain: UI language, English, any, then a generated label.
+function nodeLabel(n) {
+  const own = n.name && (n.name[lang()] || n.name.en || Object.values(n.name)[0]);
+  if (own) return own;
+  if (n.kind === 'source') return t('rs.web.src.' + (n.source || 'booking'));
+  if (n.kind === 'pool') return t('rs.web.pool');
+  if (n.partyId != null) return partyName(n.partyId);
+  return n.role === 'owner' ? t('rs.web.flatOwner') : t('rs.pk.' + (n.role === 'agency' ? 'agency' : 'other'));
+}
+// Percentages are stored as integer basis points of a percent (toPct/fromPct, 1000 = 10 %), avoiding float storage.
+function edgeText(e) {
+  if (e.method === 'rest') return t('rs.web.rest');
+  if (e.method === 'pct') return fmtNum(fromPct(e.value), e.value % 100 ? 2 : 0) + ' %';
+  return `${money(e.value)} / ${t('rs.web.unit.' + (e.unit || 'booking'))}${e.guaranteed ? ', ' + t('rs.web.guaranteed') : ''}`;
+}
+// Structural web changes: normalise, save, rebuild the editor and the split table (money may have changed).
+const commitWeb = () => { P.web = normalizeWeb(DRAFT); save(); paintWeb(); paintSplit(); };
+
+function paintWeb() {
+  const issues = webIssues(P);
+  els.issues.textContent = '';
+  if (!issues.length) els.issues.append(note('ok', t('rs.wi.ok')));
+  for (const x of issues) {
+    const n = P.web.nodes.find((y) => y.id === x.node);
+    els.issues.append(note(x.level === 'error' ? 'error' : 'warn', t('rs.wi.' + x.code, { node: n ? nodeLabel(n) : x.edge || '' })));
+  }
+  els.issues.dataset.errors = String(webErrors(issues).length);
+  paintDiagram();
+  paintNodes();
+  paintEdges();
+}
+
+// A synthetic booking for the diagram preview: what the web would do with a booking of this price/surplus/nights.
+function testBooking() {
+  const unit = unitOf(P, V.test.unit) || P.units[0];
+  return { id: 'test', unitId: unit ? unit.id : '', from: TODAY, to: dayAdd(TODAY, Math.max(1, V.test.nights)), total: V.test.total + V.test.surplus, surplus: V.test.surplus, guest: '', status: 'confirmed' };
+}
+
+function testBox() {
+  const unitSel = select(P.units.map((u) => ({ v: u.id, l: '=' + u.name })), V.test.unit || P.units[0]?.id, (v) => { V.test.unit = v; keep(); paintDiagram(); });
+  return h('div', { class: 'rs-wtest' }, h('div', { class: 'ed-label' }, t('rs.web.test')),
+    h('div', { class: 'rs-wtest-f' },
+      field('rs.cal.flat', unitSel),
+      field('=' + t('rs.web.testPrice') + ', ' + P.currency, moneyInput(V.test.total, (v) => { V.test.total = v ?? 0; keep(); paintDiagram(); })),
+      field('=' + t('rs.b.surplus') + ', ' + P.currency, moneyInput(V.test.surplus, (v) => { V.test.surplus = v ?? 0; keep(); paintDiagram(); })),
+      field('rs.b.nights', numInput(V.test.nights, (v) => { V.test.nights = Math.max(1, Math.trunc(v || 1)); keep(); paintDiagram(); }, { min: 1, max: 365 }))),
+    els.test);
+}
+
+// Diagram: ledger/webview builds the graph, diagram/graph.js renders SVG. Labels are rewritten here in the UI
+// language with live amounts. innerHTML of generated SVG: the library escapes text it puts into the markup, and all
+// labels come from the project (user's own data). Rendering failures leave an empty diagram instead of breaking the
+// page.
+function paintDiagram() {
+  const b = testBooking();
+  const e = evalBooking(P, b);
+  const g = webGraph(e.web, { ev: e.ev, lang: lang(), currency: P.currency });
+  // The library words exist in en / ru / ka only: labels are rewritten in the UI language here.
+  const flows = new Map(e.ev.ok ? e.ev.flows.map((f) => [f.edge, f]) : []);
+  g.nodes.forEach((n) => {
+    const src = e.web.nodes.find((x) => x.id === n.id);
+    if (!src) return;
+    let label = nodeLabel(P.web.nodes.find((x) => x.id === n.id) || src);
+    if (src.kind === 'party' && src.role === 'owner' && src.partyId != null) label = partyName(src.partyId) + ' (' + t('rs.pk.owner').toLowerCase() + ')';
+    if (e.ev.ok && src.kind === 'party') label += '\n' + money(e.ev.left[n.id] || 0);
+    n.label = label;
+  });
+  g.edges.forEach((ge, i) => {
+    const we = e.web.edges[i];
+    if (!we) return;
+    const parts = [edgeText(we)];
+    if (we.article) parts.push(articleText(we.article));
+    const f = flows.get(we.id);
+    if (f) parts.push('= ' + money(f.amount) + (f.debt ? ' (' + t('rs.web.debt', { s: money(f.debt) }) + ')' : ''));
+    ge.label = parts.join(' · ');
+  });
+  let svg = '';
+  try { svg = graphSVG(g, { theme: isDark() ? 'dark' : 'light', fontSize: 13 }); } catch { svg = ''; }
+  els.diagram.innerHTML = svg;
+  els.test.textContent = '';
+  if (e.error) { els.test.append(note('error', t('rs.wi.' + e.error, { node: '' }))); return; }
+  if (e.missing.length) els.test.append(note('warn', t('rs.web.unbound')));
+  const by = linesByParty(e.lines);
+  els.test.append(h('div', { class: 'rs-arts' }, Object.entries(by).map(([pid, v]) => h('span', { class: 'rs-art' + (v < 0 ? ' rs-neg' : '') }, `${partyName(pid)}: ${money(v)}`))));
+  for (const s of e.ev.stuck) els.test.append(note('warn', t('rs.web.stuck', { node: nodeLabel(P.web.nodes.find((x) => x.id === s.node) || { kind: 'pool' }), s: money(s.amount) })));
+}
+
+function partyChoice(n) {
+  if (n.partyId != null) return 'p:' + n.partyId;
+  if (n.role) return 'r:' + n.role;
+  return '';
+}
+
+// Changing a node kind clears kind-specific fields first so no stale role/partyId survives into the new kind.
+// Deleting a node deletes its edges too (dangling edges would be validation errors).
+function paintNodes() {
+  const box = els.nodes;
+  box.textContent = '';
+  const rows = DRAFT.nodes.map((n, i) => {
+    const kind = select([{ v: 'source', l: 'rs.web.k.source' }, { v: 'pool', l: 'rs.web.k.pool' }, { v: 'party', l: 'rs.web.k.party' }], n.kind, (v) => {
+      n.kind = v; delete n.source; delete n.role; delete n.partyId;
+      if (v === 'source') n.source = DRAFT.nodes.some((x) => x !== n && x.kind === 'source' && x.source === 'booking') ? 'surplus' : 'booking';
+      if (v === 'party') n.role = 'owner';
+      commitWeb();
+    });
+    kind.setAttribute('aria-label', t('rs.web.kind'));
+    let what;
+    if (n.kind === 'source') {
+      what = select([{ v: 'booking', l: 'rs.web.src.booking' }, { v: 'surplus', l: 'rs.web.src.surplus' }], n.source, (v) => { n.source = v; commitWeb(); });
+    } else if (n.kind === 'party') {
+      what = select([{ v: 'r:owner', l: 'rs.web.flatOwner' }, ...P.parties.map((p) => ({ v: 'p:' + p.id, l: `=${p.name} · ${partyKindText(p.kind)}` }))], partyChoice(n), (v) => {
+        delete n.role; delete n.partyId;
+        if (v.startsWith('r:')) n.role = v.slice(2); else { n.partyId = v.slice(2); const p = P.parties.find((x) => x.id === n.partyId); if (p) n.role = LEDGER_ROLE[p.kind]; }
+        commitWeb();
+      });
+    } else what = h('span', { class: 'ed-hint' }, t('rs.web.poolHint'));
+    what.setAttribute?.('aria-label', t('rs.web.what'));
+    const name = textInput(n.name ? (n.name[lang()] || n.name.en || '') : '', (v) => { n.name = { ...(n.name || {}), [lang()]: v }; if (!v.trim()) delete n.name[lang()]; commitWebSoft(); }, { placeholder: nodeLabel({ ...n, name: null }), 'aria-label': t('rs.web.name'), dir: 'auto' });
+    const del = h('button', { type: 'button', class: 'ed-iconbtn', 'aria-label': t('rs.remove'), title: t('rs.remove'), onclick: () => { DRAFT.edges = DRAFT.edges.filter((e) => e.from !== n.id && e.to !== n.id); DRAFT.nodes.splice(i, 1); commitWeb(); } }, iconEl('trash'));
+    return [h('code', {}, n.id), kind, what, name, del];
+  });
+  const add = (kind) => {
+    const id = nextId(DRAFT.nodes.map((n) => ({ id: n.id })), 'n');
+    DRAFT.nodes.push({ id, kind, x: 300, y: 300, ...(kind === 'party' ? { role: 'owner' } : {}) });
+    commitWeb();
+  };
+  const reset = button('rs.web.reset', 'refresh', async () => {
+    if (!(await confirmDialog(t('rs.web.reset'), t('rs.web.resetQ'), t('rs.web.reset'), true))) return;
+    const agency = P.parties.find((p) => p.kind === 'agency');
+    const w = starterWeb();
+    for (const n of w.nodes) if (n.role === 'agency' && agency) n.partyId = agency.id;
+    DRAFT = w; commitWeb();
+  });
+  const b1 = button('rs.web.addPool', 'plus', () => add('pool')), b2 = button('rs.web.addParty', 'plus', () => add('party'));
+  for (const b of [b1, b2, reset]) b.classList.add('ed-sm');
+  box.append(h('h3', { class: 'rs-h3' }, t('rs.web.nodes')), table(['rs.web.id', 'rs.web.kind', 'rs.web.what', 'rs.web.name', ''], rows, { cls: 'rs-wtable' }), h('div', { class: 'ap-actions' }, b1, b2, reset));
+}
+// Names change no money: store them without rebuilding the editor (focus stays in the field).
+const commitWebSoft = () => { P.web = normalizeWeb(DRAFT); save(); paintDiagram(); };
+
+// Edge methods: pct (share of what reaches the source node), fixed (amount per booking/night/month, optionally
+// guaranteed = paid even if the pool runs dry, creating a debt), rest (whatever is left). ord sets evaluation order
+// among edges of one node. Targets exclude source nodes: money never flows back into a source.
+function paintEdges() {
+  const box = els.edges;
+  box.textContent = '';
+  const nodeOpts = DRAFT.nodes.map((n) => ({ v: n.id, l: `=${n.id} · ${nodeLabel(n)}` }));
+  const artList = h('datalist', { id: 'rs-arts' }, LEDGER_ARTICLES.map((a) => h('option', { value: a }, articleText(a))));
+  const rows = DRAFT.edges.map((e, i) => {
+    const from = select(nodeOpts, e.from, (v) => { e.from = v; commitWeb(); });
+    const to = select(nodeOpts.filter((o) => DRAFT.nodes.find((n) => n.id === o.v)?.kind !== 'source'), e.to, (v) => { e.to = v; commitWeb(); });
+    from.setAttribute('aria-label', t('rs.web.from')); to.setAttribute('aria-label', t('rs.web.to'));
+    const method = select([{ v: 'pct', l: 'rs.web.m.pct' }, { v: 'fixed', l: 'rs.web.m.fixed' }, { v: 'rest', l: 'rs.web.m.rest' }], e.method, (v) => {
+      e.method = v; e.value = v === 'pct' ? 1000 : v === 'fixed' ? 2000 : 0; if (v === 'fixed') e.unit = 'booking'; else { delete e.unit; delete e.guaranteed; }
+      commitWeb();
+    });
+    method.setAttribute('aria-label', t('rs.web.method'));
+    let value = h('span', { class: 'ed-hint' }, t('rs.web.restHint'));
+    if (e.method === 'pct') {
+      value = numInput(fromPct(e.value), (v) => { e.value = toPct(v ?? 0); commitWebSoft(); paintSplit(); }, { min: 0, max: 100, step: 0.01, 'aria-label': t('rs.web.pct') });
+    } else if (e.method === 'fixed') {
+      const unit = select(WEB_UNITS.map((u) => ({ v: u, l: 'rs.web.per.' + u })), e.unit || 'booking', (v) => { e.unit = v; commitWeb(); });
+      unit.setAttribute('aria-label', t('rs.web.unitL'));
+      const g = h('input', { type: 'checkbox', checked: !!e.guaranteed, title: t('rs.web.guaranteed') });
+      g.addEventListener('change', () => { if (g.checked) e.guaranteed = true; else delete e.guaranteed; commitWeb(); });
+      value = h('div', { class: 'rs-fixed' }, moneyInput(e.value, (v) => { e.value = v ?? 0; commitWebSoft(); paintSplit(); }, { 'aria-label': t('rs.web.amount') }), unit,
+        h('label', { class: 'rs-check' }, g, h('span', {}, t('rs.web.guaranteed'))));
+    }
+    const art = h('input', { class: 'ed-input', list: 'rs-arts', value: e.article || '', placeholder: t('rs.web.auto'), 'aria-label': t('rs.j.article') });
+    art.addEventListener('change', () => { e.article = art.value; commitWeb(); });
+    const ord = numInput(e.ord, (v) => { e.ord = Math.trunc(v || 0); commitWebSoft(); paintSplit(); }, { step: 1, 'aria-label': t('rs.web.ord'), class: 'ed-input rs-numin rs-ord' });
+    const del = h('button', { type: 'button', class: 'ed-iconbtn', 'aria-label': t('rs.remove'), title: t('rs.remove'), onclick: () => { DRAFT.edges.splice(i, 1); commitWeb(); } }, iconEl('trash'));
+    return [from, to, method, value, art, ord, del];
+  });
+  const add = button('rs.web.addEdge', 'plus', () => {
+    const from = DRAFT.nodes.find((n) => n.kind === 'source')?.id, to = DRAFT.nodes.find((n) => n.kind === 'party')?.id;
+    if (!from || !to) { toast(t('rs.web.needNodes'), 'warn'); return; }
+    DRAFT.edges.push({ id: nextId(DRAFT.edges.map((x) => ({ id: x.id })), 'e'), from, to, method: 'pct', value: 1000, article: '', ord: DRAFT.edges.length });
+    commitWeb();
+  });
+  add.classList.add('ed-sm');
+  box.append(artList, h('h3', { class: 'rs-h3' }, t('rs.web.edges')), table(['rs.web.from', 'rs.web.to', 'rs.web.method', 'rs.web.value', 'rs.j.article', 'rs.web.ord', ''], rows, { cls: 'rs-wtable' }), h('div', { class: 'ap-actions' }, add),
+    h('div', { class: 'ed-hint' }, t('rs.web.rules')));
+}
+
+// --- parties, rates --------------------------------------------------------------------------------------------------
+
+function partiesCard() {
+  const list = h('ul', { class: 'rs-parties' }, P.parties.map((p) => h('li', {},
+    h('span', { class: 'rs-chip rs-pk-' + p.kind }, partyKindText(p.kind)), h('div', { class: 'rs-party-b' }, h('b', {}, p.name), p.note ? h('div', { class: 'ed-hint' }, p.note) : null),
+    h('button', { type: 'button', class: 'ed-iconbtn', 'aria-label': t('rs.pt.edit') + ': ' + p.name, title: t('rs.pt.edit'), onclick: () => editParty(p) }, iconEl('edit')))));
+  const add = button('rs.pt.add', 'plus', () => editParty(null));
+  add.classList.add('ed-sm');
+  return card('rs.pt.title', list, h('div', { class: 'ap-actions' }, add));
+}
+
+// A party referenced by the journal, a flat or the web cannot be deleted: history and the web would point nowhere.
+function editParty(p0) {
+  const p = p0 ? { ...p0 } : { id: nextId(P.parties, 'p'), kind: 'owner', name: '', note: '' };
+  const err = h('div', { role: 'alert' });
+  const body = h('div', { class: 'ed-fields' },
+    field('rs.pt.name', textInput(p.name, (v) => { p.name = v; }, { dir: 'auto', autocomplete: 'off' })),
+    field('rs.pt.kind', select(PARTY_KINDS.map((k) => ({ v: k, l: 'rs.pk.' + k })), p.kind, (v) => { p.kind = v; })),
+    field('rs.pt.note', textInput(p.note, (v) => { p.note = v; }, { dir: 'auto' })), err);
+  const used = p0 && (P.journal.some((o) => String(o.partyId) === p0.id) || P.units.some((u) => u.ownerId === p0.id) || P.web.nodes.some((n) => String(n.partyId) === p0.id));
+  const buttons = [];
+  if (p0) buttons.push({ label: t('dlg.delete'), value: 'del', danger: true });
+  buttons.push({ label: t('dlg.cancel'), value: null }, { label: t('ap.save'), value: 'save', primary: true, onClick: () => { err.textContent = ''; if (!p.name.trim()) { err.append(note('error', t('rs.pt.nameReq'))); return false; } return true; } });
+  openDialog({ title: t(p0 ? 'rs.pt.edit' : 'rs.pt.add'), body, buttons }).then(async (v) => {
+    if (v === 'save') {
+      p.name = p.name.trim();
+      const i = P.parties.findIndex((x) => x.id === p.id);
+      if (i >= 0) P.parties[i] = p; else P.parties.push(p);
+      save(true); render();
+    } else if (v === 'del') {
+      if (used) { toast(t('rs.pt.used'), 'warn'); return; }
+      if (await confirmDialog(t('rs.pt.delQ'), p0.name, t('dlg.delete'), true)) { P.parties = P.parties.filter((x) => x.id !== p0.id); save(true); render(); }
+    }
+  });
+}
+
+// Rates typed as "1 X = r base"; cross rates between the other currencies are derived (X->base->Y) for a sanity
+// check. Each change stamps ratesDay so statements can say which rates were used.
+function ratesCard() {
+  const out = h('div', { class: 'ed-hint' });
+  const paintCross = () => {
+    const tb = ratesTable(P);
+    const others = Object.keys(P.rates);
+    const pairs = [];
+    for (let i = 0; i < others.length; i++) for (let j = i + 1; j < others.length; j++) {
+      const k = crossRate(others[i], others[j], tb);
+      if (k) pairs.push(`1 ${others[i]} = ${fmtNum(k, 4)} ${others[j]}`);
+    }
+    out.textContent = pairs.length ? t('rs.fx.cross', { pairs: pairs.join(' · ') }) : '';
+  };
+  const rows = Object.keys(P.rates).map((c) => h('label', { class: 'rs-fx' }, h('span', {}, `1 ${c} =`),
+    numInput(P.rates[c], (v) => { if (v > 0) { P.rates[c] = v; P.ratesDay = TODAY; save(); paintCross(); paintKpis(); } }, { min: 0.0001, step: 0.0001, 'aria-label': `1 ${c} → ${P.currency}` }), h('span', {}, P.currency)));
+  paintCross();
+  return card('rs.fx.title', h('div', { class: 'ed-hint' }, t('rs.fx.lead', { c: P.currency })), h('div', { class: 'rs-fxs' }, rows), out,
+    P.ratesDay ? h('div', { class: 'ed-hint' }, t('rs.fx.day', { d: fmtDay(P.ratesDay, { year: true }) })) : null);
+}
+
+startShell('payouts', () => render());
+onSchemeChange(() => paintDiagram());
+render();

@@ -1,0 +1,1756 @@
+# crypto/strength-words.txt - the frequency-ranked word lists of crypto/strength.js, most frequent first.
+# `node crypto/strength-pack.js` packs them into crypto/strength-data.js (lower case; words shorter than 3 characters
+# dropped; a word kept only in the list where its rank is lowest).
+#
+# Sources: written from general knowledge of public frequency data, not copied from any list: the most common
+# passwords of breach corpora (RockYou, the yearly "worst passwords" lists, Russian-language leaks; also Russian words
+# typed in the Latin layout such as gfhjkm), contemporary English word frequency, US and European given names and
+# surnames (US census order first), and Russian words, names and password words in Cyrillic (the estimator also
+# matches them transliterated and typed in the other keyboard layout). Ranks are approximate beyond the first
+# thousand or so entries of each list.
+
+[passwords]
+123456 password 12345678 qwerty 123456789 12345 1234 111111 1234567 dragon 123123 baseball abc123 football
+monkey letmein 696969 shadow master 666666 qwertyuiop 123321 mustang 1234567890 michael 654321 superman
+1qaz2wsx 7777777 121212 000000 qazwsx 123qwe killer trustno1 jordan jennifer zxcvbnm asdfgh hunter buster
+soccer harley batman andrew tigger sunshine iloveyou 2000 charlie robert thomas hockey ranger daniel starwars
+klaster 112233 george computer michelle jessica pepper 1111 zxcvbn 555555 11111111 131313 freedom 777777 pass
+fuckme maggie 159753 aaaaaa ginger princess joshua cheese amanda summer love ashley 6969 nicole chelsea biteme
+matthew access yankees 987654321 dallas austin thunder taylor matrix william corvette hello martin heather
+secret fucker merlin diamond 1234qwer jasmine winner samantha golfer guitar jackson passw0rd scooter booboo
+mickey asshole bigdog brandy compaq carlos tennis james mike brandon fender anthony blowme ferrari cookie
+chicken maverick chicago joseph diablo sexsex hardcore 666999 willie welcome chris panther yamaha justin
+banana driver marine angels fishing david maddog hooters wilson butthead dennis captain bigdick lakers rabbit
+feedme hentai bigtits angel fuckyou bitch hello1 scooby jason walter cumshot boston braves yankee lover barney
+victor tucker princess1 mercedes 5150 doggie zzzzzz gunner horny bubba 2112 fred johnson xxxxxx tiger pussy
+kelly lol123 qweqwe dakota whatever jackie mustang1 asdfghjkl cameron andrea samson ou812 pass1234 richard
+flower nascar dreams golf maxwell jackass booger 1212 test hotdog ncc1701 cocacola qwe123 patrick rangers
+hannah hotrod porsche genius 007007 london calvin cowboy freddy fire johnny sexy spider melissa hayden canada
+viking peanut power anderson dexter please morgan lucky startrek patricia victoria pass123 elephant bowling
+redsox qwerty1 alexis thx1138 pokemon rocket skippy monster badboy gandalf knight iceman brian mother rocky
+jessie dolphin packers lauren testing pepsi black sabrina kevin travis digital bronco penguin superman1 brenda
+crystal aaron spanky scorpio jasper chester hammer beavis spitfire galore corona skipper carmen bitches money1
+chevy gateway poopoo qweasd chicken1 tigers louise redwings roscoe smokey beaver honda kristen helpme 111222
+beatles oliver samsung sierra giants orange cardinal duke arsenal teresa hornet fuckoff liverpool tarheels
+bailey thumper simpson jordan23 asdf1234 blue jessica1 hooligan 0987654321 sparky mountain racing asdasd
+sunset jeremy cheyenne redneck freaky nipple viper brooklyn bigboy zebra qwertyui vagina slayer nathan raiders
+steve guinness 123abc packer ironman wolf nipples broncos spencer raider chargers asdfasdf voyager trouble
+joker eclipse paul wolverine music pumpkin express willow dancer hardon cocks cougar maria pussies hahaha
+robbie semperfi dollar phoenix stealth enjoy hello123 cristina manutd falcon dildo chicks paris newyork danny
+poohbear eagles spiderman grizzly fucked sexual rooster tomcat boobies redrum rainbow lickme tristan goober
+sophie destiny winston cumming chocolate wesley chloe camaro mnbvcxz spankme cassie peaches leslie qwert amber
+gracie sammy rachel poop metallica hooker cowboys sandra alex jesus blink182 cocacola1 dolphins lovers booger1
+pics asians marlboro timber abcd1234 butter ireland hahah nympho football1 tototo boomer fylhtq asdf123 sexxxy
+blondes 8675309 sublime molly isabel yankees2 oscar magnum bubbles prince chipper ladies bella rockstar
+chevelle qwer1234 lucky1 darkness newman password12 timothy qwerty12 rush2112 qwerty123 asdfghj wowwow pookie
+teensex booboo1 spitzer aaaaaaaa chevrolet nothing chad lover1 raymond hamilton summer1 phillip titanic
+brother smith rangers1 golden freddie crocket kelsey peterson cadillac assass stupid scott kevin1 porno qwer
+tomtom yummy barbara oklahoma tornado jeremiah arthur asdfghjkl1 smokin pamela redsox1 cassidy bobby denise
+valentine goforit abc123456 kenny alexander willy adidas qwaszx lincoln kristina tang peewee butterfly1
+monopoly wildcats spartan sarah nirvana cheryl ghjcnj jupiter blondie loveme1 vincent pancho gizmo baller bart
+crazy lacrosse sunny testtest dreamer chandler patches 1313131 dodgers poncho mandy hotstuff chococat angela
+melanie kimberly stephanie nicholas jonathan benjamin christopher alexandra gabriel katherine rebecca natalie
+veronica patricia1 samantha1 jennifer1 michael1 michael23 michelle1 ashley1 ashley123 jessica123 daniel1
+david1 david123 andrew1 robert1 joshua1 matthew1 anthony1 william1 james1 john1 charlie1 charlie123 nicole1
+amanda1 amanda123 hannah1 taylor1 taylor123 jordan1 justin1 brandon1 jason1 tiffany courtney brittany amber1
+crystal1 heather1 maria1 sarah1 sophie1 emily emma olivia abigail madison chloe1 grace hailey hayley isabella
+isabel1 lauren1 lily mason ethan logan jacob caleb noah lucas aidan dylan tyler austin1 connor hunter1 cody
+jake zachary aaron1 adam adrian alan albert alfred alice alicia allison alyssa amy angelica angelina ann anna
+annie antonio april ariana ariel arnold ashton barbara1 beatrice becky belinda bernard beth bethany betty
+beverly bianca billy blake bobbie bonnie brad bradley brandi brenda1 brent brett brianna bridget brittney
+bruce bryan bryce caitlin cameron1 candy candice carl carla carlos1 carmen1 carol carole caroline carrie casey
+cassandra catherine cathy cecilia chad1 charles charlotte chelsea1 cheryl1 chris123 christina christine
+christy cindy claire clara clarence claudia clifford clinton colin colleen cooper cora corey cory craig curtis
+cynthia daisy dana danielle1 danny1 darlene darrell darren dave dawn dean deanna deborah debra denise1 derek
+derrick destiny1 diana diane dominic donald donna doris dorothy douglas duncan dustin dylan1 edgar edith
+eduardo edward edwin eileen elaine eleanor elena eliza elizabeth1 ellen elliot eloise emanuel emily1 emma1
+eric erica erik erika ernest ernesto esther eugene evan evelyn faith felicia felix fernando fiona florence
+floyd frances francis francisco frank franklin gabriela gabrielle garrett gary gavin gene geoffrey georgia
+gerald gilbert gina gloria gordon grace1 grant greg gregory gretchen guadalupe gustavo guy gwen harold
+harrison harry harvey heidi helen henry herbert holly howard hugo ian irene isaac isabella1 ivan jackie1
+jacob1 jacqueline jade jaime jamal jamie jane janet janice jared jasmine1 javier jay jayden jean jeanette
+jeanne jeff jeffery jeffrey jenna jenny jeremy1 jerome jerry jesse jessie1 jesus1 jill jim jimmy joan joann
+joanna joanne jody joe1 joel joey johnathan johnny1 jonas jordyn jorge jose josephine josh josue joy joyce
+juan juanita judith judy julia julian julie june justice kaitlyn kara karen karina karl kate katelyn
+katherine1 kathleen kathryn kathy katie katrina kayla kaylee keith kelley kelli kelly1 kelsey1 kendall kendra
+kennedy kenneth kenny1 kent kerry kim kimberly1 kirk kirsten kristen1 kristin kristina1 kristine kristy kurt
+kyle kylie lance larry laura laurel lawrence leah lee leon leonard leslie1 levi lewis liam lydia lillian
+lindsay lindsey lionel lisa logan1 lois lola lonnie loretta lorraine louis louise1 lucas1 lucia lucille lucy
+luis luke luther lynn mackenzie madeline madison1 mae malcolm mallory mandy1 manuel marc marcus margaret
+maria123 mariah marian marie marilyn mario marion marisa marissa marjorie mark marlene marsha marshall martha
+martin1 marvin mary mason1 matt maureen maurice max maxine maya megan meghan melanie1 melinda melody mercedes1
+meredith mia micheal miguel mildred miles miranda miriam mitchell molly1 monica monique morgan1 morris muriel
+myron myrtle nancy naomi natalie1 natasha nathan1 nathaniel neil nelson nicholas1 nina noah1 noel nora norma
+norman olga olive olivia1 oscar1 owen pablo paige pamela1 patrick1 patsy patty paul1 paula paulette pauline
+pearl peggy penny perry peter philip phillip1 phoebe phyllis preston priscilla rachael rachel1 ralph ramon
+randall randy raul raymond1 reba rebecca1 regina reginald renee rex rhonda ricardo richard1 rick rickey ricky
+rita robert123 roberta roberto robin rodney roger roland ronald ronnie rosa rose rosemary roy ruben ruby
+russell ruth ryan sabrina1 sadie sally salvador sam samuel sandra1 sandy sara sarah123 saul scott1 sean
+sebastian seth shane shannon sharon shaun shawn sheila shelby sherry sheryl shirley sidney simon sofia sonia
+sophia spencer1 stacey stacy stanley stella stephanie1 stephen steve1 steven stuart sue summer123 susan
+suzanne sydney1 sylvia tabitha tamara tammy tanya tara tatiana ted terrance terrence terri terry thelma
+theodore theresa thomas1 tiffany1 timmy timothy1 tina toby todd tom tommy toni tony tonya tracey traci tracy
+travis1 trevor tricia trisha troy tyler1 valerie vanessa1 vera vernon veronica1 vicky victor1 victoria1
+vincent1 viola violet virginia vivian wade wallace wanda warren wayne wendy wesley1 whitney wilbur wilfred
+willard william123 willie1 wyatt yolanda yvette yvonne zachary1 zoe zoey google facebook twitter youtube
+instagram yahoo hotmail gmail linkedin amazon netflix spotify android iphone samsung1 nokia sony microsoft
+windows linux ubuntu apple macbook internet website admin root login user guest default changeme secret1
+password123 password2 p@ssword p@ssw0rd qwerty123456 abcdef abcdefg abcd abcde aaaaa qwertz azerty wasd
+superstar starlight moonlight sunflower sunrise rainbow1 butterfly2 freedom1 liberty justice1 america american
+patriot eagle eagle1 hawk falcon1 phoenix1 dragon1 dragon123 dragons unicorn pegasus griffin serpent cobra
+viper1 scorpion spider123 blackwidow superhero spiderman1 batman1 batman123 ironman1 captain123 wolverine1
+avengers starwars1 jedi yoda skywalker vader anakin chewbacca r2d2c3po startrek1 spock klingon enterprise
+galaxy nebula cosmos planet saturn jupiter1 neptune pluto mercury venus mars earth asteroid meteor comet
+rocket1 apollo gemini orion polaris stardust nova supernova blackhole quantum atom proton neutron electron
+einstein newton tesla edison darwin galileo hawking genius1 professor teacher student school college
+university science biology chemistry physics history english spanish french german italian russian chinese
+japanese korean arabic math algebra calculus geometry homework pencil notebook library graduate diploma degree
+doctor nurse lawyer engineer pilot soldier marine1 sailor captain2 sergeant general colonel major corporal
+private1 veteran army navy airforce marines military warrior warrior1 fighter hunter123 archer knight1 samurai
+ninja ninja1 assassin gladiator spartan1 viking1 pirate cowboy1 sheriff outlaw bandit rebel rebel1 hero legend
+champion champ winner1 victory triumph glory honor courage bravery strength power1 mighty titan giant colossus
+hercules zeus apollo1 poseidon hades athena aphrodite artemis hermes dionysus odin thor loki freya valhalla
+ragnarok asgard midgard dragonball goku vegeta naruto1 sasuke pikachu charizard pokemon1 digimon sonic mario1
+luigi zelda link samus kirby donkeykong pacman tetris minecraft roblox fortnite overwatch starcraft warcraft
+diablo1 counterstrike halflife portal bioshock skyrim fallout witcher gtaming callofduty battlefield assassins
+farcry borderlands destiny2 halo masterchief cortana gears forza kratos dante lara croft nathan123 geralt
+leagueoflegends dota valorant apex pubg amongus football2 soccer1 basketball1 baseball1 hockey1 tennis1 golf1
+rugby cricket volleyball softball1 lacrosse1 swimming boxing wrestling karate taekwondo judo fencing archery
+skiing snowboard surfing skateboard cycling running marathon triathlon olympics champion1 mvp touchdown
+homerun slamdunk goal goalie striker midfield defender quarterback linebacker pitcher catcher shortstop
+outfield dugout bullpen stadium arena coliseum yankees3 redsox2 dodgers1 giants1 cubs mets braves1 phillies
+astros angels1 cardinals brewers pirates marlins nationals rockies padres mariners rangers2 athletics twins
+royals tigers1 indians whitesox orioles rays jays lakers1 celtics bulls warriors heat knicks nets rockets
+spurs mavericks clippers suns nuggets jazz blazers kings kings1 thunder1 pelicans grizzlies pistons pacers
+bucks hawks1 hornets magic wizards raptors patriots1 cowboys1 steelers packers1 giants2 eagles1 bears vikings
+saints falcons1 seahawks 49ers rams chiefs broncos1 raiders1 chargers1 dolphins1 bills jets browns bengals
+ravens titans colts jaguars texans panthers1 buccaneers cardinals1 lions redskins barcelona realmadrid
+manchester chelsea2 arsenal1 liverpool1 tottenham everton juventus milan intermilan bayern dortmund psg ajax
+messi ronaldo neymar beckham rooney zidane maradona pele drogba henry1 gerrard lampard kaka ozil suarez mbappe
+1234567891 12345678910 11111 1111111 22222222 33333333 44444444 55555555 66666666 77777777 88888888 99999999
+123456a a123456 123456b abc12345 1234abcd 123123123 321321 456456 789789 147258 147258369 258456 369369
+741852963 951753 753951 159357 357159 246810 102030 010203 123654 321654 456123 654987 987456 789456123 456789
+789456 112233445566 102938 564738 102938475 123789 321123 456654 789987 987654 1029384756 5201314 520520
+521521 1314520 7758521 woaini woaini1314 5211314 1111111111 0123456789 9876543210 0000000000 1212121212
+1231231234 123454321 1234554321 121314 111213 123098 999999 888888 444444 333333 222222 110110 007bond 8008
+80085 58008 007 777888 666777 555666 444555 333444 222333 111222333 321654987 987654321a 123456789a 12345a
+a12345 q1w2e3 q1w2e3r4 q1w2e3r4t5 1q2w3e 1q2w3e4r 1q2w3e4r5t 1qazxsw2 1qaz2wsx3edc zaq12wsx zaq1zaq1 zaq1xsw2
+xsw2zaq1 2wsx3edc 3edc4rfv qazwsxedc qazwsxedcrfv qweasdzxc qwerasdf asdfzxcv zxcasd poiuyt poiuytrewq lkjhgf
+lkjhgfdsa mnbvcxz1 0okm9ijn plokij qwertyu qwertyuio asdfghjkl2 1q2w3e4r5t6y qwe123456 qweqweqwe asdasdasd
+zxczxczxc 123qweasd qwaszx123 1234zxcv qwer123456 rewq4321 fdsa4321 vcxz4321 abcabc abcabc123 aabbcc aabbccdd
+asdfjkl asdfjkl; qscwdv wsxqaz tgbnhy edcrfv rfvtgb ujmik qpwoei qpalzm 147896325 159753456 789632145
+741258963 963852741 987456321 123698745 456987123 852456 963852 741963 159486 357951 258147 456321 654321a
+7410 8520 9630 2580 1470 3690 0147258369 13131313 14141414 15151515 19201112 20202020 19191919 13213213
+11223344 22334455 33445566 44556677 10101010 12121212 19283746 28374650 48151623 90210 10001 696969696 321012
+505050 606060 707070 808080 909090 101010 202020 303030 404040 010101 020202 030303 040404 050505 070707
+080808 090909 123456789q qwerty12345 a1b2c3 a1b2c3d4 1a2b3c 1a2b3c4d 1a2s3d4f p@ssword1 p@ssw0rd1 passw0rd1
+passw0rd123 p4ssword p4ssw0rd passw0rd! pa55word pa55w0rd l3tm3in l33tsp34k h4x0r h4ck3r n00b pwn3d w00t
+m0nkey dr4gon sh4dow m4ster sup3rman bl@ck r3dsox y@nkees j0rdan r@nger sun5hine iloveyou1 iloveyou2 iloveu2
+ilove iluvu luvu2 2hot4u imcool coolguy badass bossman topdog numberone number1 primo thebest greatest awesome
+awesome1 amazing perfect genius123 smartguy brainiac nerd geek dork stud studmuffin hunk casanova lover123
+loverboy heartbreaker sweetheart sweetpea cutie cutiepie honeybun sugar sugarbaby babycakes babygirl babyboy
+babydoll angelbaby myangel mybaby mylove mygirl myboy mine forever21 2gether4ever foreva soulmate truelove
+firstlove lovestory romance passion desire kisses hugs xoxoxo xoxo123 muah smooch valentine1 cupid loveya 1990
+1991 1992 1993 1994 1995 1996 1997 1998 1999 1989 1988 1987 1986 1985 1984 1983 1982 1981 1980 1979 1978 1977
+1976 1975 1970 2001 2002 2003 2004 2005 2006 2007 2008 2009 2010 2011 2012 2013 2014 2015 2016 2017 2018 2019
+2020 2021 2022 2023 password2020 password2021 password2022 password2023 qwerty2020 summer2020 summer2021
+winter2020 spring2020 autumn2020 january february march april1 may june1 july august september october
+november december monday tuesday wednesday thursday friday saturday sunday weekend holiday vacation christmas
+christmas1 xmas santa rudolph snowman halloween thanksgiving easter newyear birthday birthday1 happybirthday
+january1 december25 010180 020288 030393 04041990 05051985 06061986 07071987 08081988 09091989 12251990
+01011990 01011991 01011992 01011993 01011994 01011995 01011980 01011985 01012000 red green blue1 yellow1
+orange1 purple1 pink black1 white white1 brown gray silver gold golden1 crimson scarlet violet1 indigo
+turquoise magenta maroon navy1 teal lime cyan beige coral peach lavender rose1 ruby1 emerald sapphire diamond1
+pearl1 amber2 jade1 opal topaz garnet amethyst crystal2 quartz onyx jasper1 agate marble granite cat cats dog
+dogs puppy kitty kitten1 bunny rabbit1 hamster gerbil turtle goldfish parrot canary lizard iguana gecko snake
+python anaconda boa rattlesnake horse horses pony stallion mare colt foal cow bull calf pig piglet sheep lamb
+goat chicken2 rooster1 duck goose turkey peacock ostrich eagle2 hawk1 owl falcon2 vulture raven crow sparrow
+robin1 bluejay cardinal1 finch woodpecker hummingbird pelican flamingo penguin1 seagull dolphin1 whale shark
+octopus jellyfish starfish seahorse crab lobster shrimp salmon trout bass catfish goldfish1 lion lioness
+tiger2 leopard cheetah jaguar panther1 cougar1 lynx bobcat bear1 grizzly1 panda koala kangaroo wallaby
+elephant1 rhino hippo giraffe zebra1 gazelle antelope buffalo bison moose deer elk reindeer caribou wolf1 fox
+coyote jackal hyena raccoon skunk badger otter beaver1 squirrel chipmunk mouse rat mole hedgehog porcupine
+armadillo sloth monkey1 gorilla chimpanzee orangutan baboon lemur mountain1 river ocean sea lake pond stream
+waterfall forest jungle desert canyon valley meadow prairie tundra glacier volcano earthquake tornado1
+hurricane tsunami blizzard thunderstorm lightning thunder2 rainbow2 sunshine1 moonlight1 starlight1 daylight
+twilight midnight sunrise1 sunset1 horizon breeze storm rain snow ice frost fog mist cloud sky star moon1 sun
+comet1 meteor1 galaxy1 universe ferrari1 lamborghini porsche1 maserati bugatti bentley rollsroyce mercedes2
+bmw audi volkswagen porsche911 corvette1 mustang2 camaro1 charger challenger chevy1 chevrolet1 cadillac1 buick
+pontiac firebird trans dodge chrysler jeep hummer toyota honda2 nissan mazda subaru mitsubishi lexus infiniti
+acura hyundai kia volvo saab jaguar1 landrover ferrari2 harley1 harleydavidson kawasaki suzuki ducati triumph1
+indian nirvana1 metallica1 megadeth slayer1 pantera anthrax acdc aerosmith beatles1 rollingstones ledzeppelin
+pinkfloyd queen deeppurple blacksabbath ironmaiden guns gnr scorpions rammstein radiohead coldplay oasis
+greenday blink sublime1 nirvana2 pearljam soundgarden rem depeche cure smiths joydivision newwave punkrock
+heavymetal deathmetal rapmusic hiphop eminem1 tupac biggie 50cent jayz kanye drake snoop dre nas wutang
+outkast beyonce rihanna madonna britney christina1 mariah1 whitney1 celine shakira pink1 gaga ladygaga
+katyperry taylorswift justinbieber onedirection backstreet nsync spicegirls abba elvis elvispresley
+michaeljackson prince1 bowie hendrix clapton santana dylan2 springsteen mccartney lennon welcome1 welcome123
+welcome2 admin1 admin123 administrator administrator1 password11 passwords mypassword mypass secretpass
+letmein1 letmein2 letmein123 openup opensesame knockknock whoami helpdesk support service system network
+database server backup default1 temp temp123 temporary test123 test1234 testpass demo demo123 sample example
+qwerty11 password3 password4 passw0rd2 monkey1234 dragon1234 shadow123 master123 hello12345 loveme123
+trustno12 freedom123 sunshine123 princess123 football123 baseball123 soccer123 hockey123 superman123
+batman123456 pokemon123 nintendo playstation xbox xbox360 gamecube sega atari gameboy nintendo64 dreamcast
+controller joystick gamer gaming gamer1 pro progamer noob newbie player player1 player2 clan guild raid boss
+bossfight cheat cheater hacker1 script scripting coder coding programmer developer debug compile java python1
+javascript html5 css3 php mysql mongodb react angular node docker kubernetes github gitlab bitbucket
+stackoverflow reddit discord twitch tiktok snapchat whatsapp telegram signal skype zoom teams slack dropbox
+onedrive icloud paypal venmo bitcoin ethereum crypto blockchain wallet banking finance money cash dollars
+euros pounds richguy millionaire billionaire jackpot lottery winning casino poker blackjack roulette vegas
+lasvegas newyork1 losangeles chicago1 houston phoenix2 philadelphia sanantonio sandiego dallas1 sanjose
+austin2 seattle denver boston1 miami atlanta detroit portland vegas1 nashville memphis baltimore milwaukee
+kansas sacramento cleveland pittsburgh cincinnati orlando tampa minneapolis london1 paris1 berlin madrid rome
+amsterdam barcelona1 munich vienna prague budapest warsaw moscow1 stpetersburg kiev tokyo osaka kyoto seoul
+beijing shanghai hongkong singapore bangkok mumbai delhi dubai istanbul cairo melbourne toronto vancouver
+montreal mexico brazil argentina canada1 england scotland ireland1 wales france germany italy spain portugal
+greece turkey1 egypt india china japan korea russia australia usa pizza burger hamburger hotdog1 sandwich taco
+burrito nachos pasta spaghetti lasagna noodles ramen sushi steak chicken3 bacon sausage pancakes waffles
+cereal oatmeal bagel donut donuts muffin cupcake cookie1 cookies brownie cake pie icecream chocolate1 candy1
+candybar lollipop gummybear jellybean marshmallow popcorn pretzel chips fries ketchup mustard mayo cheese123
+cheddar mozzarella parmesan coffee coffee1 latte cappuccino espresso mocha tea greentea lemonade cola pepsi1
+sprite fanta drpepper mountaindew redbull monster1 gatorade water juice milkshake smoothie beer beer123 wine
+whiskey vodka tequila rum gin brandy1 cocktail margarita mojito martini guinness1 corona1 heineken budweiser
+coors miller jackdaniels captainmorgan smirnoff baileys apple1 apple123 banana1 orange2 grape grapes
+strawberry blueberry raspberry blackberry cherry cherries watermelon melon pineapple mango papaya kiwi peach1
+pear plum apricot coconut lemon lime1 grapefruit avocado tomato potato carrot broccoli spinach lettuce
+cucumber onion garlic pepper1 chili corn peas beans rice bread butter1 honey honey1 jam jelly peanut1
+peanutbutter almond walnut cashew pistachio privet privet1 privetik poka spasibo lyubov lubov lyublyu lublu
+solnce solnyshko solnishko zaika zayka zaichik kisa kisulya kotik kotenok kotyonok kis kiska medved mishka
+zvezda nebo more svoboda rossiya russia1 moskva piter krasota krasavica krasavchik malish malysh malyshka
+devochka malchik mama1 papa1 mamapapa semya druzhba rabota dengi zhizn mechta nadezhda schastie schastye
+udacha pobeda serdce dusha romashka berezka kalinka matryoshka vodka1 privetik1 poceluy natasha1 marina1
+nikita nikita1 dima dima1 dimka dmitry dmitriy sergey sergei sergey1 andrey andrei andrey1 maksim maxim
+maksim1 aleksandr vladimir vova vovan vovochka sasha sasha1 sashka pasha pasha1 misha misha1 masha masha1
+dasha dasha1 katya katyusha lena lenochka olya oksana tanya1 nastya nastya1 sveta svetlana julia1 yulia yuliya
+anya anyuta irina irina1 ira vika vika1 viktoria nikolay kolya petya vasya zhenya kostya denis denis1 roman1
+roma roma1 anton anton1 igor igor1 ivan1 vanya boris oleg oleg1 pavel artem artyom egor yegor kirill stepan
+fedor timur ruslan rustam damir azamat almaz dinara aigul gulnara elvira karina1 polina polina1 alina alina1
+galina valentina lyudmila tatyana natalya natalia ekaterina elena1 yana yana1 diana1 snezhana lada veronika
+angelina1 slava yaroslav bogdan gleb matvey makar miroslav valery gennady leonid vitaly vitya grisha tolya
+sanya dimon serega serzh kolyan zheka sanek tema genchik lizochka nastenka mashenka sashenka dashenka lenka
+tanchik alenka alyona lera valeria margo nadya nadia luda lyuda zina raisa larisa klava nyura agata agatha
+albina amina madina zarina leila sofia1 milana varvara vasilisa taisiya ustinya yaroslava zlata mirra adelina
+kamila samira gfhjkm gfhjkm1 gfhjkm123 ghbdtn ghbdtn1 vfrcbv yfnfif fylhtq1 cthutq cthutq1 lvbnhbq hjvfy
+fktrcfylh k.,jdm cjkysirj cjkywt pfqrf pfqxbr rjnbr rjntyjr vfvf gfgf ltdjxrf ;tyz rhfcjnf vjcrdf hjccbz yfcnz
+rfnz cfif vfif lfif ktyf lbvf dbrf jkz nfyz dfyz gtnz rjcnz rhbcnbyf cgfcb,j hs,rf pdtplf vfibyf abkj ctvmz
+vfvjxrf gfgjxrf cjkysirj1 dbrnjhbz yfnfkmz jrcfyf vbkfyf cdtnf ltymub ntktajy rjvgm.nth rjitxrf pdtpljxrf
+afynfpbz rjhjkm hjvfirf ,thtprf celm,f hjlbyf gfhjkmvjq djdfyxbr ajnj rjirf cj,frf ujhjl ljvjq rybuf
+iloveyou123 iloveu1 ihateyou fuckyou1 fuckyou2 fuckyou123 fuckoff1 fuckme1 fucking fuck shit shit123 bullshit
+asshole1 asshole123 bastard damn hell hellyeah dickhead dumbass jackass1 bitch1 bitch123 bitches1 whore slut
+pussy123 pussycat boobs boobies1 titties sexy1 sexy123 sexgod sexman sexyboy sexygirl hotsex freesex pornstar
+porno1 xxx xxxxx xxxxxxxx pimp playa gangsta thug thuglife ganja weed weed420 420420 blunt stoner highlife
+smokeweed drunk party partytime getmoney cashmoney paper stacks ballin hustler boss1 bossman1 kingpin
+godfather scarface tonymontana gangster mafia cartel outlaw1 rebel123 anarchy chaos mayhem havoc destruction
+carnage massacre slaughter bloodbath vengeance revenge payback retribution justice123 karma destiny3 fate luck
+lucky7 lucky13 lucky777 fortune wealth prosperity success victory1 glory1 fame celebrity superstar1 rockstar1
+popstar idol legend1 legendary immortal eternal infinity forever1 always nevermind whatever1 anything
+everything nothing1 something someone anyone everyone nobody somebody myself yourself himself herself
+ourselves family1 friends1 bestfriend bff homies crew squad team teamwork together unity brotherhood
+sisterhood loyalty honor1 respect dignity pride1 courage1 bravery1 strength1 wisdom knowledge power2 energy
+spirit soul heart1 mind body health wellness fitness gym workout muscle strong tough warrior2 fighter1
+champion2 winner2 undefeated unstoppable invincible indestructible powerful dominant alpha beta omega sigma
+delta gamma theta lambda kappa phi psi chi tau rho zeta epsilon unknown mystery secret123 hidden invisible
+ghost phantom specter shadow1 darkness1 nightmare dream dreams1 dreamer1 fantasy imagination creativity
+inspiration motivation determination ambition passion1 desire1 love123 lovelife lovebug lovebird lovequote
+heartbeat heartthrob crush flirt kiss hug cuddle snuggle romance1 dating single taken married engaged husband
+wife boyfriend girlfriend partner lover2 mistress affair flirty sassy classy fancy elegant gorgeous beautiful
+beauty pretty1 cute1 adorable lovely1 charming handsome sexy2 hottie1 babe baby1 baby123 babyboy1 babygirl1
+sweetie sweetie1 darling honey123 sugar1 cookie2 muffin1 cupcake1 pumpkin1 peanut2 jellybean1 buttercup
+sunshine2 starlight2 moonbeam angeleyes sweetcheeks hunnybunny snugglebug teddybear cuddlebug lovebug1 pookie1
+boopie snookums bubbles1 giggles sparkles twinkle glitter diamond2 pearl2 treasure jewel gem precious golden2
+silver1 platinum crystal3 crystalline shimmer shine glow radiant brilliant dazzling luminous glowing sparkling
+13579 24680 97531 86420 1357924680 13572468 11235813 1123581321 31415926 3141592653 27182818 141421356 1618033
+12344321 1234554321a 12121 21212 32123 45654 56765 67876 78987 89098 90909090 12323 34543 98789 1001 3003 4004
+5005 6006 7007 8008s 9009 10010 20020 12002 10111 10120 12002112 19000 20001 20010 20100 555123 123555 777123
+123777 100200 200100 123000 000123 111000 999000 100100 200200 300300 400400 500500 600600 700700 800800
+900900 147852 258963 369147 159263 abcd123 abcde123 abcdef1 abcdefgh abcdefg1 asdf12345 qwerty99 qwerty007
+zxcvb zxcvbnm1 zxcvbnm123 mnbvc lkjhgfdsa1 poiuytrewq1 1q2w3e4r5 q2w3e4r5 1qa2ws3ed asdfg123 asdfghjkl123
+qazwsxedc123 1234567q 7654321 87654321 9876543 098765 0987654 qweasdzxc1 zaqwsxcde qscwdvefb 1q2w3e4r5t6
+plmokn plmoknijb qpwoeiruty zxcvasdf asdzxc qweasdzxc123 qazxswedc wsxedc vfr4bgt5 password0 password00
+password01 password99 password007 password! password#1 pass12 pass1 passme passit passx mypass123 mypass1
+newpass newpass1 oldpass changeit changeme1 changeme123 updated updated1 reset reset123 forgot forgotten
+remember rememberme staylogged keepme autologin guest1 guest123 visitor anonymous anon nobody1 somebody1
+john316 jesuschrist jesus123 godisgood godislove blessed blessing faith1 hope grace123 prayer heaven heaven1
+angel123 angels123 church bible jesusislord amen hallelujah salvation redemption forgiveness mercy grace2
+peace peace1 harmony serenity tranquil calm relax zen meditate yoga namaste balance mindful breathe inhale
+exhale present moment awaken enlighten nirvana3 karma1 chakra aura universe1 cosmic celestial divine sacred
+holy spiritual soulmate1 twinflame destiny4 manifest abundance gratitude positive positivity goodvibes
+blessed1 thankful grateful humble kindness compassion empathy generous giving caring sharing helping volunteer
+charity donate community neighbor friendly welcoming inclusive diverse equal equality freedom2 liberty1
+independence revolution uprising resistance protest activist warrior3 champion3 defender1 protector guardian
+guardian1 keeper watcher sentinel vigilant alert ready prepared survival survivor endure persevere persist
+overcome conquer victory2 triumph2 achieve accomplish succeed winner3 champ1 goat1 legend2 icon hero1
+superhero1 sidekick villain nemesis rival opponent enemy foe threat danger risk gamble bet wager stakes
+jackpot1 lottery1 winning1 losing loser failure mistake error glitch bug virus malware hacker2 phisher scammer
+spammer troll lurker poster blogger influencer streamer youtuber tiktoker creator content viral trending
+hashtag follow followers likes shares comments subscribe subscriber notification mention retweet repost inbox
+message chat texting emoji meme lol lmao rofl omg wtf brb ttyl idk smh fyi asap diy faq ceo cfo cto vip mvp1
+ama eli5
+
+[english]
+the of and to in is you that it for was on are with as be have this he at not but by from they we his or an
+all my she what there one can so if will do about her me your up out no just more has like when them time
+would who been get him which their know people how were had some now our see go new into than then could other
+also only its any year us good these think back over make way well first work did even want very after because
+two here may most where many should day much really those said right say through life being love going down
+still need take too use never come years made why own world home last find before great off something thing
+again help while little same part long every man around does got best things look oh okay yeah hey sorry
+please hello god gonna wanna alright dont im cant thats between few always another without both under each
+high place school sure old must family next free let three question write issue information follow history
+moment plan eye such during since today story house money business different week thought small found put days
+end better keep give went feel lot state public system set start night yes away nothing mean book name real
+hard big already against course called number until might maybe tell though group game second ever able done
+show car least children often everything enough four city once side women important case call almost far point
+area thank bad open stop social mr guy guys mom dad baby girl boy kid kids friend wait youre ok political
+parent age policy cut pass major value hair opportunity blood upon approach blue green enjoy bit water whole
+times means getting kind live less having hand play local others government job young power order left believe
+line become run seen head yet mind men company problem anything control country turn try face making read
+actually problems top room black white change several eyes along care support process light came friends heard
+among level move given everyone health trying himself possible nice mother father special however person half
+early full idea fact likely together experience research members five data quite saw thanks easy past body
+words service war above national study human doing later whether based talk wanted heart took else hours team
+per office market asked needs anyone looking hope minutes rather perhaps someone used price form within
+general across six law report issues began started known hear program fine usually class main sense certain
+reason understand myself remember true including late music online video product community future art bring
+american student death girls tonight dead daughter son wife husband brother sister guess sir matter phone
+happy funny happened whatever told says talking stay leave learn minute ago morning sometimes trust word speak
+month months probably towards toward pretty dear stuff shit honey kill killed alone ready stupid crazy fuck
+fucking damn hell sex food red field land air low center short close hit list following cost pay paid buy sale
+sell door street road town building church hospital police court floor wall table bed child hour evening
+tomorrow yesterday soon woman ask seem hold happen million large provide sit lose member meet include continue
+president lead create spend allow add grow result walk win teacher force offer education although foot
+consider appear serve die send expect build fall nation college interest behind reach remain effect suggest
+raise former require development themselves role economic effort decide rate strong drug leader voice finally
+pull return military according decision explain develop view relationship carry drive arm federal break
+difference receive international action model join season society tax director position player agree
+especially record pick wear paper space ground event official whose couple site project base activity star
+produce eat teach oil situation industry figure image itself either cover picture clear practice piece recent
+describe doctor patient worker news test movie north personal simply third technology catch step computer type
+attention draw film tree source nearly organization choose cause century evidence window difficult listen
+culture billion chance energy period summer realize hundred available plant term letter condition choice
+single rule administration south congress campaign material population economy medical thousand risk current
+fire wrong involve defense increase security bank certainly west sport board seek subject officer private rest
+behavior deal performance fight throw quickly goal author fill represent focus foreign drop agency push nature
+color recently store reduce sound note near movement page enter share common poor natural race concern series
+significant similar hot language response rise animal factor decade article shoot east save seven artist scene
+stock career despite central eight thus treatment beyond exactly protect lie size dog fund serious occur media
+sign individual simple quality pressure accept answer resource identify meeting determine prepare disease
+success argue cup particularly amount ability staff recognize indicate character growth loss degree wonder
+attack herself region television box training trade election everybody physical lay feeling standard bill
+message fail outside arrive analysis benefit forward lawyer present section environmental glass skill
+professor operation financial crime stage compare authority miss design sort act ten knowledge gun station
+strategy clearly discuss indeed truth song example democratic check environment leg dark various laugh
+executive prove hang entire rock forget claim remove manager network legal religious cold final science memory
+card seat cell establish trial expert spring firm radio visit management avoid imagine huge ball finish
+yourself theory impact respond statement maintain charge popular traditional onto reveal direction weapon
+employee cultural contain peace pain apply measure wide shake fly interview manage chair fish particular
+camera structure politics perform weight suddenly discover candidate production treat trip affect inside
+conference unit style adult worry range mention deep front edge specific writer trouble necessary throughout
+challenge fear shoulder institution middle sea dream bar beautiful property instead improve anyway gotta hi
+wow bye goodbye mama daddy mommy darling sweetheart buddy dude cool awesome sweet lovely cute fun shut bitch
+ass idiot fool hurry quick quiet careful excuse forgive promise swear lying liar wish missed missing kiss
+marry married wedding date sleep dinner lunch breakfast drink beer wine coffee party dance sing watch tv knew
+thinking takes taken taking gave giving gives comes coming tells telling feels felt leaving leaves meant
+keeping kept begin begins beginning begun seems seemed helped helping turned turning starts showed shown
+showing hearing played playing ran running moved moving liked lived living believed holding held brought
+happens wrote written writing provided providing sat sitting stood standing lost losing paying met included
+continued changed changing led leading understood watching watched followed stopped created speaking spoke
+spoken reading allowed added spent growing grew grown opened walking walked won winning offered remembered
+loved considered appeared bought waiting waited served died dying sent expected built staying stayed fell
+fallen falling reached killing remained suggested raised passed sold selling required reported decided pulled
+returned broke broken breaking received agreed picked wearing wore carried driving drove driven cried crying
+laughed laughing smiled smile worked works working calls calling tried tries asking asks needed becomes became
+uses using finding finds wants looks looked makes saying goes gone gets gotten seeing sees knows am isnt didnt
+doesnt wasnt ive whats theyre youve wouldnt couldnt shouldnt arent havent theres lets wont ill id stand mister
+uh um hmm huh ma papa detail method somebody magazine hotel soldier reflect heavy sexual bag heat marriage
+tough surface purpose exist pattern whom skin agent owner machine gas ahead generation commercial address
+cancer item reality coach yard beat violence total tend investment discussion finger garden notice collection
+modern task partner positive civil kitchen consumer shot budget painting scientist safe agreement capital
+mouth nor victim newspaper threat responsibility attorney score account interesting audience rich vote western
+relate travel debate prevent citizen majority none born admit senior assume wind key professional mission fast
+customer suffer speech successful option participant southern fresh eventually forest global senate reform
+access restaurant judge publish relation release bird opinion credit critical corner concerned recall version
+stare safety effective neighborhood original troop income directly hurt species immediately track basic strike
+sky freedom absolutely plane nobody achieve object attitude labor refer concept client powerful perfect nine
+therefore conduct announce conversation examine touch attend completely variety involved investigation nuclear
+researcher press conflict spirit replace british encourage argument camp brain feature afternoon weekend dozen
+possibility insurance department battle generally african crisis complete fan stick define easily hole element
+vision status normal chinese ship solution stone slowly scale university introduce driver attempt park spot
+lack ice boat sun distance wood handle truck mountain survey supposed tradition winter village refuse roll
+communication screen gain resident hide gold club farm potential european presence independent district shape
+reader contract crowd christian express apartment willing strength previous band obviously horse interested
+target prison ride guard terms demand reporter deliver text tool wild vehicle observe flight facility
+understanding average emerge advantage leadership earn pound basis bright operate guest sample contribute tiny
+block protection settle feed collect additional highly identity title mostly lesson faith river promote count
+unless technique path ear shop folk principle survive lift border competition jump gather limit fit cry
+equipment worth associate critic warm aspect insist failure annual french christmas comment responsible affair
+procedure regular spread chairman baseball soft ignore egg belief demonstrate anybody murder gift religion
+review editor engage document speed cross influence threaten commit female youth wave afraid quarter
+background native broad wonderful deny apparently slightly reaction twice suit perspective blow construction
+intelligence destroy cook connection burn shoe grade context committee mistake location clothes indian dress
+aware neighbor function bone active extend chief combine below voter learning bus dangerous remind moral
+united category relatively victory academic internet healthy negative historical medicine tour depend photo
+grab direct classroom contact justice participate daily fair pair famous exercise knee flower tape hire
+familiar appropriate supply fully actor birth search tie democracy eastern primary circle device progress
+bottom island exchange clean studio train lady colleague application neck lean damage plastic tall plate hate
+otherwise male alive expression football intend chicken army abuse theater map extra session danger welcome
+domestic lots literature rain desire assessment injury respect northern nod paint fuel leaf dry russian
+instruction pool climb engine fourth salt expand importance metal fat ticket software disappear corporate
+strange lip urban mental increasingly educational somewhere farmer sugar planet favorite explore obtain enemy
+greatest complex surround athlete invite repeat carefully soul scientific impossible panel meaning instrument
+predict weather presidential emotional commitment supreme bear pocket thin temperature surprise poll proposal
+consequence breath sight balance adopt minority straight connect teaching belong aid advice photograph empty
+regional trail novel code somehow organize jury breast acknowledge theme storm union desk fruit expensive
+yellow conclusion prime shadow struggle conclude analyst regulation ring largely shift revenue mark locate
+county appearance package difficulty bridge recommend obvious basically generate anymore propose possibly
+trend visitor loan currently comfortable investor profit angry crew accident meal traffic muscle notion
+capture prefer truly earth japanese chest thick cash museum beauty emergency unique internal ethnic link
+stress content select root nose declare appreciate actual bottle hardly setting launch file sick outcome
+defend duty sheet ought ensure catholic extremely extent component mix slow contrast zone wake airport brown
+shirt pilot warn ultimately cat contribution capacity ourselves estate guide circumstance snow english
+politician steal pursue slip percentage meat neither soil surgery correct jewish blame estimate due basketball
+golf investigate significantly chain branch combination frequently governor relief user kick manner ancient
+silence rating golden motion german gender solve fee landscape bowl equal frame typical except conservative
+eliminate host hall ocean row producer afford meanwhile regime division confirm fix appeal mirror tooth smart
+length entirely rely topic complain variable telephone perception attract confidence bedroom secret debt rare
+tank nurse coverage opposition aside anywhere bond pleasure master era requirement expectation wing separate
+somewhat pour stir judgment reference tear doubt grant seriously minister totally hero industrial cloud
+stretch winner volume seed surprised fashion pepper busy intervention copy tip cheap aim cite welfare
+vegetable gray dish beach improvement everywhere opening overall divide initial terrible oppose contemporary
+route multiple essential league criminal core upper rush necessarily specifically tired employ holiday vast
+resolution household fewer witness match barely sector representative beneath beside incident limited proud
+flow faculty waste merely mass emphasize experiment definitely bomb enormous tone liberal massive engineer
+wheel decline invest cable expose rural narrow cream secretary gate solid hill typically noise grass
+unfortunately hat legislation succeed celebrate achievement fishing accuse useful reject talent taste
+characteristic milk escape cast sentence unusual closely convince height physician assess plenty virtually
+addition sharp creative lower approve explanation gay campus proper guilty acquire compete technical plus
+immigrant weak illegal alternative interaction column personality signal honor passenger assistance forever
+regard association twenty knock wrap lab display criticism asset depression spiritual musical journalist
+prayer suspect scholar warning climate cheese observation childhood payment permit cigarette definition
+priority bread creation graduate request emotion scream dramatic universe gap excellent deeply prosecutor
+lucky drag airline library agenda recover factory selection primarily roof unable expense initiative diet
+arrest funding therapy wash schedule sad brief housing post purchase existing steel regarding shout remaining
+visual fairly violent silent suppose self bike tea perceive comparison settlement layer planning description
+slide widely inform portion territory immediate opponent abandon lake transform tension bother consist alcohol
+enable bend saving desert shall error cop double sand spanish print preserve passage formal transition
+existence album participation arrange atmosphere joint reply cycle opposite lock deserve consistent resistance
+discovery exposure pose stream pot grand mine coalition tale knife resolve racial phase joke coat mexican
+symptom manufacturer philosophy potato foundation quote negotiation urge occasion dust breathe elect
+investigator jacket glad ordinary reduction rarely pack suicide numerous substance discipline elsewhere iron
+practical moreover passion volunteer implement essentially gene enforcement sauce independence marketing
+priest amazing intense advance employer shock inspire adjust retire visible illness cap habit competitive
+juice involvement dominate previously whenever transfer analyze attach disaster parking prospect boss
+complaint championship fundamental severe enhance mystery impose poverty entry spending king evaluate symbol
+maker mood accomplish emphasis illustrate boot monitor asian entertainment bean evaluation creature commander
+digital arrangement concentrate usual anger peak disorder missile wire round distribution transportation holy
+twin command commission interpretation strongly engineering luck constant clinic veteran smell capable nervous
+tourist toss crucial bury pray tomato exception butter deficit bathroom objective electronic ally journey
+reputation mixture surely tower smoke confront pure glance dimension toy prisoner fellow smooth nearby peer
+designer personnel relative immigration belt birthday implication perfectly coast supporter accompany silver
+teenager recognition retirement flag recovery whisper gentleman corn moon inner junior throat salary swing
+observer publication crop dig permanent phenomenon anxiety unlike wet literally resist convention embrace
+assist exhibition construct viewer pan consultant administrator occasionally mayor consideration secure pink
+historic poem grandmother bind fifth constantly enterprise favor testing stomach apparent weigh install
+sensitive suggestion mail recipe reasonable preparation wooden elementary concert aggressive false intention
+channel extreme tube drawing protein quit absence latin rapidly jail diversity honest pace employment speaker
+impression essay giant cake historian negotiate restore substantial pop specialist origin approval quietly
+advise conventional depth wealth disability shell criticize effectively biological onion deputy flat brand
+assure mad award criteria dealer via utility precisely arise armed nevertheless highway clinical routine wage
+normally phrase ingredient stake fiber activist snap terrorism refugee incorporate hip ultimate switch
+corporation valuable assumption gear barrier minor provision killer assign gang developing classic chemical
+label teen index vacation advocate draft extraordinary heaven rough yell pregnant distant drama satellite
+personally clock chocolate italian canadian ceiling sweep advertising universal spin button bell rank darkness
+clothing super yield fence portrait survival roughly lawsuit testimony bunch burden react chamber furniture
+cooperation string ceremony cheek profile mechanism penalty resort destruction starting explained closed
+developed supported knowing bringing happening putting becoming continuing stopping cutting reaching placed
+pointed involving closing checking discussed america england london china canada california texas france japan
+germany india mexico africa europe australia italy ireland russia spain florida paris chicago york boston
+hollywood vegas explaining supporting increases realizing letting keeps puts hits seeks believing failing
+accepting removing improving trusting fucked sucks click download updated shopping sales irish australian
+korean greek dutch swedish arab arabic muslim auto dating weeks students families parents schools states
+countries cities rooms books cars games jobs lives stories houses names numbers groups sides cases points
+areas companies systems programs questions services businesses products results ideas ways places parts heads
+lines minds faces levels laws reports prices forms reasons classes records legs teeth trees doors streets
+roads towns buildings walls tables beds nights mornings boys dogs cats animals girlfriend boyfriend scared
+kidding bet mess weird hungry awake asleep nightmare ghost monster hug hugs guns cops eating ate eaten taught
+covered covering described describing caught catching drew drawn chose chosen choosing caused causing listened
+listening realized increased increasing seeking sought dealing dealt threw thrown throwing filled filling
+represented representing focused focusing dropped dropping pushed pushing reduced reducing entered entering
+shared sharing rose risen rising shooting saved lied protected protecting occurred signed accepted answered
+identified determined prepared argued recognized indicated wondered wondering attacked laid failed arrived
+compared designed acted checked proved proven hung hanging forgot forgotten forgetting claimed removed
+established visited visiting avoided imagined finished finishing responded maintained charged revealed
+contained applied measured shook shaking flew flying managed performed discovered treated affected worried
+worrying mentioned improved creating allowing adding offering remembering loving considering appearing buying
+serving sending expecting raising passing requiring reporting deciding pulling returning receiving picking
+carrying producing produced includes appears offers serves expects builds falls reaches remains suggests
+raises requires decides pulls returns breaks receives agrees picks wears carries drives cries laughs smiles
+helps turns plays runs moves believes holds brings writes provides sits stands loses pays meets continues sets
+learns changes leads understands watches follows stops creates speaks reads allows adds spends grows opens
+walks wins remembers loves considers buys waits dies sends stays kills learned angel dragon monkey princess
+magic tiger soccer hockey guitar butterfly rainbow queen prince lion eagle diamond crystal sexy hunter cookie
+banana orange purple worse worst bigger biggest smaller smallest older oldest younger youngest higher highest
+lowest longer longest larger largest greater stronger strongest harder hardest easier easiest faster fastest
+closer closest earlier latest happier happiest nicer nicest richer cheaper deeper darker evil horrible awful
+ugly brilliant fantastic gorgeous handsome rings boats ships planes trains trucks bikes horses birds apple
+apples cakes eggs pie pizza rice salad sandwich soup madam gentlemen ladies captain detective sheriff colonel
+sergeant lieutenant soldiers sweetie babe kitty bunny puppy lover lovers lights lighting stars skies clouds
+winds fires shots fights fighting fought battles wars weapons bullet bullets sword whoever wherever apart
+underneath nowhere upstairs downstairs downtown overseas abroad yours ours hers theirs yourselves sixty
+seventy eighty ninety fifty forty thirty twelve eleven thirteen fourteen fifteen sixteen seventeen eighteen
+nineteen sixth seventh eighth ninth tenth monday tuesday wednesday thursday friday saturday sunday weekends
+january february march april june july august september october november december autumn seasons holidays
+easter halloween rifle reserve grain aircraft flavor cousin swim tail hunt bake angle rid lens fault ankle
+uncle aunt nephew niece grandfather grandpa grandma wives brothers sisters sons daughters fathers mothers
+babies cousins neighbors bored excited upset lonely jealous ashamed embarrassed confused temple chapel gods
+lord christ devil demon angels saints saint yep nope dirty loud murderer dollar dollars cent cents buck bucks
+banks costs computers phones email website web videos movies films letters notes pages papers hands fingers
+arms feet ears lips bones bodies shoulders knees ah ha haha congratulations crap messed freaking jerk bastard
+heck dammit goddamn creepy cheers merry valentine thanksgiving pardon gotcha outta messing freaked moron
+asshole jackass dumbass aha hahaha hehe darn spooky freaky anyways reckon kiddo granny nana auntie hubby maam
+fella lad lass gal majesty highness till besides hence furthermore nonetheless mainly gradually originally
+initially properly successfully badly honestly naturally incredibly happily sadly luckily fortunately
+hopefully officially publicly backward someday sometime afterward friendly grey neat plain pleasant square
+strict unhappy unknown unlikely valid vital wealthy worthy gentle shoes pants glasses socks gloves boots keys
+flowers plants rocks stones waves hills mountains rivers lakes islands oceans seas fields farms gardens parks
+bridges hotels restaurants shops stores markets offices hospitals prisons courts clubs teams players fans
+coaches leaders workers employees customers clients users visitors guests patients doctors nurses teachers
+officers agents troops forces enemies allies citizens voters residents farmers artists writers authors readers
+viewers experts scientists researchers officials lawyers judges governments nations communities societies
+cultures religions languages taxes funds rates values benefits risks effects events activities actions
+decisions choices options chances opportunities goals plans projects policies rules rights answers facts
+details items goods materials resources tools machines devices pictures photos images songs albums shows
+sports toys gifts cards colors sounds voices feelings emotions thoughts dreams memories experiences skills
+abilities studies tests units sizes shapes pieces sections chapters articles files documents messages emails
+meetings conversations relationships relatives strangers heroes villains cooked cooking cleaned cleaning
+washed washing kissed kissing hugged hugging smiling jumped jumping danced singing sang sung painted rode
+riding travelled traveled traveling travelling explored exploring hid hiding stole stolen stealing robbed
+chased chasing escaped escaping rescued rescuing guarded guarding defended defending hurting healed healing
+cured fixed fixing repaired repairing destroyed destroying burned burning burnt froze frozen freezing melted
+melting boiled boiling baked baking fried frying mixed mixing poured tasted smelled touched touching noticed
+noticing ignored ignoring imagining dreamed dreaming dreamt wished wishing hoped hoping prayed praying trusted
+doubted panicked relaxed relaxing rested resting enjoyed enjoying celebrated celebrating thanked apologized
+complained complaining arguing disagreed cheated cheating betrayed forgave forgiven forgiving punished blamed
+accused arrested judged voted elected beaten beating succeeded practiced practicing trained studied studying
+tested graduated hired fired firing retired earned earning borrowed lent owed owe renting owned owning kicked
+kicking hitting punched slapped lifted lifting tripped slipped crashed crashing knocked knocking rang ringing
+texted texting posted posting mailed delivered delivering refused refusing denied denying admitted admitting
+confessed hidden locked locking exited arriving rushed rushing ended ending repeated paused searched searching
+counted counting weighed planned preparing organized arranged managing invited inviting welcomed greeted
+introduced dated hated hating preferred wanting needing anyhow moms dads husbands sleeping slept woke waking
+woken dressed drinking drank drunk eats shouted shouting screamed screaming whispered whispering climbed
+climbing swam swimming draws attacks attacking murdered shoots beats answering replied replies replying talked
+talks thinks forgets likes hates hopes wishes conditions individuals organizations interests efforts hearts
+windows seconds homes worlds kinds moments parties deaths decades centuries developments sources types steps
+factors examples strategies concerns standards powers presidents processes ages senses colleges roles drugs
+views differences models directors positions spaces matters centers couples sites situations industries
+figures technologies periods floors campaigns populations economies churches boards subjects behaviors
+performances agencies movements races responses scenes stocks careers treatments signs lists qualities
+pressures diseases successes cups amounts characters losses degrees regions boxes trades elections bills
+professors operations crimes stages designs stations truths environments executives managers networks sciences
+seats cells trials firms balls theories impacts statements directions pains interviews cameras structures
+weights candidates productions trips evenings conferences styles adults ranges edges troubles challenges fears
+institutions bars properties foods vegetables ends backs persons arts histories controls grounds oils lands
+summers springs radios absent absorb abstract accent acceptable accommodate accounting accuracy accurate
+accusation acid acquisition actively actress adapt additionally adequate adjustment administrative admission
+adolescent advanced adventure adverse advertisement aesthetic affordable agricultural agriculture aide
+airplane alongside aluminum ambassador ambition ambitious amendment amid ancestor anniversary announcement
+annually anticipate anxious apparatus appealing applicant appoint approximately architect architecture arena
+arrival artificial artistic assault assemble assembly assert assignment assistant associated athletic
+attendance attribute auction audio authentic authorities automatic automatically automobile availability await
+awareness bachelor backup balanced ballot banking bankruptcy bare bargain baseline battlefield beautifully
+bedtime behavioral beneficial bias bid biography bishop blessing blink boast booking boundary brake breakdown
+breakthrough breeding briefly broadly broker browser brutal buffalo bureau burial businessman calculate
+calculation capability capitalism carbon cardboard careless caring cart casualty catalog cattle cautious
+celebration census certificate challenging characterize charter chemistry chronic circuit circulation
+citizenship civic civilization clarify classical classify cleaner clearing closure cocaine cognitive coherent
+collaboration collective collector colonial columnist combat commentary commerce commissioner commodity
+companion comparable compelling compensation competent competitor compile complement complexity compliance
+comply comprehensive comprise compromise compute computing concentration conception concession condemn
+conditioning confession configuration confusion congregation connected conscience conscious consciousness
+consecutive consensus conservation considerable considerably consistently conspiracy constitute constitution
+constitutional constraint consult consume consumption contemplate contend contractor contradiction contrary
+controversial controversy convenience convenient conversion convert conviction coordinate coordinator cope
+copyright correspondent corridor corruption costly counseling counselor counterpart countless courtroom
+creativity credibility crowded cruise cue cultivate curiosity currency custody cyber database debris debut
+declaration decorate decrease dedicated deem defendant defensive deficiency definite delegate delegation
+deliberately delicate demographic demonstration denial density dependent deploy deployment depressed descend
+descent designate desirable desperate desperately destination destructive detailed detect detection
+determination devastating devote diagnose diagnosis dialogue dictate differ differently dignity dilemma
+diminish diplomat diplomatic directory disabled disappointment discharge disclose discourage discourse
+discrimination dismiss disposal dispute distinct distinction distinguish distract distribute disturb diverse
+divine doctrine documentary domain dominant donation donor dose drought dual durable dynamic earnings ease
+ecological ecology economically economist ecosystem edition editorial effectiveness efficiency efficient
+elaborate elderly electoral electric electrical electricity electronics eligible elite embassy emerging
+emission empirical emotionally encounter endless endorse endure engagement enroll enrollment entertain
+enthusiasm enthusiastic entity entrepreneur equality equation equity equivalent erosion essence establishment
+estimated ethical ethics evident evolution evolutionary evolve exact examination excess exclude exclusive
+exclusively execute execution exhaust exhibit exile expansion expedition expenditure experimental expertise
+explicit exploit exploration export extensive extension eyebrow facial facilitate faction fairness faithful
+fare farming fascinating fatal fatigue favorable feasible feminist filter financially firmly fiscal fitness
+fleet flexibility flexible fluid forecast formation formerly fortunate forum fossil foster founder fraction
+fragment framework franchise fraud freely frequency frequent frightened frontier frustrate frustration fulfill
+functional fundraising galaxy gaming gasoline gathering generic genetic genuine gesture globe glory goodness
+governance graduation grandchild grandparent grasp greatly grid gross guarantee guidance guideline habitat
+halfway handful harassment hardware harmful headquarters healthcare heavily helpful heritage hesitate
+hierarchy highlight hiking historically homeland homeless hormone hostile humanity hydrogen hypothesis icon
+identical identification ideology illustration imagination immense immune implementation imply impressive
+incentive incidence inclined inclusion incredible independently indication indicator indigenous individually
+indoor induce inevitable inevitably infection inflation influential informal infrastructure inherent inherit
+injured inmate innovation innovative input inquiry insert insight inspection inspector inspiration
+installation instance instinct institutional instructor insufficient integrate integrated integration
+integrity intellectual intelligent intensity intensive intent interact interfere interior intermediate
+interpret interrupt interval intimate invasion inventory invitation isolate isolated isolation ivory
+journalism judicial jurisdiction justify juvenile kidney laboratory landmark laptop latter lawmaker layout
+lecture legacy legislative legislature legitimate leisure lifestyle lifetime likelihood likewise limitation
+linear literacy literary litigation logical lyrics magnetic magnificent magnitude mainstream maintenance mall
+mandate mandatory manipulate manufacturing marathon margin marker marketplace massacre mathematics mature
+maximum meaningful mechanical medication meditation medium membership memoir mentally mentor merchant merger
+metaphor methodology metropolitan midst migration mill mineral minimal minimize minimum ministry missionary
+mobile mobility moderate modest molecular molecule momentum monetary monopoly monument morality mortality
+mortgage motivate motivation motive narrative nationwide naval neighboring newly newsletter nominee nonprofit
+norm notable notebook novelist nursing nutrition obesity objection obligation obstacle occasional occupation
+occupy offensive ongoing openly operator opposed optical optimistic orchestra organic organism organizational
+orientation outfit outlet outline outlook output outstanding overcome overlook oversee overwhelm overwhelming
+ownership painter paragraph parallel parameter parish partial partially particle partnership passionate
+passive pastor patent patron peasant pedestrian peel pension perceived permission persist persistent persuade
+pharmacy photographer photography physically physics pioneer pitch placement platform plea pleased pledge
+plunge poke politically pollution portable portray possess possession postpone potentially poultry practically
+practitioner precise precision predator predecessor predictable prediction pregnancy prejudice preliminary
+premier premise premium prescription presentation preservation presidency presumably prevail prevalence
+prevention prey privacy privilege probability probe problematic proceed processing proclaim productive
+productivity profession profound programming progressive prohibit projection prominent promising promotion
+prompt pronounce propaganda proportion prosecution protective protest provider province provincial provoke
+psychiatric psychological psychologist publicity publisher pulse punishment pursuit qualification qualified
+qualify quantity quantum questionnaire quota racism radiation radical rally ranking rape rational reactor
+readily realistic realm rear reasonably rebel rebuild receiver reception recession recipient recommendation
+reconstruction recording recruitment referee reflection refrigerator refuge regain regardless regulate
+regulatory rehabilitation reinforce rejection relevance relevant reliable reliability relieve reluctant
+remarkable remarkably remedy remote removal render renew renewable rental repeatedly replacement reportedly
+republic reservation reservoir residence residential resign resignation respectively restoration restriction
+retail retailer retain retrieve reunion revelation reverse revolution revolutionary rhetoric rigid riot rip
+ritual robust rotation ruling runner sanction satisfaction satisfy satisfied scandal scenario scheme
+scholarship scope screening script sculpture seasonal secondary secular segment seize seldom semester seminar
+sensation sensitivity sentiment separation sequence server settler severely sexuality shareholder sheer
+shipping shocked shooter shortage shortly shrug sibling sidewalk signature significance similarity
+simultaneously skeptical slavery sniper soak sodium solar sole solely solidarity sophisticated sovereignty
+spacecraft span specialized specimen spectacular spectrum speculation sphere split spokesman sponsor spouse
+sprinkle stability stable stall stance standpoint starter statistical statistics statute steadily stereotype
+stimulate stimulus straightforward stranger strategic streak strengthen strictly striking strip stroke
+structural subsequent subsequently subsidy substitute subtle suburb suburban successive successor sufficient
+suite summary summit superior supervisor supplement supplier supportive supposedly suppress surplus
+surveillance suspend suspicion sustain sustainable symbolic syndrome synthetic tactic tactical taxpayer
+teammate technological teenage temporarily temporary tenant tennis terminal terrain terrorist testify textbook
+texture theatre theft theoretical therapist thereby thoughtful threshold thrive tighten timber timing tissue
+tobacco tolerance tolerate toll tournament trading trailer trainer trait transaction transformation transit
+transmission transparent trauma treaty tremendous tribal tribe trillion triumph troubled tuition turnover
+tutor twentieth unconscious undergo undergraduate underlying undermine unemployed unemployment unexpected
+unfair unfold unified unity update upgrade uphold usage utilize vaccine validity variation varied vary
+velocity vendor venture venue verbal verdict verify vertical viable vibrant vice vintage violate violation
+virtual visa vitamin vocal voluntary vulnerable warehouse warfare warmth warrant wartime weaken weekly whale
+whereas whereby wilderness wildlife willingness withdraw withdrawal workforce workout workplace workshop
+worldwide worship wrestling youngster alarm alien apology appointment arrow attractive awkward balloon
+basement basket bat bath battery beam beard beast beef beg behave beloved bench bible bicycle bite bitter
+blade blank blanket blast bleed bless blessed blind blond blonde bloody boil bold bonus boom borrow bounce
+bound bow boxing brave breeze brick bride broadcast brush bubble bucket bug bull burger burst bush butt cabin
+cabinet cage calendar calm cancel candle candy cannon carpet cartoon casino castle casual cave celebrity
+cemetery champion chaos chapter charity charm chart chase chat cheat cheer chef chess chew chick chill chin
+chip chop cinema circus civilian clerk clever cliff clip closet cloth clown clue coal coin collar collapse
+colony comedy comfort comic complicated concrete confess consent contest copper cotton couch cough counter
+courage cow cowboy crack craft crash crawl creek crown cruel crush cure curious curse curtain curve custom
+dancer dancing dare dawn deadline deck decent deer defeat delay delete delicious delight delivery dentist
+deposit destiny diary dirt disagree disappointed discount disgusting dive divorce dolphin donate doom dot
+drain drawer drift drill drown drum duck dumb dump dusk eager earthquake echo edit elbow elder elegant
+elephant elevator emperor empire entrance envelope episode eternal exam exciting exhausted exit explode
+explosion fabric fade fairy fake fame fancy fantasy farewell fate feast feather fed festival fever fiction
+fierce fist flame flash flesh flip float flood flour flu fog fold fond fork formula fortune fountain fox freak
+freeze fridge frog funeral fur furious gallery gamble garage garbage garlic gaze generous genius glove glow
+glue goat goddess gossip grace grape grateful grave gravity greed greet grief grill grin grip grocery guilt
+gum gut gym hack hammer harm harmony harsh harvest haunted hawk headache headline heal heel helicopter helmet
+herb hike hint hobby homework hood hook horizon horn horror hostage humble humor hunger hurricane ideal
+illusion inch infant infinite ink innocent insane insect instant insult invent invention invisible jaw jazz
+jeans jet jewelry journal joy jungle junk keen keyboard kidnap kingdom kit kitten knight knot ladder lamb lamp
+landing lane lap laser lately laughter laundry lawn lazy leak leap leather legend lemon lend liberty lid
+lightning liquid load lobby log logic loose lottery loyal loyalty luggage lung luxury madness magnet maid
+mansion marble marine mask mate math meadow mechanic medal melody memorial mercy mermaid midnight mild miracle
+misery mist mob monk mortal motel motor mount mouse mud mug mushroom mysterious myth nail naked nap nasty
+naughty navy necklace needle nerve nest net neutral noble noon nut nuts oak obey odd olive opera orbit organ
+orphan oven owl oxygen painful pal palace pale palm panic parade paradise parrot partly passport password
+pasta patch patience patrol pause peaceful peach peanut pearl pen pencil penguin penny perfume pet phantom
+piano picnic pig pile pill pillow pin pine pipe pirate pistol pit pity plot poison polar pole polish polite
+pond pony porch pork powder praise prank precious pride prize proof pump pumpkin punch punish puppet purse
+puzzle pyramid quest quiz rabbit racing radar rage rail ranch random rat raw razor recruit regret relax rent
+repair rescue retreat reward rhythm ribbon riddle rider ridiculous risky rival rob robbery robot rocket
+romance romantic rope rotten royal rub rubber rude rug ruin rumor rust sack sacred sacrifice sail sailor
+salmon sausage savage scar scare scarf scary scent scissors scout scratch screw seal selfish sew shade shame
+shark shave shed sheep shelf shelter shield shine shiny shore shower shrimp shy sigh silk silly sin sink siren
+skate skeleton sketch ski skull slam slave sleeve slice slim slope smash snack snake sneak soap sock soda sofa
+sorrow sour spare spark spear spell spice spicy spider spike spill spine spit splash sponge spoon spray squad
+squeeze squirrel stab stack stadium stain stairs stamp starve statue steady steam steep sticky stiff sting
+stool storage stove strain strap straw strawberry stray stripe stubborn stuck stunning submarine subway suck
+sudden sue suitcase sum sunny sunrise sunset sunshine supper surf surgeon surrender suspicious swallow swamp
+swan sweat sweater swift sympathy tablet tackle tag tan tap tasty tattoo taxi tease teddy telescope temper
+tender tent terrific terror thief thieves thigh thirsty thorn thread thrill throne thumb thunder tickle tide
+tight tile tire toast toe toilet tomb ton tongue torch tornado towel toxic trace tractor tragedy tragic trap
+trash treasure tremble trick trophy tropical trumpet trunk tune tunnel turkey turtle twist umbrella underwear
+unicorn uniform unlock urgent vacuum vague valley vampire vanilla vanish vault velvet venom verse vessel vest
+violin virgin virtue virus vivid volcano vomit voyage wagon waist wallet wander warrior wax weed wheat whip
+whiskey whistle wicked widow wig wipe wisdom wise witch wizard wolf wolves worm wound wreck wrist yacht yarn
+yawn zebra zero zip zombie zoo falcon raven crow dove bee ant gorilla ape koala giraffe rhino hippo camel
+donkey mule piggy goose moose elk bison cheetah leopard jaguar panther cougar puma lynx hyena raccoon chipmunk
+hamster mice beaver otter walrus octopus squid crab lobster oyster clam jellyfish starfish seahorse trout tuna
+catfish goldfish lizard iguana gecko crocodile alligator dinosaur dragonfly firefly ladybug beetle cricket
+grasshopper mosquito snail caterpillar scorpion cobra python viper rattlesnake hornet wasp moth flamingo
+peacock pelican seagull sparrow robin hummingbird woodpecker canary pigeon vulture stallion mustang bronco
+colt pup cub panda phoenix griffin elf elves dwarf troll goblin orc ogre warlock sorcerer magician potion wand
+werewolf samurai ninja viking outlaw bandit ranger assassin titan immortal eternity infinity cosmos cosmic
+comet asteroid nebula cyborg android matrix sunlight moonlight starlight twilight blizzard frost snowflake
+raindrop dew lagoon reef coral waterfall woods canyon glacier iceberg maple willow cedar birch lily daisy
+tulip orchid lotus jasmine violet lavender sunflower poppy magnolia blossom bloom petal moss crimson scarlet
+indigo turquoise teal maroon magenta cyan beige emerald ruby sapphire amber jade platinum bronze chrome
+cupcake muffin cheesecake pancake waffle donut doughnut cereal caramel toffee fudge marshmallow lollipop
+popcorn pretzel cashew almond walnut coconut cherry blueberry raspberry blackberry berry lime pear plum mango
+papaya pineapple melon watermelon kiwi apricot avocado carrot cucumber lettuce cabbage broccoli spinach beans
+noodle noodles spaghetti hamburger hotdog taco burrito nacho bacon ham steak bagel biscuit cracker chips fries
+vodka rum tequila champagne cocktail martini latte espresso cappuccino mocha cinnamon ginger nutmeg mint
+peppermint ketchup mustard jelly jam syrup cycling skating skateboard snowboard surfing skiing diving jogging
+volleyball softball rugby lacrosse bowling billiards darts poker gamer loser champions striker keeper goalie
+pitcher catcher batter quarterback touchdown homerun dunk rebound olympic olympics singer drums cello flute
+saxophone harp banjo ukulele punk rap rapper hiphop disco techno reggae gospel funk ballet tango salsa drummer
+guitarist pianist cuddle soulmate happiness superstar cutie hottie buster maverick spartan trojan gladiator
+golfer savior saviour amen hallelujah login admin hacker hacking legends warriors dragons demons wizards
+knights pirates ninjas zombies vampires monsters lovebird sweetness kisses heartbreak heartbeat sunflowers
+roses daisies lilies tulips butterflies rainbows moons monkeys tigers lions bears eagles hawks sharks dolphins
+ponies puppies kittens bunnies rabbits snakes spiders bees ants frogs turtles ducks chickens pigs cows goats
+cookies cupcakes candies pies bananas cherries strawberries oranges lemons grapes peaches berries potatoes
+tomatoes carrots onions reflects reflected reflecting exists existed tends tended notices related relates
+relating travels debated debates prevented prevents preventing admits assumed assumes assuming suffered
+suffering suffers published publishing released releases releasing recalled recalls stared staring hurts
+strikes struck achieved achieving achieves referred refers referring conducted conducting announced announces
+announcing examined examining attended attending pressed pressing replaced replacing encouraged encouraging
+defined defines defining introducing attempted attempts attempting lacked lacking lacks handled handling
+rolled rolling gained gaining gains hides expressed expressing observed observing emerged operated operating
+contributed contributing settled settling feeding feeds collected collecting promoted promoting counts
+survived surviving lifts jumps gathered limits limiting fits fitting insisted insisting spreading spreads
+ignores demonstrated engaged engaging crossed crossing influenced threatened threatening committed committing
+denies blew blown blowing destroys cooks burns extended extending combined combining reminded reminds depends
+depending depended grabbed grabbing participated participating hires supplied supplies tied ties exchanged
+leaned leaning damaged intended intends climbs expanded expanding disappeared disappearing explores obtained
+surrounded surrounding repeats predicted adopted adopting connecting belongs belonged belonging organizing
+acknowledged struggled struggling struggles concluded shifted shifting located locating recommended recommends
+generated generating proposed proposing captured capturing prefers declared appreciated appreciates launched
+launching defends ensures ensured wakes warned steals pursued pursuing slipping blames investigated
+investigating kicks solved solving eliminated confirmed fixes appealed relied relying pouring stirred stirring
+granted stretched stretching divided opposing rushes employed witnessed emphasized declined declining invested
+investing exposed succeeds celebrates rejected escapes convinced assessed approved acquired competing knocks
+wrapped wrapping suspected permitted requested screams dragged dragging recovered recovering washes shouts
+informed abandoned transformed bothered consists consisted enabled bent bending preserved deserves deserved
+posed resolved breathing breathed implemented inspired adjusted dominated transferred analyzed attached
+enhanced imposed evaluated accomplished illustrated monitored monitoring concentrated smells tossed buried
+confronted glanced accompanied whispers swung swinging digging dug resisted embraced assisted weighs installed
+quitting negotiated restored advised criticized assured arose arisen arising switched assigned yelled yelling
+swept sweeping spinning spun reacted methods magazines bags marriages surfaces purposes patterns owners
+generations addresses realities yards investments discussions collections tasks partners consumers budgets
+paintings agreements victims newspapers threats responsibilities attorneys scores accounts professionals
+missions speeches participants forests relations opinions credits corners versions incomes tracks objects
+attitudes concepts investigations conflicts spirits arguments camps brains features dozens possibilities
+departments crises holes elements visions solutions scales universities drivers spots distances surveys
+traditions villages communications screens contracts crowds christians apartments strengths bands targets
+rides guards demands reporters texts vehicles flights facilities averages advantages pounds samples blocks
+settlements techniques paths lessons principles borders competitions critics aspects failures comments affairs
+procedures chairs beliefs murders reviews editors crosses youths backgrounds natives reactions suits
+perspectives connections grades contexts committees mistakes locations dresses functions chiefs buses
+categories victories medicines tours contacts pairs exercises tapes studios colleagues applications necks
+damages plates expressions armies dangers sessions maps desires assessments injuries instructions pools
+engines tickets planets athletes souls panels meanings instruments temperatures surprises polls proposals
+consequences breaths sights minorities novels codes storms unions desks fruits conclusions shadows analysts
+regulations shifts revenues marks counties packages difficulties trends investors profits crews accidents
+meals muscles notions chests museums beauties emergencies links roots noses bottles settings outcomes duties
+sheets components zones airports shirts pilots contributions guides circumstances politicians percentages
+surgeries estimates chains branches combinations governors ratings motions genders fees landscapes bowls
+frames hosts halls producers divisions mirrors topics variables perceptions bedrooms secrets debts tanks bonds
+pleasures masters requirements expectations wings references tears doubts grants ministers winners volumes
+seeds dishes beaches improvements openings routes leagues criminals cores resolutions households witnesses
+matches sectors representatives incidents flows wastes experiments bombs tones engineers wheels cables creams
+secretaries gates hats achievements talents tastes characteristics sentences heights physicians alternatives
+interactions columns personalities signals passengers regards associations displays assets prayers suspects
+scholars warnings observations payments permits cigarettes definitions priorities creations graduates requests
+gaps prosecutors airlines libraries factories selections roofs expenses initiatives diets arrests therapies
+schedules posts purchases layers descriptions slides portions territories opponents tensions errors sands
+prints passages transitions atmospheres joints cycles locks discoveries exposures streams pots mines tales
+knives phases jokes coats symptoms manufacturers philosophies foundations quotes negotiations occasions
+jackets substances practices volunteers genes sauces priests advances employers shocks habits caps juices
+transfers disasters prospects bosses complaints championships mysteries entries kings symbols makers moods
+monitors evaluations creatures commanders arrangements peaks disorders missiles wires rounds twins commands
+commissions clinics veterans tourists exceptions bathrooms objectives journeys mixtures towers dimensions
+prisoners fellows peers designers belts birthdays implications coasts supporters teenagers flags crops
+observers publications phenomena conventions exhibitions consultants administrators mayors considerations
+poems grandmothers enterprises favors stomachs suggestions recipes concerts intentions channels tubes drawings
+proteins speakers impressions essays giants historians specialists origins depths disabilities shells deputies
+brands awards dealers utilities highways routines wages phrases ingredients stakes fibers activists refugees
+switches corporations assumptions gears barriers provisions killers gangs classics chemicals labels teens
+vacations advocates drafts satellites clocks ceilings buttons bells ranks fences portraits lawsuits bunches
+burdens chambers strings ceremonies cheeks profiles mechanisms penalties resorts angrily gently softly loudly
+proudly warmly kindly wildly madly purely secretly silently safely nicely sweetly bravely boldly calmly
+nervously eagerly anxiously terribly horribly awfully amazingly wonderfully lightly tightly loosely weakly
+wholly commonly continually regularly formally informally casually privately legally illegally socially
+technically accidentally intentionally carelessly sincerely frankly plainly evidently allegedly chiefly
+equally similarly separately jointly instantly swiftly promptly abruptly presently permanently wider widest
+deepest heavier heaviest lighter lightest brighter brightest darkest warmer warmest colder coldest hotter
+hottest cooler coolest sweeter sweetest prettier prettiest uglier ugliest smarter smartest dumber dumbest
+crazier craziest funnier funniest weirder weirdest wiser wisest braver bravest kinder kindest safer safest
+louder loudest quieter quietest softer softest tougher toughest weaker weakest thicker thinner shorter
+shortest taller tallest slower slowest quicker quickest cleanest wealthier poorer poorest busier busiest
+healthier healthiest lonelier loneliest luckier luckiest sadder saddest angrier scarier scariest sexier
+sexiest cuter cutest lovelier loveliest finer finest fewest simpler simplest newer newest fresher freshest
+cheapest purest rarest seeming hears liking learnt cuts suggesting passes sells explains develops agreeing
+produces covers catches chooses causes pointing listens realizes placing closes involves deals throws fills
+represents focuses drops pushes reduces enters shares rises saves protects occurs occurring accepts identifies
+identifying determines determining prepares argues recognizes recognizing indicates indicating wonders arrives
+compares comparing misses acts acting checks discusses discussing proves proving hangs claims claiming removes
+enjoys establishing visits avoids avoiding imagines finishes responds responding maintains maintaining charges
+charging reveals revealing contains containing applies applying measures measuring shakes shaken flies flown
+manages performs performing discovers discovering treats treating affects affecting worries mentions
+mentioning improves sings dances drinks sleeps ridden swims swum forgives lies worn teaches shuts shutting
+bites bitten biting blows freezes marries marrying sinks sank sunk sinking swings shines shone shining spins
+digs trusts prays fucker sucked sucking punching format register username updates blog forums tutorial tips
+archive archives orders courses accessories kinda lol omg yo ya gosh geez jeez whoa yay oops ouch ugh yuck
+yummy hooray duh nah yup bro sis homie dawg hun hon boo swag dope lit rad legit gangsta gangster thug pimp
+playa baller hustler hater haters posse mafia kingpin peeps folks yall aint sorta lemme gimme dunno cuz luv
+kool attic hallway cupboard faucet bathtub blinds mattress freezer microwave toaster kettle dishwasher broom
+mop detergent shampoo toothbrush toothpaste comb lotion makeup lipstick mascara charger plug socket bulb
+heater furnace chimney fireplace patio mailbox doorbell doorway staircase balcony blouse skirt shorts trousers
+hoodie mittens sneakers sandals slippers stockings bra panties bikini swimsuit pajamas robe costume buckle
+zipper backpack bracelet earring earrings sunglasses diploma dorm eraser ruler crayon chalk blackboard
+whiteboard locker recess cafeteria playground coworker paycheck resume memo printer copier stapler motorcycle
+scooter cab tram van jeep limo ambulance spaceship freeway avenue harbor port dock forehead eyelash belly toes
+rib ribs liver lungs vein veins freckles wrinkle bruise ache yoga skinny obese allergy asthma diabetes bandage
+toddler newborn groom fiance roommate poet waiter waitress bartender baker butcher fisherman miner builder
+carpenter plumber electrician programmer developer banker accountant cashier receptionist pope nun preacher
+prophet sinner robber burglar spy astronaut vet veterinarian pupil rookie beginner villain survivor servant
+butler nanny babysitter joyful cheerful grumpy moody sleepy drowsy boring thrilled delighted thankful hopeful
+hopeless helpless useless worthless fearless courageous terrified stressed annoyed irritated frustrated
+miserable heartbroken envious confident amazed impressed disgusted marvelous splendid superb fabulous glorious
+adorable charming graceful fragile sturdy sparkling glittering colorful dull bizarre deadly poisonous harmless
+sincere flawless dreadful filthy messy tidy energetic noisy salty juicy crispy crunchy creamy slippery damp
+moist icy snowy rainy windy cloudy stormy foggy misty chilly adore admire amuse annoy apologize ban bark bathe
+blush bolt bore brag breed brew bribe bully bump buzz carve chant choke clap clench cling conquer creep curl
+dash dip dislike dodge doze drip dread educate embarrass erase exaggerate excite faint fasten fetch flap flee
+flick forbid frown gasp giggle glare grind groan growl grumble hatch haunt hiss hop hover howl hum imitate
+impress inject injure itch jog juggle kneel knit lick lighten mend moan mock mourn mow mumble murmur nag
+offend paddle pat peek pinch pounce pout preach pretend prick purr quarrel rattle reign rejoice rinse roar rot
+scatter scold scrape scrub shiver shudder sip skip slap sneeze sniff snore sob soothe sparkle sprint squeak
+stammer steer stink stitch stroll stumble sway swell swirl tame tempt trot tug tumble twinkle unite unpack
+wail weep whine wiggle wink wobble wrestle wriggle zoom kindness sadness weakness sickness loneliness
+forgiveness holiness emptiness playful stressful respectful truthful forgetful skillful wasteful fearful
+tearful lawful doubtful delightful heartless pointless senseless restless reckless ruthless priceless timeless
+wireless speechless breathless sleepless powerless meaningless thoughtless selfless shameless clueless jobless
+lifeless nameless faceless spotless fighter fighters helper helpers seeker dreamer dreamers believer believers
+follower followers creator listener swimmer walker jumper climber skater surfer boxer wrestler snowball
+snowman firework fireworks fireman firefighter policeman cowgirl housewife blackbird bluebird blackjack
+honeybee bumblebee wildcat bulldog greyhound milkshake grapefruit daylight nightfall overnight goodnight
+mainland wonderland fairyland heartland highland lowland geography sociology algebra geometry calculus
+astronomy millennium weekday monthly yearly hourly aboard absolute acceptance accessible accommodation
+accordingly afterwards alert alike altogether amateur anonymous appetite applause appreciation advertise
+advisor adviser alley allowance anchor attachment awaken axe backwards badge baggage bakery bang banner barn
+barrel behalf beverage blend boost booth bundle cafe calculator canal canvas captive cargo carnival carriage
+caution cease cellar cement chorus cigar clash clay continent cottage cozy cradle crane crisp crust cushion
+dagger decay deed defy dense dessert dice dictator diesel dime disc disguise ditch dizzy dome dough dryer duel
+dungeon dye eclipse elastic empress enchanted envy epic escort evergreen exotic expire extinct fang ferry fig
+flare flask flirt flock foam foe foil footstep fort fortress foul fragrance frantic freight fright fuss gadget
+gem genie gin glide glimpse glitter gloom gown graveyard gravy grease grim guardian gulf gust haircut halo
+handbag handshake haven hay hazard heap hedge heir hen herd hollow hut hymn idol impulse inn intruder ivy
+jackpot jar jewel jolly jumbo knob lace lantern lava leash ledge lever limb linen litter loaf lodge loft lump
+lure mammal mane manor marsh mesh mischief mustache napkin nursery oath oasis omen orchard oval pastry paw
+pebble pedal pickle pier pint plank plaster pouch puddle puff quilt rack raft rag rake ram ramp rash ray reed
+relic rhyme ripple roast rooster saddle sage satin scrap scroll seashell serpent sewer shack shrine shrub
+siege sled sleigh slime squash stern stew stump swarm tar tavern trek trench tuck twig veil vine vinegar vow
+wade warden weave wedge wrench yolk zeal aggression aisle align amaze amongst amused apologise appliance arch
+ash astonished atom bait bald barber basin bin blah calf cane canoe cape chemist cherish clumsy cocoa coffin
+coil comedian comma compass comrade conductor cone cork corpse cramp crib crook crunch curry dazzle deceive
+diaper dimple diner dire discreet dismay drizzle dune earl eel enrich errand fable feeble fern fiddle filth
+finch flannel fleece flint gallop gauge gleam gnome gull handkerchief hare hazel helm hermit hiccup hinge hive
+hoax hog holler hoof hound icicle icing igloo imp jackal jest jingle jockey jug kennel kilt knuckle lame lance
+lark lash latch leech lilac limp lint llama locket loom lush mace mallet mare mast meek mime miser mitten moat
+mole mound mural muse mutt muzzle nectar nimble nostril notch nugget oar oatmeal onyx opal ore ostrich ox pail
+pansy pantry parcel parlor parsley pawn peg perch pew pheasant pike plow pod polka posh prawn prong prune pulp
+quail quartz quench quill quiver radish rein rind rodent rosy rung sap sash saucer scab scald scalp scorch
+scorn screech scruff seaweed sentry sequin shaggy shawl sheath shin shrewd sickle sieve silo skid skillet
+skunk slab slate sling slit slug slush smock snare snarl sneer snout snug soot spade spank speck spire spook
+spool spud spur stag stale stalk starch steed stench stork strand stub sulk swine swoop tack tadpole talon
+tart teapot thatch thaw thicket thimble thong throb thud thump tick timid tint toad toil tomboy tonic topaz
+tot tow trance trifle trinket trough tuba tusk tutu twine urn usher vane vat vial wad wafer wag wart weasel
+whim whimper wick wilt wisp woe wren yak yelp yoke app apps folder desktop inbox spam upload uploaded drone
+console controller joystick router modem reboot podcast streaming selfie emoji hashtag smartphone wifi crypto
+offline everyday anytime meantime indoors outdoors underground uptown suburbs hometown homemade handmade
+lifelong longtime nowadays unto whilst oneself whomever whichever triple unnecessary unimportant irrelevant
+unofficial unlucky unfortunate uncomfortable unfamiliar unclear uncertain unaware unwilling unbelievable
+unforgettable unbreakable unstoppable untouchable undefeated unhealthy unsafe unstable unreal unseen unwanted
+unloved unfinished unlimited unconditional unpredictable unreasonable unacceptable unavailable unbelievably
+invincible indestructible imperfect impatient impolite improper incomplete inconvenient incorrect indirect
+inefficient insecure insignificant irresponsible irregular dishonest disloyal disobedient borrowing bounced
+bouncing canceled cancelled chatting chatted cheered cheering chewed chewing chopped collapsed comforted
+comforting crawled crawling crushed crushing cursed dared daring delayed deleted divorced donated drowned
+drowning dumped edited editing exploded exploding faded fading floating floated flooded folded gambling
+grilled grinned gripped hacked harmed hunted hunting insulted invented kidnapped leaked leaped leapt loaded
+loading mounted obeyed polished praised pumped rented rewarded rubbed ruined sailing sailed scaring scratched
+sealed shaved sighed slammed sliced smashed sneaking snuck spared spelled spilled sprayed squeezed stabbed
+stacked stained starving starved sued surrendered swallowed sweating tapped teasing traced trapped tricked
+trembling tuned twisted unlocked vanished wandering wandered whipped wiped wounded wrecked blesses chases
+cheats crashes cures dares delays deletes dives explodes fades floats hunts invents leaps loads melts obeys
+panics pauses praises relaxes rescues rewards robs ruins scares smashes sneaks alarms aliens apologies
+appointments arrows balloons baskets bats batteries beams beards beasts benches bibles bicycles blades
+blankets blasts bonuses bows bricks brides brushes bubbles buckets bugs bulls burgers bushes cabins cabinets
+cages calendars candles cannons cartoons casinos castles caves celebrities cemeteries charities charms charts
+chefs chicks civilians clerks cliffs clips closets clowns clues coins colonies comedies comics contests
+cowboys cracks crafts creeks crowns curses curtains curves customs dancers deadlines decks deposits diaries
+drawers drills elbows elders elephants elevators emperors empires entrances envelopes episodes exams exits
+explosions fairies fantasies feathers festivals fists flames flashes floods forks formulas fortunes fountains
+foxes freaks funerals galleries garages geniuses graves grills groceries guts hammers harvests headlines heels
+helicopters helmets herbs hikes hints hobbies hooks horns horrors hostages ideals illusions inches infants
+insects inventions jets journals jungles kits knots ladders lambs lamps landings lanes lasers lawns leaks lids
+lobbies logs magnets maids mansions masks mates meadows mechanics medals melodies memorials miracles monks
+motors mugs mushrooms myths nails needles nerves nests nets oaks olives operas organs orphans ovens owls pals
+palaces palms parades parrots passports passwords patches pearls pens pencils penguins pennies pets phantoms
+pianos picnics piles pills pillows pins pines pipes pistols pits plots poles ponds pranks prizes pumps
+pumpkins punches puppets purses puzzles pyramids quests rails ranches rats ribbons riddles riders rivals
+robots rockets ropes rugs rumors sacks sacrifices sails sailors sausages scars scarves scents scouts screws
+seals shades sheds shelves shields shores showers skeletons sketches skulls slaves sleeves slices slopes
+snacks sofas sparks spears spells spices spikes sponges spoons squads squirrels stacks stadiums stains stamps
+statues stools stoves straws stripes suitcases sunsets surgeons swans sweaters tablets tags tattoos taxis
+tents thorns threads thrills thrones thumbs tides tiles tires toasts toilets tombs tons tongues torches towels
+tractors tragedies traps treasures tricks trophies trumpets trunks tunes tunnels turkeys umbrellas uniforms
+vaults verses vessels vests violins viruses volcanoes wagons wallets weeds whips whistles widows wigs witches
+worms wounds wrecks wrists lazily busily cheerfully gracefully joyfully playfully peacefully thankfully
+gratefully faithfully respectfully painfully powerfully awkwardly politely rudely fiercely tenderly lovingly
+fondly coldly sharply smoothly neatly wisely foolishly stupidly cleverly brilliantly poorly richly endlessly
+helplessly hopelessly restlessly recklessly fearlessly noisily vastly hugely enormously massively nightly
+freshly unexpectedly surprisingly interestingly importantly drastically radically fundamentally utterly
+positively negatively indirectly securely dangerously cautiously patiently impatiently crazily gladly
+dreadfully genuinely spiritually sexually romantically continuously lastly firstly secondly consequently
+superhero superheroes skyline skyscraper countdown campfire bonfire treehouse sandcastle fairytale lighthouse
+rainforest thunderstorm snowstorm moonbeam sunbeam stardust abbey abide abnormal abolish abortion abrupt
+absurd abundance abundant academy accelerate acclaimed accomplishment accountable acquaintance activate acute
+addicted addictive adjacent adrenaline adversary affection affirm aftermath agile agony alarming alias alibi
+allegation alleged allergic alliance allocate almighty alpha altar alter alternate altitude ambush ammunition
+amnesia ample amusement amusing analogy anarchy anatomy anguish animated animation annoying antenna anthem
+antibiotic antique anvil apocalypse apostle applaud apprentice aquarium arcade arctic armchair armor aroma
+arrogant arsenal artery artifact ascend ashore aspire astonishing asylum atomic auditorium aura autograph
+autopsy avalanche avatar awe axis ballad ballroom bamboo banquet baptism barbecue barley batch bazaar beacon
+bead behold beware binary binoculars blackmail blacksmith blaze bleach bliss blob blueprint bluff blunt blur
+bodyguard bog bomber boomerang booze boulder boulevard bounty bouquet boutique boycott bravery brawl breakup
+breathtaking brewery brigade brink brochure brotherhood brow brownie brunch brunette buffet bulldozer bulletin
+bungalow bunker burrow buttercup cactus cadet caffeine camouflage candlelight capsule caravan cardinal
+carefree carousel cartridge cascade casket cassette catastrophe cathedral cavalry celery ceramic chalkboard
+chandelier charcoal chariot chatter checkers cheerleader chestnut chili chime chimpanzee chirp choir chord
+chores chubby cider citrus clarity clarinet classmate clergy clover coastal cobweb cockpit cockroach cocoon
+cologne colossal combo commando communism communist commute compact compartment compassion confetti conquest
+constellation contagious container contempt contestant cookbook cosmetic countryside coupon courthouse
+courtyard coward coyote cranberry crater crossroads crossword crowbar crumb crumble crusade cuddly cuisine
+culprit cunning cupid curfew curly custard cyclone cylinder cymbal dandelion daredevil debit deception decimal
+decoy defiant delirious demolish dependable derby descendant devour digest dismal distress doghouse domino
+doorknob doorstep dormitory downfall downhill drainage dresser driveway droplet drunken duckling duet dusty
+dwelling dynamite dynasty earthly earthworm easel eggplant electron elegance embark embers emblem encore
+endanger engrave enigma enlighten entourage epidemic equator escalator ethic evacuate everlasting evict
+explorer extinguish facade fairground fallout famine fanatic farmhouse fascinate fatherhood fearsome feline
+ferocious ferret fertile fiery finale fingerprint firewood fishbowl flashlight flicker flutter folklore
+footprint forearm foreman forfeit forgery frenzy friction frisbee frontline frosty fugitive fumble fury fuse
+fusion gala gargoyle garland garment gazelle geek gentleness geyser gingerbread glamour glee glider gloomy
+glossy goblet goggles goldmine gondola gong gourmet granite gratitude gravel greenhouse grenade griddle
+grizzly groove grotto grudge gruesome guardians guerrilla guild guillotine gunfire gutter hacksaw haggle
+hairbrush hamlet handcuffs handwriting hangar hangover hardship harmonica harpoon hatchet havoc headband
+headlight headphones heartache hearth heatwave hedgehog heirloom hemisphere heroic heroine hideout hilarious
+hillside hilltop hippie hitchhike homesick honeymoon horoscope horseback hostel hourglass housekeeper huddle
+humid hunch hunk hurdle husky hybrid hysteria ignite illuminate imagery inferno inhale insomnia invader irony
+itinerary jamboree janitor javelin jealousy jester jetty jigsaw jubilee juggler jukebox jumpsuit juniper kayak
+keg kernel keyhole kickboxing kidnapper kilometer kimono kindergarten kingfisher kinship kiosk knapsack
+labyrinth lacquer lament landlord landslide lapel larva lasagna lasso lattice lawnmower lecturer leftover
+lemonade leprechaun levitate librarian lifeboat lifeguard limestone limousine lioness livestock locksmith
+locomotive longing loophole lunatic lyric macaroni maestro mahogany mailman mainframe mammoth manatee manhole
+mania manicure mannequin mantle marigold marina marionette marmalade marrow martial mascot masquerade massage
+mastermind matchbox meatball medallion medley megaphone melancholy mellow memento menace meringue messenger
+microscope midday midfield midway migraine milestone militia millionaire miniature minnow minstrel mirage
+mischievous mistletoe mobster monarch monastery mongoose monsoon moonlit mosaic mosque motorbike mountaineer
+mourning mousetrap moustache mower mulberry mummy musket mutant myriad mystic nachos narrator narwhal nausea
+navigator neon newcomer nibble nickname nightclub nightingale nitrogen nomad nostalgia novice nozzle nylon
+obsession octagon odyssey ointment omelet onslaught optimism oracle orangutan ordeal oregano origami outback
+outcast outpost overcoat overload ozone pacifier padlock pageant pagoda paintbrush palette pamphlet paperback
+parachute paradox parakeet parchment parka parody partridge pastel pastime pasture patchwork pathway pavement
+pavilion pendant pendulum penthouse peril pharaoh piccolo piglet pigtail pilgrim pillar pinball pinecone
+pinwheel pistachio pitchfork pixel plaid plasma platter playhouse playmate plaza plume poacher podium poetry
+pointer pollen poltergeist pomegranate poncho poodle popsicle porcelain porcupine postcard postman prairie
+prism prodigy propeller prophecy pudding puffin pulley puncture pushover quarry quicksand quince racket radius
+raffle raincoat rainfall rampage rancher ransom rapids ravine rebellion recital recliner redwood reindeer
+remnant renegade reptile resin revolver rhapsody rhubarb rink riverbank roadside rocker rooftop rosary
+rosemary rubble rudder ruffle rumble rune rustic saber safari saga salamander saloon sanctuary sandal
+sandpaper sardine satchel sauna savanna scaffold scallop scarecrow scavenger scepter scoundrel scramble scuba
+seafood seashore seaside sedan seesaw serenade serenity shackle shaman shamrock shipwreck shoelace shotgun
+shuttle silhouette silverware sizzle slingshot slipper sloth slumber smoothie smudge snapshot snorkel sombrero
+sonnet soprano sorcery souvenir spatula sphinx splinter spoonful sprout spyglass stagecoach starling steamboat
+stethoscope stingray stopwatch storyteller stowaway sundae sundial sunburn swordfish sycamore symphony
+tablecloth taffy tailor talisman tambourine tangerine tapestry tarantula teacup teardrop telegram tempest
+tenor terrace terrier thermometer thistle thunderbolt tiara tidal tightrope tinsel toboggan tomahawk tombstone
+toolbox toothpick torment tortilla toucan tracksuit trampoline trellis tricycle tripod trolley truffle tugboat
+tumbleweed tundra turban tuxedo tweezers typhoon underdog undertaker unicycle upbeat uproar urchin utensil
+vagabond valiant valve vanity vapor vegan veggie veranda verge vertigo vigil vinyl viola visor vixen vortex
+walkway wanderer wardrobe warlord wasteland watchdog watchtower waterproof wavelength webcam wharf wheelbarrow
+wheelchair whirlpool whirlwind whisker whiskers whisky wildfire windmill windshield wingspan wolfpack wombat
+woodland woodwork workbench wreath wristwatch xylophone yardstick yearbook yogurt zealous zeppelin zest zigzag
+zinc zodiac zucchini
+
+[names]
+james john robert michael mary william david patricia jennifer richard linda joseph elizabeth thomas barbara
+charles susan christopher jessica daniel sarah matthew karen anthony nancy mark lisa donald betty steven
+margaret paul sandra andrew ashley joshua kimberly kenneth emily kevin donna brian michelle george dorothy
+timothy carol ronald amanda edward melissa jason deborah jeffrey stephanie ryan rebecca jacob sharon gary
+laura nicholas cynthia eric kathleen jonathan amy stephen angela larry shirley justin anna scott brenda
+brandon pamela benjamin emma samuel nicole gregory helen alexander samantha frank katherine patrick christine
+raymond debra jack rachel dennis carolyn jerry janet tyler catherine aaron maria jose heather adam diane
+nathan ruth henry julie douglas olivia zachary joyce peter virginia kyle victoria ethan kelly walter lauren
+noah christina jeremy joan christian evelyn keith judith roger megan terry andrea gerald cheryl harold hannah
+sean jacqueline austin martha carl gloria arthur teresa lawrence ann dylan sara jesse madison jordan frances
+bryan kathryn billy janice joe jean bruce abigail gabriel alice logan judy albert sophia willie grace alan
+denise juan amber wayne doris elijah marilyn randy danielle roy beverly vincent isabella ralph theresa eugene
+diana russell natalie bobby brittany mason charlotte philip marie louis kayla mike alexis chris lori alex
+tiffany matt tammy harry crystal johnny rose howard kate fred jenny ernest katie martin tracy craig wendy
+stanley dawn shawn connie travis rita phillip tina todd lois earl phyllis jimmy norma antonio paula danny
+annie tony anne luis peggy leonard jane dale jill curtis robin rodney holly norman erin allen erica marvin
+monica glenn april jeffery kristen chad kristin jeremiah kim steve vanessa carlos courtney lee chelsea victor
+jasmine melvin alyssa alfred destiny francis taylor jesus morgan derek haley troy brianna cody sydney dustin
+kaitlyn bradley jenna edwin alexandra barry allison shane jamie joel leslie manuel tara clarence dana ricky
+stacy randall stacey corey valerie theodore wanda jay bonnie ray carla dave june jim joanne bob lillian tom
+ellen dan marjorie calvin edna lloyd mildred leroy ethel herbert florence gene irene frederick hazel mario
+louise marcus ruby bernard eleanor ricardo mabel miguel josephine dean thelma clifford gladys francisco
+lucille ronnie ida leon clara warren vera alvin sylvia jon bertha wesley beatrice derrick agnes darrell pearl
+tommy esther lewis eva gordon tanya don sherry jorge kathy clyde katrina lonnie carrie jerome jacquelyn
+maurice regina oscar sue eddie terri seth renee nick becky ben jen sam jake josh liz jeff beth greg pam ken
+deb tim debbie rob cindy rick sandy ron patty bill cathy andy jackie pat vicki luke shannon ian kristina isaac
+misty evan melinda cameron tonya connor sheila hunter cassandra caleb anita isaiah lynn owen rhonda adrian
+gina colin yvonne garrett darlene spencer joann trevor marsha blake loretta devin maureen chase colleen cole
+kristine brett kara casey katelyn dominic mackenzie tristan gabrielle jared brooke marc kaylee gavin makayla
+liam mia lucas ava oliver harper aiden amelia jackson camila sebastian gianna carter luna wyatt ella jayden
+avery grayson mila levi scarlett julian layla mateo penelope lincoln aria hudson chloe josiah nora asher zoey
+leo riley theo lily ezra aurora nolan violet miles nova eli emilia elias zoe landon stella colton everly jaxon
+isla easton leah cooper addison axel willow roman lucy everett paisley brooks naomi xavier eliana kai brooklyn
+parker elena jace aubrey silas claire bennett ivy declan kinsley weston audrey micah maya ryder genesis beau
+skylar damian bella brayden aaliyah max madelyn maxwell savannah jasper delilah sawyer serenity nathaniel
+caroline hector kennedy floyd valentina kurt sophie herman gabriella glen sadie sidney ariana ted hailey
+jessie autumn lester nevaeh milton natalia cecil quinn duane cora franklin emery andre piper elmer leilani
+brad eileen gilbert joy chester carmen tyrone marion reginald rosemary roland geraldine vernon wilma harvey
+rosa terrence juanita alberto roberta javier charlene fernando priscilla armando bernice raul laurie ruben
+faye eduardo kay roberto viola arturo nina alfredo marian pedro sally enrique vivian ramon lena sergio rachael
+rafael jeanette darryl kristy darren shelby dwayne erika wade kelsey ross caitlin perry lindsay neil lindsey
+kirk marissa kent mallory brent miranda byron molly clint rebekah clayton sabrina dwight felicia gregg kristi
+guy kendra lance sonia lyle sonya marshall tamara morris tasha nelson latoya otis latasha pete marcia rex
+janie rudy bridget sammy meredith stuart monique wallace yolanda ivan irma jamal lydia malcolm olga alfonso
+carole angelo betsy archie deanna abraham gwendolyn salvador ebony hugh lucia elliott kristie lamar margarita
+cedric opal dominick mamie kelvin minnie ernesto nellie julio maggie andres mattie felix myrtle omar essie
+orlando lula lorenzo hattie drew etta julius delores terrance lola marco alma clifton estelle charlie abby
+freddie allie frankie becca benny cassie kenny carly timmy gabby joey gracie jimmie josie johnnie kathie ed
+lexi al libby hank lizzie chuck maddie doug mandy rich meg rod mel russ millie stan missy vince nikki walt
+penny wes polly zach rosie zack steph nate susie toby tess gus trish willy val robbie vicky bobbie winnie
+ronny dottie jerri bev barb dot trudy kitty rickey lou neal jo roosevelt patsy woodrow glenda wilbur nadine
+virgil marlene homer ramona luther pauline wendell edith horace lorraine willard eunice irving harriet
+sylvester ina claude georgia clinton leona rufus verna ollie velma otto inez emmett lillie amos blanche ira
+nettie moses elsie solomon dora reuben fannie simon bessie saul della jonah lela jonas effie zachariah lottie
+tobias maude malachi mae gideon rosalie alonzo iris darnell gertrude demetrius juliana jermaine geneva terrell
+genevieve tyrell henrietta marquis hilda darius imogene dante isabel cornelius lucinda desmond muriel dorian
+nell quincy ophelia reggie rhoda roderick susanna cleveland winifred preston alberta carlton cecilia sherman
+celia winston constance wilson dolores shaun eula brendan frieda bret lenora cory mavis curt olive damon
+pearlie dane roxie darin tillie darrin lorene devon marguerite donovan rena erik tracey garry traci gerard
+brandy grant brandi heath shawna jarrod shauna jody shana kristopher sheri lane sherri mitchell sheryl quentin
+shelly rene shelley rocky tamika sterling lakisha thad keisha trent aisha ty jenifer tyson jennie zane kari
+brock kerri bryce kerry colby kelli dakota kellie dillon krista dalton kirsten drake christy gage christie
+hayden jodi holden julia jaden lacey jett leigh kaleb marcy kane meghan keegan mindy kody nichole payton paige
+peyton rachelle reid shanna reed staci rowan summer skyler tabitha tanner tami tucker tia walker toni trina
+trisha tricia wendi whitney alexa alicia alison allyson angelica angelina arianna bailey breanna caitlyn
+cheyenne ciara claudia daisy desiree diamond gabriela hayley jada jade jasmin jazmin jocelyn kaitlin kendall
+kiara kylie kyra madeline mariah marisa mckenzie mikayla selena sierra trinity valeria adriana alana alejandra
+amaya angie annette antoinette ariel arlene ashlee ashleigh ashlyn audra belinda bethany bianca billie blanca
+britney brittney callie candace candice cara carina carissa cassidy celeste chanel charity chasity chelsey
+cherie christa cristina daphne darla deirdre dina dixie dominique eden elaine elisa elise eloise faith fiona
+flora francine freda gail gayle ginger gretchen gwen heidi hope ingrid jaclyn jaime janelle janine jeanne
+jeannie johanna jolene juliet karla kasey katharine katy laverne lana mariana marianne maryann maxine melanie
+mercedes miriam mona paulette rosalind roxanne suzanne tamera yvette aidan caden kayden braden jaxson kaden
+kingston knox legend maddox nash paxton ryker waylon zander zion bentley bryson camden cash crew finn griffin
+judah kash king kyrie lennox maximus milo oakley orion ronan rhett rocco sullivan tate zayden atlas ezekiel
+hendrix beckett archer arlo barrett bodhi enzo river phoenix jude kian matias nico santiago leonardo luca
+jameson greyson carson emmanuel elliot graham harrison josue kaiden karter kayson lukas messiah myles rhys
+rylan sage zaiden abel amir ayden brantley brody cayden chance colt dallas dawson emiliano gunner hayes iker
+jamison jax jayce jeremias kade kameron kingsley luka malik marcos mathias maximiliano memphis nehemiah
+nikolai omari prince raiden shepherd thiago titus uriel ximena adalyn adalynn adeline aitana alaina alina
+amara anastasia annabelle arabella athena aubree ayla blakely brielle brynlee charli delaney eliza ember
+emersyn everleigh evie finley freya gemma hadley harlow haven isabelle journee juniper kaia kali kehlani khloe
+laila lainey leila lennon lila liliana lilly lyla maeve magnolia makenna margot marley mckenna melody mya nyla
+presley raelynn reagan remi reese ryleigh saylor sienna sloane sutton talia teagan thea wren zara adelaide
+alayna aliyah amari ana ariella aspen brynn camille catalina charlee collins daleyza dahlia elaina elianna
+emerson esme evangeline everlee gracelyn hallie harmony jayla jordyn julianna kaylani kenzie kimber kyla lia
+lilah lilith londyn macy maia malia maryam miracle nadia oaklynn phoebe raegan rory royalty rylie sarai selah
+skye tatum willa winter zuri alani alessandra amira anya ari azalea briana camryn celine dayana emely
+esperanza estrella fatima francesca heaven jazlyn jimena jolie kailani karina kataleya leia leighton liana
+lilliana lina luciana madilyn marina miah milani monroe myla nayeli noelle paola paris promise renata salma
+samara sasha scarlet serena viviana yaretzi zelda abram adan ahmed alec alejandro ali alonso anderson armani
+august bear bo bowen braxton bruno cade callum case cesar cohen conner cristian cyrus dax dexter edgar edison
+emilio emir erick fabian felipe fletcher gerardo gianni grady gunnar harlan hugo ibrahim israel jacoby jalen
+jamari jayceon jayson jefferson jensen joaquin johan kamari kasen keanu kellan kendrick khalil koa kobe kyler
+landen leland leonel lionel louie lucian maddix malakai marcelo mohamed mohammed muhammad nasir nikolas noel
+pablo quinton remington remy rey rodrigo romeo samson santino stetson tadeo tristen wilder xander yusuf zayn
+aiyana brayan alvaro adolfo agustin alton ambrose anton augustus barney bart benedict bennie bert blaine boyd
+bradford brady buck bud buddy burt carey carroll cary clark clay conrad cornell darwin delbert denny dewey
+domingo donnie dudley earnest edmund elbert eldon ellis elton elvis emanuel emil ervin forrest garland gerry
+grover hal harley hubert irvin jacques jamar jan jarvis jed jerald jess kermit kirby laurence lenny les lowell
+lyndon mack marty merle micheal mickey monte murray myron ned norbert odell orville ozzie percy randolph reece
+rodolfo rolando roscoe rudolph seymour sheldon sid sonny stewart terence thaddeus tomas truman tyree ulysses
+van vaughn vern vic wiley wilfred will alden alvis arnold carmine clement cleo elwood ferdinand gale garth
+hollis irwin lemuel linwood mervin nathanael newton pierce royce rupert sherwood stanford thurman vance
+webster weldon wilmer woody abbie addie adele adrienne aileen alexandria alisha alta alva amalia amelie
+anastacia angel angeline angelia annabel annmarie antonia avis babette bettie bettye beulah bobbi bonita
+brigitte camilla candy carlene carmela carolina caryn cecile celestine charmaine cherry cheri chrystal
+claudette clarice colette concetta consuelo corinne corrine cristy darcy deann deanne debora debby dee deena
+delia dena dessie diann dianna dianne dollie dona dorothea edwina elda eleanore elinor ellie elma elnora elva
+elvira emilie emmy ernestine eugenia evangelina fern fran gay gena georgette georgina geri gilda ginny glenna
+goldie greta gussie hannelore hester hollie ilene isabell iva jackeline jana janette janis janna jayne jeanie
+jeannette jeannine jewel jewell joanna jodie joni josefina joycelyn juliette justine karin karyn katheryn
+kathi kathrine kaye kelley kimberley kris lea leann leanne lenore leola leticia letitia lilia linnea lisette
+liza lorena lorna louisa luann lucile luella luz lynda lynette lynne madeleine madge mara marcella margery
+margie mari maribel maricela marilynn marisol maritza marla marlena marnie martina marva maryanne marylou
+matilda maud maura may meagan melba melisa melodie michele milagros mindi minerva mitzi mollie myra nan nannie
+natasha noemi nola nona octavia odessa ola pansy patti pattie peggie petra queen rae reba rebeca rhea rochelle
+rosalyn rosanne rosario roseann rosella rosetta rowena roxanna ruthie sabina sallie sandi sandie selma shari
+sharron shelia sherrie sondra stefanie suzette suzy sybil tamra tania teri terrie tonia tracie twila ursula
+valarie vickie vilma virgie wilhelmina yesenia zelma zora daryl krystal mathew jillian johnathan bernadette
+jonathon raven allan michaela stephan latisha dewayne christi jarrett amie jaylen angelique jaiden jacklyn
+trenton brianne nickolas katlyn zackary abbey zachery ericka isiah lora rusty loren maverick marybeth beckham
+cathleen deacon keri lawson kinley porter rylee ace alivia jase brenna brennan giselle willis jazmine hiram
+kiana lucius mikaela dusty savanna rodger tiara randal cornelia rickie estella efren augusta eliseo lettie
+fidel stacie leopoldo lyndsey lupe kristal marcelino shayla nestor alisa noe alissa reynaldo alyson wilfredo
+madisyn aurelio makenzie benito haylee cruz kailey edgardo aubrie gregorio brooklynn horacio emilee moises
+nataly santos madelynn mariela adelyn griselda kaylin elvia rosalinda ofelia socorro refugio marisela gareth
+kirsty nigel clive nicola geoffrey gillian lesley kieran beryl alfie doreen poppy imogen jenson albie maisie
+giles isobel hamish angus alastair tilly alistair kayleigh fergus chantelle euan ewan fraser tegan finlay
+yasmin lachlan keira brodie kiera cian saffron conor oisin aimee seamus demi padraig india ciaran rhiannon
+eoin siobhan niall niamh cathal aoife darragh sinead donal aisling fintan roisin tadhg orla dermot saoirse
+grainne caoimhe clodagh paddy eimear cormac fionnuala diarmuid nuala colm sorcha una bronagh shay aine mairead
+dafydd cerys gethin carys owain bethan ieuan angharad iwan ffion bryn seren emrys catrin gwyn nia idris sian
+huw eleri aled lowri glyn mali dai alun gwyneth teddy ernie edie bertie herbie dolly monty lexie macie kacey
+jemma sheree narelle shona raelene roslyn leonie bevan kiri hemi aroha deshawn shaniqua deandre tanisha
+lakeisha javon shanice keon imani dashawn tiana rashad tierra tavon precious trevon essence tremaine kenya
+demarcus latonya dequan latrice marquise shameka lashonda tameka antoine yolonda lamont cedrick marlon jamila
+devonte shanika jaquan shantel davon monae kareem jabari zaria kwame ayana amani akira kofi nyah abe alf art
+artie benji cal chaz chip cliff davey dick dickie eddy freddy geoff gil herb howie ike jimbo jonny len manny
+matty mick mikey mitch mo nicky phil richie stevie stu vin vinny wally zeke ally andi becka cami cat cate cece
+char cissy corrie dani danni elle flo frannie gigi jessi jojo jules kat kiki lil lindy liv livvy izzy issy
+lulu maddy mags mandi marge mimi nat nessa peg pippa ria roz sal sissy steffi suzie tash tori viv guadalupe
+veronica araceli guillermo gustavo silvia rogelio beatriz ignacio graciela fernanda diego daniela lourdes
+mauricio susana rocio efrain heriberto esteban nicolas fabiola ramiro humberto rigoberto gilberto octavio
+leonor ezequiel reyna ismael isidro lazaro anibal esmeralda osvaldo eusebio pilar inmaculada nuria raquel
+jordi montserrat inaki ainhoa alba pau laia nerea aitor itziar unai amaia gorka maite xabier iratxe leire
+mikel idoia asier arantxa borja marta inigo begona gonzalo macarena nacho paloma pepe conchita paco
+encarnacion manolo remedios chema almudena quique noelia vanesa santi josep nieves rosalia oriol sergi pol
+judit arnau mireia aina jaume merce francisca juana josefa angeles sofia ines vicente lidia estefania agustina
+florencia facundo micaela lautaro bautista abril franco gael romina maximo constanza antonella belen lisandro
+valentino cristobal javiera trinidad isidora leandro amparo yuliana jhon leidy yesica marcela camilo manuela
+jhonny citlali itzel xochitl dulce ulises anahi yahir jair rubi viridiana hans klaus monika jurgen wolfgang
+sabine uwe renate dieter helga gunter horst helmut werner manfred gisela gerhard susanne heinz birgit karl
+rolf bernd ralf anja joachim katrin markus heike sven silke torsten tanja dirk jens kerstin matthias gabriele
+florian elke anke ute jutta gertrud maximilian ilse niklas moritz philipp dominik marcel hanna nils lars ole
+hannes katharina andreas franziska stefan svenja annika jannik timo benedikt konstantin magdalena henrik
+mareike lennart mats mathilda oskar pia jakob luisa till jule malte bastian hanne armin gudrun detlef waltraud
+reinhard irmgard siegfried rosemarie gunther liselotte egon ingeborg volker roswitha hartmut annegret eckhard
+dagmar wilfried barbel lothar margit rainer ulrich gerda holger hildegard ernst elfriede herta friedrich erna
+hermann wilhelm anneliese heinrich margarete fritz gottfried elisabeth nathalie pierre michel sylvie philippe
+francoise alain christophe sandrine laurent veronique frederic martine stephane olivier chantal sebastien
+aurelie julien thierry pascal manon francois margaux yves mathilde didier elodie laetitia serge virginie
+severine georges delphine henri karine helene maxime josette romain simone mathieu odile guillaume benoit
+solange fabrice franck josiane gilles ghislaine herve jocelyne mireille annick ludovic murielle mickael gaelle
+yann marine arnaud oceane baptiste lucie adrien coralie valentin morgane corentin anais raphael amandine
+gaston lucien gabin loic maelle killian noemie damien fabienne sylviane alexandre claudine thibault clemence
+capucine gaetan louane sylvain marius timothee giuseppe giuseppina giovanni giovanna luigi francesco vincenzo
+pietro caterina salvatore carlo antonietta domenico margherita paolo giulia giorgio chiara aldo luciano
+stefano ginevra alessia alessandro federica matteo davide simona federico riccardo tommaso giulio emanuele
+fabio massimo maurizio ilaria claudio enrico giacomo filippo raffaella edoardo mattia patrizia daniele
+loredana alessio graziella gianluca nunzia assunta pasquale immacolata raffaele annunziata gennaro rosaria
+ciro filomena cosimo lucrezia fabrizio vittoria ivano renato sandro cinzia dario tiziana mirko elisabetta
+fausto donatella ettore ornella umberto mirella silvio vittorio samuele benedetta eleonora denis joao luiz
+aline raimundo bruna manoel larissa mateus luana eliane guilherme raimunda tereza tiago rosangela andreia
+marcio sebastiao priscila edson tatiana vitor cristiane matheus fabiana joaquim flavia vinicius helena isabela
+rogerio lara wellington livia washington rafaela cleber thais adriano heloisa junior conceicao flavio graca
+caio davi vitoria heitor bernardo murilo otavio henrique nuno duarte goncalo matilde rui filipe mafalda afonso
+margarida madalena diogo vasco catarina joana johannes sanne hendrik femke cornelis anouk pieter fleur willem
+lotte gerrit jacobus maaike marieke sem annemarie daan joke bram thijs els stijn willemijn joost bas inge koen
+mirjam wouter saskia maarten marloes jeroen lieke sander lisanne ruud mirthe kees noa henk roos joop isa gert
+fenna luuk evi milan jasmijn gijs teun wessel nienke arjen ineke arjan freek hanneke joris annelies martijn
+hilde michiel jolanda pim remco astrid rutger geert sjoerd tijs jannie wim truus piet klaas mieke jaap greet
+ton anders per elsa mikael ebba bjorn saga maja freja morten magnus frida sigrid solveig filip isak viktor
+inger kristian birgitta knut ulla olav gunilla arne leif mette rune lone tor anette malin rasmus sanna mads
+emelie soren elin jesper signe kasper tove frederik siv christoffer britt sindre marit eirik randi espen berit
+oyvind ragnhild terje geir sissel trond tone kjell trine stig line ulf maren bengt goran cecilie ake torbjorn
+ase ingvar hakan agneta joakim fredrik linus stina ludvig klara albin tilde melker mikko aino juha liisa jukka
+anneli tuula matti paivi pekka minna antti satu jari sari sami tiina heikki riikka ville marja janne maija
+tuomas eeva petri kaisa eero helmi boris igor svetlana dmitri irina vladimir katya sergei alexei nikita yuri
+mikhail galina dimitri andrei oksana ludmila pavel dimitris eleni nikos katerina giorgos despina yannis
+vasiliki kostas ioanna christos dimitra stavros angeliki spiros nikolaos evangelia konstantinos panagiota
+panagiotis chrysa vasilis theodoros demetrios costas kalliope piotr katarzyna krzysztof malgorzata tomasz
+agnieszka pawel marcin michal zofia lukasz krystyna jakub dorota kamil beata mateusz aleksandra wojciech
+karolina marek justyna grzegorz jadwiga andrzej elzbieta stanislaw halina zbigniew danuta jerzy grazyna
+tadeusz iwona jacek urszula dariusz bozena rafal kasia bartosz gosia przemek amina mariam noor hassan zainab
+hussein mustafa hana youssef nour khalid karim rania tariq hamza sana bilal imran samira faisal rashid farah
+abdullah huda mahmoud rana samir iman nabil raj priya rahul pooja amit anjali sanjay neha vijay divya ravi
+sunita arjun kavita rohan deepa aarav lakshmi vikram ananya anil shreya sunil meera deepak asha ashok nisha
+ajay rekha suresh geeta ramesh sita manoj radha rajesh usha vivek swati nikhil aditi harish riya krishna diya
+gaurav aanya varun isha karan simran arun preeti sachin jyoti naveen kiran sandeep ritu pradeep seema dinesh
+shilpa mahesh lata prakash smita gurpreet manpreet harpreet jaspreet navdeep amandeep wei mei ming ling jun
+hui yan xin jian fang hong jing lei min tao hao ying qiang yu xiu lan feng li chen qing kenji yuki hiroshi
+sakura takashi aiko yui haruto kenta emi daiki keiko hiro taro yoko satoshi mai kazuki rin ryota mio shin
+ayumi minjun jiwoo seojun seoyeon jihoon jisoo minho minji hyun eunji sung soyeon joon hyejin yuna minh linh
+anh thanh hung thuy tuan trang duc hoa long ngoc hai phuong quang huong khanh thao dung hien moshe rivka avi
+yael yosef tamar noam shira chaim chaya shlomo avraham devorah yitzhak menachem malka eitan yonatan itai oren
+dalia uri liora ayelet rudolf hedwig willi antje gustav britta georg maike ludwig gerlinde johann christel
+josef uta franz erich konrad jorg steffen carsten heiko olaf thorsten sascha maik yannick fynn luc ambre regis
+romane sacha agathe mathis maeva matheo christelle maxence nadege kylian gisele thibaut huguette aurelien
+marcelle bastien odette fabien therese florent germaine jeremie lucienne gregoire pascale ginette nunzio
+giuliana gino grazia dino pina nino stefania piero vincenza pino carlotta ugo giorgia elio nicoletta remo
+carmelo eugenio gaetano gianfranco gianluigi giancarlo guido italo lino marcello mauro renzo romano silvano
+valerio helder lurdes martim simao lourenco cyril gwendoline neville gaynor basil felicity jemima piers tamsin
+barnaby clementine philippa persephone beatrix cecily humphrey imelda eugenie lorcan hermione honor verity
+leopold ivor portia mariella alasdair morag iain mhairi ruaridh kirstie eilidh catriona gregor calum duncan
+elspeth kirstin ailsa blair dougal moira ruairi rhona mairi callan iona fergal eamon eamonn fionn cillian
+bridie kieron odhran shea eilis feargal orlaith enda emer tiernan padraic caitriona eoghan maire dara
+blathnaid ailbhe cliodhna fiadh clare garret gearoid rhydian tomos osian cai geraint llewellyn rhian olwen
+bronwen hywel morwenna ifan jac sioned
+
+[surnames]
+smith johnson williams brown jones garcia miller davis rodriguez martinez hernandez lopez gonzalez wilson
+anderson thomas taylor moore jackson martin lee perez thompson white harris sanchez clark ramirez lewis
+robinson walker young allen king wright scott torres nguyen hill flores green adams nelson baker hall rivera
+campbell mitchell carter roberts gomez phillips evans turner diaz parker cruz edwards collins reyes stewart
+morris morales murphy cook rogers gutierrez ortiz morgan cooper peterson bailey reed kelly howard ramos kim
+cox ward richardson watson brooks chavez wood james bennett gray mendoza ruiz hughes price alvarez castillo
+sanders patel myers long ross foster jimenez powell jenkins perry russell sullivan bell coleman butler
+henderson barnes gonzales fisher vasquez simmons romero jordan patterson alexander hamilton graham reynolds
+griffin wallace moreno west cole hayes bryant herrera gibson ellis tran medina aguilar stevens murray ford
+castro marshall owens harrison fernandez mcdonald woods washington kennedy wells vargas henry chen freeman
+webb tucker guzman burns crawford olson simpson porter hunter gordon mendez silva shaw snyder mason dixon
+munoz hunt hicks holmes palmer wagner black robertson boyd rose stone salazar fox warren mills meyer rice
+schmidt garza daniels ferguson nichols stephens soto weaver ryan gardner payne grant dunn kelley spencer
+hawkins arnold pierce vazquez hansen peters santos hart bradley knight elliott cunningham duncan armstrong
+hudson carroll lane riley andrews alvarado ray delgado berry perkins hoffman johnston matthews pena richards
+contreras willis carpenter lawrence sandoval guerrero george chapman rios estrada ortega watkins greene nunez
+wheeler valdez harper burke larson santiago maldonado morrison franklin carlson austin dominguez carr lawson
+jacobs obrien lynch singh vega bishop montgomery oliver jensen harvey williamson gilbert dean sims espinoza
+howell li wong reid hanson le mccoy garrett burton fuller wang weber welch rojas lucas marquez fields park
+yang little banks padilla day walsh bowman schultz luna fowler mejia davidson acosta brewer may holland juarez
+newman pearson curtis cortez douglas schneider joseph barrett navarro figueroa keller avila wade molina
+stanley hopkins campos barnett bates chambers caldwell beck lambert miranda byrd craig ayala lowe frazier
+powers neal leonard gregory carrillo sutton fleming rhodes shelton schwartz norris jennings watts duran
+walters cohen mcdaniel moran parks steele vaughn becker holt deleon barker terry hale leon benson haynes
+horton miles lyons pham graves bush thornton wolfe warner cabrera mckinney mann zimmerman dawson lara fletcher
+page mccarthy love robles cervantes solis erickson reeves chang klein salinas fuentes baldwin daniel simon
+velasquez hardy higgins aguirre lin cummings chandler sharp barber bowen ochoa dennis robbins liu ramsey
+francis griffith paul blair oconnor cardenas pacheco cross calderon quinn moss swanson chan rivas khan rodgers
+serrano fitzgerald rosales stevenson christensen manning gill curry mclaughlin harmon mcgee gross doyle garner
+newton burgess reese walton blake trujillo adkins brady goodman roman webster goodwin fischer huang potter
+delacruz montoya todd wu hines mullins castaneda malone cannon tate mack sherman hubbard hodges zhang guerra
+wolf valencia saunders franco rowe gallagher farmer hammond hampton townsend ingram wise gallegos clarke
+barton schroeder maxwell waters logan camacho strickland norman person colon parsons frank harrington glover
+osborne buchanan casey floyd patton ibarra ball tyler suarez bowers orozco salas cobb gibbs andrade bauer
+conner moody escobar mcguire lloyd mueller hartman french kramer mcbride pope lindsey velazquez norton
+mccormick sparks flynn yates hogan marsh macias villanueva zamora pratt stokes owen ballard lang brock
+villarreal charles drake barrera cain patrick pineda burnett mercado santana shepherd bautista ali shaffer
+lamb trevino mckenzie hess olsen cochran morton nash wilkins petersen briggs shah roth nicholson holloway
+lozano rangel flowers hoover short arias mora valenzuela bryan meyers weiss underwood bass greer summers
+houston carson morrow clayton whitaker decker yoder collier zuniga carey wilcox melendez poole roberson larsen
+conley davenport copeland massey lam huff rocha cameron jefferson hood monroe anthony pittman huynh randall
+singleton kirk combs mathis christian skinner bradford richard galvan wall boone kirby wilkinson bridges bruce
+atkinson velez meza roy vincent york hodge villa abbott allison tapia gates chase sosa sweeney farrell wyatt
+dalton horn barron phelps yu dickerson heath foley atkins mathews bonilla acevedo benitez zavala hensley glenn
+cisneros harrell shields rubio huffman choi boyer garrison arroyo bond kane hancock callahan dillon cline
+wiggins grimes arellano melton oneill savage ho beltran pitts parrish ponce rich booth koch golden ware
+brennan mcdowell marks cantu humphrey baxter sawyer clay tanner hutchinson kaur berg wiley gilmore russo
+villegas hobbs keith wilkerson ahmed beard mcclain montes mata rosario vang walter henson oneal mosley mcclure
+beasley stephenson snow huerta preston vance barry johns eaton blackwell dyer prince macdonald solomon guevara
+stafford english hurst woodard cortes shannon kemp nolan mccullough merritt murillo moon salgado strong kline
+cordova barajas roach rosas winters jacobson lester knox bullock kerr leach meadows davila orr whitehead
+pruitt kent conway mckee barr david dejesus marin berger mcintyre blankenship gaines palacios cuevas bartlett
+durham dorsey mccall odonnell stein browning stout lowery sloan mclean hendricks calhoun sexton chung gentry
+hull duarte ellison nielsen gillespie buck middleton sellers leblanc esparza hardin bradshaw mcintosh howe
+livingston frost glass morse knapp herman stark bravo noble spears weeks corona frederick buckley mcfarland
+hebert enriquez hickman quintero randolph schaefer walls trejo house reilly pennington michael conrad giles
+benjamin crosby fitzpatrick donovan mays mahoney valentine raymond medrano hahn mcmillan small bentley felix
+peck lucero boyle hanna pace rush hurley harding mcconnell bernal nava ayers everett ventura avery pugh mayer
+bender shepard mcmahon landry case sampson moses magana blackburn dunlap gould duffy vaughan herring mckay
+espinosa rivers farley bernard ashley friedman potts truong costa correa blevins nixon clements fry delarosa
+best benton lugo portillo dougherty crane haley phan villalobos blanchard horne finley quintana lynn esquivel
+bean dodson mullen xiong hayden cano levy huber richmond moyer lim frye sheppard mccarty avalos booker waller
+parra woodward jaramillo krueger rasmussen brandt peralta donaldson stuart faulkner maynard galindo coffey
+estes sanford burch maddox vo oconnell vu andersen spence mcpherson church schmitt stanton leal cherry compton
+dudley sierra pollard alfaro hester proctor lu hinton novak good madden mccann terrell jarvis dickson reyna
+cantrell mayo branch hendrix rollins rowland whitney duke odom daugherty travis tang archer haas wilder
+kaufman hartley hatcher bray lindsay kirkland mcknight bowden hogue pickett kinney pruett wooten lott mccray
+roper beatty bolton hammer cooke browne nance holder sheridan bolden blanton kendall mcgowan haney stroud
+emerson dunbar stinson mcgrath merrill burris pate whitley weir connolly connor mcneil peoples mccabe bauman
+rankin keene gamble staley lyon sykes crowley eldridge hammonds whitfield spivey crowe hendrickson mcmanus
+ennis frey leslie goff lowry vernon goss ruff langley justice burnham coates tubbs carver gallo dooley lacey
+noel skaggs ferris whitman paige bunch mccollum alston hays graff burt storey tillman langford childers
+madison witt oakley starr shirley seymour hilton mcgill fortune ayres greenwood mcmillen harlan hendrick
+rucker holcomb nicholas irwin ritter mullin sutherland tyson eubanks fink whalen holley mcgraw platt benoit
+ryder tatum gunn hutchins paxton bowles cotton mccord winn sweet yarbrough woodruff seals rowell mcneal
+tidwell hutson reece fontaine pitman barlow link bergeron squires cash dugan eason patten gillis britt moseley
+haskins dick mcclellan easley beach goodrich batista blackmon tobin pederson stovall reddy hamlin mcqueen
+mcclendon hurd lusk bloom chadwick murdock dye amos chaney lockhart hatch nickerson horner gilliam redmond
+crow elkins weston mcfadden ivey spangler salter creech dotson stallings lassiter bowling mcnamara akers
+kirkpatrick easton ruth hairston quigley mabry mcleod greenberg hinkle ratliff shapiro nunn schofield kearney
+mcelroy huston mcnally shipley kinsey farr carney penn ashby mcwilliams whitlock draper ledford puckett marino
+connell hurt wilkes holbrook schuster rowley jolly ellington boggs mcdonough irvin landers painter melvin
+lilly cyr ridley rutledge clausen devine holman crum mcdermott bratton crabtree lockwood maher kendrick
+mccormack abernathy huggins coker pryor newsome jewell oneil herndon bunn schulz carlisle bacon blount
+cavanaugh hardwick whitten hagan schaeffer humphries neely cagle fenton foreman lawler mcallister dempsey
+brandon barbour pettit stringer burrell lamar lyle dobbs spaulding crowder wheat winston stubbs redd burleson
+schreiber vinson coyle kauffman tremblay ogden rinehart whittaker schwab keefe upton seaton alford fritz
+mcgregor brewster mcadams rafferty eckert mccloskey mcmullen messer rainey mcdonnell keating hanley dunham
+gaskins hagen stoddard roe huey brinkley mccallum carmichael ott hinson helms fulton mcnair kearns blum
+jeffries redding koenig rowan fortner gorman withers pemberton farnsworth abrams ackerman adair aguilera
+albert albright allred anaya aragon archuleta arce armijo arnett arrington ash ashworth atwood babcock bagley
+bain baird barksdale barnard barnhart barragan barrientos bartholomew bartley bateman battle baumgartner beam
+beaver becerra beckman begay bellamy belcher bergman berman bernstein betancourt betts bird blackman blackwood
+blalock bland blue bonner boswell bourgeois boyce boykin brantley bright britton broussard bryson buckner
+bullard bundy burk burks burr burrows butcher butts byers byrne byrnes cabral cahill calloway camp capps
+carbajal cardona carlton carmona carranza carrasco carrier carrington castellanos castle caudill chapa
+chappell chatman childress childs chin cho christie christopher chu clancy cleveland clifford clifton clinton
+cody coe coffman colbert colvin conklin conn connelly connors cooley cope corbett corbin cordero cornelius
+cornell corral costello couch coulter courtney covington cowan craft cramer crandall crenshaw crews crockett
+cromwell crouch crowell crump cuellar culver curran currie dahl dailey daley daly darby darden darling davies
+delaney deluca denton desai dewitt diamond dickens dickey dickinson diggs dillard dinh doan dobson dodd dodge
+doherty dolan donahue donnelly dove downey downing downs driscoll drummond dubois dumas dunne dupuis dutton
+dwyer dykes eastman echols edmonds edmondson egan elmore elrod engel ernst ervin erwin esposito ewing fagan
+fairchild farrar farris feldman felton fernandes ferrell field finch finn fitch fitzsimmons flanagan forbes
+forrest fountain fournier franks fraser funk galloway gannon garber garland gaston gay gerber gibbons gifford
+gil gilman givens gleason goddard godfrey godwin goins gold goldberg goldman goldstein gomes goode gore grace
+grady granger grayson gregg griggs grimm groves grubbs guidry gunter guthrie guy hackett hadley haines hamm
+hand hankins hanks harden hargrove harley hastings hathaway hauser hawley hawthorne head healy hedrick heller
+helton henley hennessy herbert hewitt hickey hightower hilliard hirsch hitchcock hobson holden holliday
+hollingsworth hollis honeycutt hooker hooper hope hopper hoyt hutchison hyatt hyde ireland isaac isaacs ivy
+jacobsen jameson jamison jarrett jeffers jernigan jewett joiner joyce joyner judd kahn kaiser kaplan kay
+keenan kellogg kelsey kenney kenny kenyon kern kessler key keyes keys kidd kilgore killian kimball kincaid
+knowles kohler krause kuhn kurtz kyle lacy ladd laird lake lange langston lanier larkin latham lau law layton
+leary leavitt ledbetter lehman lemon levine lind linton lipscomb littleton locke lockett lombardi london
+looney lord lovelace lovell lovett loyd ludwig lund lundy luther lutz machado mackey magee major mallory
+maloney manuel marcus markham masters matos mayes mayfield mccain mccracken mcginnis mchugh mckenna mckinley
+mcneill mcrae meade medeiros meeks mercer metcalf metz michaels millard milligan milner mims miner minor
+mooney moreland morin moser munson nagel napier neff negron nesbitt neumann neville newcomb newell ng nieves
+nix norwood odell olivares osborn otero ouellette overton padgett pappas paredes payton pearce pedersen
+pendleton perdue petty pfeiffer pickens pierson pike pinto piper plummer poe pollock polk pool posey post
+prescott presley pritchard purcell purdy putnam quinones raines ramey ransom read reagan reardon regan
+reinhardt richey richter ricks riddle rider riggs ripley ritchie roche rockwell rodriquez romo rooney rosa
+rosen rosenberg rouse rubin rudolph rutherford saenz salcedo samuels sanderson sands sargent scarborough
+schaffer schiller schrader schumacher sears sepulveda sewell shea shearer sheehan sheldon sherrill sherwood
+shoemaker siegel silver silverman simms sinclair singer slater slaughter snell snider sommers sorensen spicer
+sprague stacy stahl stanford staples steiner sterling stern steward stiles stockton story stover stratton
+sumner swain swartz swift talbot talley teague temple thacker thayer thomason thorne thorpe thurman tierney
+timmons tipton toledo tomlinson tracy trammell trimble tripp trotter tuttle uribe valle vann varner velasco
+vera vickers voss waddell walden waldron washburn welsh werner wesley westbrook winslow womack woo woodall
+woodson workman worley wray wynn yazzie yeager youngblood zapata ziegler griffiths rees parry thomson hussain
+begum mahmood akhtar iqbal rahman ahmad paterson robson sutcliffe hargreaves marsden hirst kershaw nuttall
+howarth haworth butterworth duckworth fairclough broadbent crossley mellor rothwell wadsworth shackleton
+priestley lawton oldham firth clough bradbury boulton brookes bainbridge appleby ainsworth ashton barrow
+beckett birch charlton dent goodall halliday hough leigh metcalfe moorhouse parkinson pickering wilde
+worthington baines beale blackmore bolt braithwaite brook button chamberlain cheshire coles coombs crisp dale
+drew dyson eden elliot fielding forster gale gardiner gough greaves hayward hedges humphreys peacock smart
+wakefield howells rowlands probert bevan prosser llewellyn meredith oreilly odoherty kavanagh odriscoll ohara
+okeeffe oleary omahony omalley oshea osullivan otoole power keane moloney shanahan whelan cullen mcdonagh
+mcloughlin mcgovern maguire gormley devlin duggan horgan keogh kinsella madigan mulcahy murtagh nugent phelan
+scanlon slattery treacy twomey cassidy coughlan dowling fallon feeney flaherty gaffney geraghty hanlon hegarty
+hennessey mcevoy moriarty mulligan noonan macleod mackay maclean macgregor mackinnon macintyre macpherson
+macrae macmillan mackintosh macaulay macfarlane johnstone munro docherty mckinnon menzies moffat muir ogilvie
+urquhart wylie mcewan mcfarlane findlay gillies hay innes brodie muller hoffmann schafer schroder zimmermann
+braun kruger hofmann hartmann schmitz meier lehmann schmid schulze maier herrmann konig walther fuchs scholz
+moller jung schubert vogel friedrich gunther winkler lorenz baumann franke albrecht bohm boehm kraus vogt
+jager jaeger sommer seidel heinrich graf schulte dietrich pohl busch bergmann voigt sauer wolff beyer seifert
+lindner kraft schilling barth thiel herzog bock otto winter schwarz krebs hesse goetz ulrich wendt hermann
+geiger ebert dietz kurz brenner binder scherer marx paulsen petit durand leroy moreau laurent lefebvre roux
+bertrand morel girard bonnet dupont rousseau lefevre faure mercier blanc guerin garnier chevalier legrand
+gauthier perrin robin clement roussel mathieu gautier masson marchand duval dumont lemaire dufour meunier brun
+giraud joly riviere brunet gaillard barbier arnaud gerard renard leroux colin vidal caron picard fabre aubert
+lemoine renaud lacroix pierre leclerc rolland leclercq guillaume lecomte dupuy guillot carpentier moulin
+deschamps huet vasseur fleury royer jacquet poirier marty aubry guyot carre renault charpentier menard
+maillard bertin bailly herve collet leger bouvier prevost millet perrot germain besson langlois remy pelletier
+leveque perrier barre lebrun marchal mallet hamon boulanger monnier michaud guichard gillet etienne tessier
+chevallier collin chauvin bouchet lemaitre marechal humbert reynaud perret barthelemy lejeune lamy delaunay
+laporte gagnon cote bouchard lavoie fortin gagne ouellet belanger levesque paquette simard beaulieu cloutier
+dube lapointe poulin thibault nadeau martel bedard grenier lessard bernier desjardins couture turcotte
+lachance parent blais gosselin savard proulx beaudoin demers perreault boudreau lemieux perron dion boisvert
+plante champagne paradis fortier arsenault villeneuve allard leduc jacques alonso blanco sanz iglesias garrido
+prieto calvo gallego caballero nieto pascual herrero lorenzo montero hidalgo gimenez ibanez ferrer vicente
+crespo pastor saez moya soler esteban gallardo vila pardo conde varela rey aparicio soriano mateo hurtado
+serra bermudez plaza lazaro diez barrios bustamante cedillo gamboa godoy montenegro osorio quiroga rincon
+tellez ulloa urbina vallejo ocampo arrieta bustos caceres cifuentes echeverria fajardo fierro quintanilla
+saavedra tamayo escamilla granados hinojosa mares marroquin montalvo orellana ornelas pantoja quezada rosado
+saldana segura solano sotelo tovar valadez zambrano zarate alcala almanza arreola banuelos cavazos ceja chacon
+delgadillo elizondo escalante espino farias garibay gaytan guajardo jasso ledesma leyva limon lira loera lujan
+madrigal mancilla melgar mena mendiola meraz monroy munguia nevarez olvera oropeza padron palomino partida
+perales rascon renteria reza rico rivero robledo rodarte saucedo sauceda serna solorzano tamez terrazas
+toscano ugalde urias vela vergara yanez zepeda ferreira pereira oliveira rodrigues martins jesus sousa souza
+goncalves lopes marques alves almeida ribeiro carvalho teixeira moreira correia mendes nunes soares vieira
+monteiro cardoso neves coelho cunha pires reis simoes antunes fonseca araujo barbosa tavares lourenco
+figueiredo azevedo freitas barros dias nascimento lima moura borges melo cavalcanti sampaio macedo rossi
+ferrari bianchi romano colombo ricci greco bruno conti mancini giordano rizzo moretti barbieri fontana santoro
+mariani rinaldi caruso ferrara galli martini leone longo gentile martinelli vitale lombardo coppola desantis
+damico marchetti parisi conte ferraro ferri fabbri bianco marini grasso valentini messina sala deangelis gatti
+pellegrini palumbo sanna farina rizzi monti cattaneo morelli amato silvestri mazza testa grassi pellegrino
+carbone giuliani benedetti barone rossetti caputo montanari palmieri bernardi martino fiore derosa ferretti
+bellini basile riva donati piras vitali battaglia sartori neri costantini milani pagano ruggiero sorrentino
+orlando napolitano palermo catalano donato aiello capone cuomo dangelo dimarco dipietro falcone ferrante
+grimaldi maggio marchese napoli romeo salerno santangelo tedesco valenti zito genovese lanza marchi mariano
+monaco piazza simone stella dejong jansen devries vandenberg vandijk bakker janssen visser smit meijer deboer
+mulder degroot bos vos hendriks vanleeuwen dekker brouwer dewit dijkstra smits degraaf vandermeer vanderlinden
+kok dehaan vermeulen vandenheuvel vanderveen vandenbroek debruijn debruin vanderheijden schouten vanbeek
+willems vanvliet vandeven hoekstra maas verhoeven koster vandam vanderwal prins blom huisman peeters dejonge
+kuiper vanwijk kuipers veenstra vandenbosch vanderlaan vanveen schipper molenaar timmermans wouters maes claes
+goossens wuyts mertens hermans aerts dewolf desmet vandamme vandyke vanhorn vanburen roosevelt koning postma
+verbeek vermeer nowak kowalski wisniewski wojcik kowalczyk kaminski lewandowski zielinski szymanski wozniak
+dabrowski kozlowski jankowski mazur wojciechowski kwiatkowski krawczyk kaczmarek piotrowski grabowski zajac
+pawlowski michalski krol wieczorek jablonski wrobel nowakowski majewski olszewski stepien malinowski jaworski
+adamczyk dudek nowicki pawlak gorski witkowski walczak sikora baran rutkowski michalak szewczyk ostrowski
+tomaszewski pietrzak zalewski wroblewski marciniak jasinski zawadzki bak jakubowski sadowski duda wilk
+wlodarczyk chmielewski borkowski sokolowski szczepanski sawicki kucharski kalinowski wysocki mazurek kubiak
+maciejewski czarnecki kolodziej kazmierczak adamski sobczak kowalewski czerwinski cieslak pulaski novotny
+dvorak svoboda cerny prochazka kucera vesely horak nemec marek urban horvath toth nagy szabo kovacs varga kiss
+molnar nemeth farkas johansson andersson karlsson nilsson eriksson larsson olsson persson svensson gustafsson
+pettersson jonsson jansson hansson bengtsson lindberg jakobsson magnusson olofsson lindstrom lindqvist
+lindgren axelsson bergstrom lundberg lundgren lundqvist mattsson berglund fredriksson sandberg henriksson
+forsberg sjoberg wallin engstrom eklund danielsson lundin hakansson bjork gunnarsson holm bergqvist nystrom
+holmberg nyberg nordstrom strom lindholm christiansen jorgensen madsen kristensen thomsen poulsen johansen
+mortensen nilsen kristiansen karlsen johnsen pettersen eriksen haugen halvorsen henriksen jakobsen moen strand
+solberg svendsen eide bakken lie amundsen korhonen virtanen makinen nieminen makela hamalainen laine heikkinen
+koskinen jarvinen lehtonen lehtinen saarinen salminen niemi salo katz epstein horowitz levin rothman segal
+adler berkowitz cohn eisenberg fishman ginsberg gottlieb greenwald grossman lerner lieberman mandel moskowitz
+nadler perlman rothstein sachs schiff spector strauss wasserman weinberg weinstein weissman abramson applebaum
+dreyfus edelman frankel glick goldsmith hecht kagan landau margolis mintz pollack rabinowitz resnick rosenthal
+schulman shulman steinberg wolfson zuckerman zhao zhou xu sun ma zhu hu guo he gao luo zheng liang xie song
+han feng deng cao peng zeng xiao tian dong pan yuan cai jiang du ye cheng wei su ding ren yao shen zhong cui
+tan fan fu jin qian qin shi xue yan yin bai kong mao qiu hao lei wen zou gu hou shao meng wan duan tao cheung
+leung tsang chow yip fung kwok yeung chiu tse siu mak kwan kwong lai man mok poon so tam tong tsui yuen au
+chau chong chua goh koh loh low ong teo toh ang chia foo khoo lew liew ooi sim tay yap chiang chou hsu kuo
+tsai tseng yeh hsieh chuang kao chao hung lo jeong kang yoon jang oh seo shin kwon hwang ahn yoo hong jeon ko
+son bae baek heo nam noh ha kwak sung cha joo min ryu ji chun rhee yi suh yun hoang dang bui do ngo duong ly
+luong mai ta thai trinh vuong hua luu phung quan sato suzuki takahashi tanaka watanabe ito yamamoto nakamura
+kobayashi kato yoshida yamada sasaki yamaguchi matsumoto inoue kimura hayashi shimizu yamazaki mori abe ikeda
+hashimoto yamashita ishikawa nakajima maeda fujita ogawa goto okada hasegawa murakami kondo ishii saito
+sakamoto endo aoki fujii nishimura fukuda ota miura fujiwara okamoto matsuda nakagawa nakano harada ono tamura
+takeuchi kaneko wada nakayama ishida ueda morita hara shibata sakai kudo yokoyama miyazaki miyamoto ando
+fujimoto takeda matsui honda hattori kumar sharma gupta das rao mehta jain joshi nair iyer verma mishra chopra
+kapoor malhotra agarwal bhatt pillai menon chaudhary yadav pandey banerjee chatterjee mukherjee ghosh bose sen
+dutta sinha saxena tiwari dubey trivedi srivastava sandhu sidhu dhillon grewal bhatia arora sethi khanna bajaj
+goyal bansal mittal garg chauhan thakur naidu krishnan subramanian raman chandra prasad nath lal raj mohan
+varghese kurian dsouza naik patil kulkarni malik aslam butt chaudhry qureshi raza siddiqui sheikh javed anwar
+rashid haider abbasi bhatti mirza saeed zaman uddin islam hossain miah chowdhury sarkar mohamed mohammed
+hassan hussein ibrahim abdullah omar khalil saleh salem mansour nasser haddad khoury saad aziz farah issa
+mahmoud mustafa said sharif suleiman yousef abbas yilmaz kaya demir sahin celik kurt dizon manalo tolentino
+delrosario aquino salvador domingo francisco papadopoulos georgiou
+
+[russian]
+пароль привет любовь люблю солнышко солнце котик котёнок котенок зайка зайчик зая заяц малыш малышка мама папа
+мамочка папочка ангел ангелочек принцесса королева король звезда звёздочка звездочка счастье радость мечта
+надежда вера свобода красавица красотка красота детка деточка крошка лапочка лапуля пупсик пупс сладкий
+сладкая нежный нежная родная родной дорогая дорогой милый милая любимый любимая любимка душа душенька рыбка
+рыбонька киса кися кошка кот кошечка пушок пушистик барсик мурзик мурка дружок дружба друг подруга мишка
+медвежонок медведь зайчонок цветок цветочек цветы роза ромашка тюльпан василёк василек снежинка снежок звёзды
+звезды небо море океан ветер гроза радуга россия москва питер санкт сибирь кавказ крым сочи казань самара
+ростов уфа пермь омск томск тверь тула орёл орел курск брянск рязань калуга киев минск спартак зенит динамо
+цска локомотив рубин торпедо краснодар ротор алания крылья сокол факел футбол хоккей чемпион победа гол матч
+болельщик водка пиво коньяк вино шампанское деньги доллар рубль богатство золото бриллиант работа семья дети
+ребёнок ребенок сынок сыночек дочка доченька бабушка дедушка тётя тетя дядя брат братан сестра сестрёнка
+сестренка бог боже господи аминь церковь ладья орёлик йцукен йцукенг фыва фываолдж ячсм гфхйкм пароленок
+одинокий одиночество грусть печаль тоска слёзы слезы боль разлука встреча поцелуй объятия ласка страсть
+влюблённость влюбленность романтика свидание свадьба кольцо букет подарок сюрприз праздник новыйгод рождество
+день ночь рассвет закат луна месяц лето весна осень зима тепло холод дождь снег мороз жара красивая красивый
+умница умный умная хорошая хороший лучший лучшая самаялучшая единственная единственный навсегда вечность
+вечная бесконечность судьба ведьма колдунья фея волшебница волшебство чудо чудеса сказка мечтатель романтик
+герой героиня воин рыцарь дракон феникс волк волчица тигр тигрёнок тигренок лев львёнок львенок пантера лиса
+лисёнок лисенок лисичка белка ёжик ежик хомяк хомячок щенок собака пёс пес собачка попугай дельфин бабочка
+пчёлка пчелка божьякоровка стрекоза птичка птица голубь голубка лебедь павлин цыплёнок цыпленок утёнок утенок
+гусёнок гусенок курица петух корова бык лошадь конь пони овечка барашек козлёнок козленок поросёнок поросенок
+хрюша слон слонёнок слоненок жираф обезьяна панда коала кенгуру дракоша динозавр смурфик чебурашка винни
+карлсон буратино колобок снегурочка дедмороз алёнка аленка машенька дюймовочка золушка русалочка русалка
+дюймовка пуговка конфетка ириска шоколадка печенька вкусняшка мармеладка карамелька леденец пряник тортик
+пирожок блинчик вареник пельмешка колбаска сосиска курочка картошка капуста морковка огурчик помидорка яблочко
+вишенка клубничка малинка смородинка абрикоска персик банан апельсин мандаринка лимончик виноградинка арбузик
+дынька ягодка орешек грибок колосок листочек травинка веточка кустик деревце берёзка березка ёлочка елочка
+сосенка дубок кленовый осинка рябинка калинка верба ивушка ромашковое одуванчик подснежник ландыш сирень
+жасмин лилия фиалка незабудка мак пион хризантема гвоздика нарцисс лотос кактус подсолнух астра георгин
+гладиолус анютины маргаритка колокольчик гиацинт крокус примула бархатцы петунья ирис орхидея камелия магнолия
+акация липа тополь каштан ясень кедр лиственница пихта можжевельник туя бамбук пальма баобаб секвойя наташа
+настя катя лена маша аня оля юля света ира даша вика таня марина кристина ксюша алина полина софия софья соня
+василиса алиса варя надя люба галя нина тома рита лера валя женя оксана снежана яна карина милана диана дарья
+дарина елена елизавета лиза екатерина анастасия александра саша сашка сашенька саня шура шурочка алекса
+настенька настюша настюшка стася анна анечка анюта анютка нюра нюша нюся анка аннушка алёна алена алёнушка
+аленушка алиночка аля алька алла аллочка алка антонина тоня тонечка тонька валентина валечка валюша валька
+валентинка валерия лерочка лерка валерочка варвара варенька варька варюша варюшка верочка верка веруня веруся
+вероника ника вероничка никуся виктория викочка викуся викуля викуша тори галина галочка галька галинка
+галчонок дашенька дашуля дашка даря дарьюшка дианочка дина диночка динка евгения женечка женька евгеша
+катенька катюша катюшка катька катерина катрин леночка ленуся ленка еленка леля лизонька лизка лизочка жанна
+жанночка жанка зинаида зина зиночка зинка зоя зоечка зойка инна инночка инка ирина ирочка иришка ируся ирка
+иринка кира кирочка кирюля кристя кристинка крис тина ксения ксюшка ксеня ксюха оксанка ксана лариса лара
+ларочка лариска лора лидия лида лидочка лидка лиля лилечка лилька любочка любаша любка любава любавушка
+людмила люда людочка люся людмилка мила милочка маргарита риточка ритка марго маргоша мариночка маринка мариша
+маришка мария машуля машка маруся манечка маня мэри маняша наденька надюша надька надин надюшка наталья
+наталия наташка наташенька ната наточка натуся туся ниночка нинка нинуля ксюня оленька олечка олюся олька
+оляша поля полечка полинка раиса рая раечка райка регина региночка рина светлана светочка светик светка
+светланка лана снежанка снежа сонечка софа софочка софийка сонька соняша тамара томочка томка тамарочка
+татьяна танечка танюша танюшка танька татьянка тата ульяна уля ульянка уляша юлия юлечка юлька юленька юлианна
+яночка янка янина ангелина лина ангелинка геля арина ариша аринка арюша виолетта вета летта миланка каринка
+кариша алисочка есения еся есенька эвелина эвелинка эва злата златочка златка таисия тая таечка таисья нонна
+нонночка эмма эммочка розочка розалия элина элинка нелли неля элла эллочка эльвира эля эльвирка сабина камилла
+камила аделина аделинка адель амина аминка алсу гульнара гуля диляра лейла мадина зарина эльмира мирослава
+мира ярослава яра ярославка владислава влада владуся станислава божена аврора агата агаша аграфена груша
+акулина анжела анжелика анжелка беатриса белла бэлла валентинушка венера виталина виталинка власта дана данута
+доминика ефросинья фрося жозефина изабелла илона инга капитолина капа клавдия клава клара корнелия лаура
+леокадия лолита лола луиза магдалина майя марта марфа матрёна матрена мотя меланья мелания муза нателла
+октябрина офелия павлина пелагея прасковья панночка римма риммочка розалинда руслана сауле серафима сима
+симочка стелла сюзанна фаина фая феодора флора франческа харита христина эльза эмилия юнона ядвига ярина
+яромира агния аксинья алевтина альбина анастасья анисья ариадна аполлинария валерьяна веста вилена гелена
+глафира глаша дея евдокия дуня евлампия ефимия зинуля зося иванна ираида капитошка лада ладушка лика любомира
+люсьена мальвина мирра нана нелла николетта олеся олеська павла регинка роксана розмари сандра таира услада
+фёкла фекла феня харитина эвита эдита юстина александр алексей дмитрий андрей сергей максим иван артём артем
+никита михаил даниил данила егор кирилл илья владимир владислав роман денис антон павел евгений николай
+тимофей матвей арсений александ санёк санек шурик алекс алик лёша леша лёшка лешка алёша алеша лёха леха
+алексейка анатолий толя толик толечка анатоша андрюша андрюха андрейка дрон дюша антоша антоха антошка тоша
+аркадий аркаша адик тёма тема артёмка артемка тёмка темка артур артурчик арти богдан богдаша бодя борис боря
+борька бориска вадим вадик вадимка вадя валентин валик валерий валера валерка василий вася васька васёк васек
+виктор витя витька витёк витек витенька виталий виталик виталя витаха вова вовочка вовка володя вован владик
+вовчик влад владуша вячеслав слава славик славка вячик геннадий гена генка геша геннаша георгий гоша жора гера
+жорик глеб глебка глебушка григорий гриша гришка гриня гора даня данька данилка дэн дениска денисик дима димка
+димон митя димочка диман митяй жека егорка егорушка ефим фима ефимка захар захарка захарушка ваня ванька
+ванюша иванушка ванёк ванек игорь игорёк игорек игоряша ильюша ильюшка илюша кирюша кирилка киря константин
+костя костик костян котя костенька лёва лева левушка лёвик леонид лёня леня лёнька ленька леонидка макс максик
+максимка максон макся марк маркуша марик матвейка матвеюшка миша мишаня мишутка миха никитка никитос кита коля
+колька колян николаша колюня олег олежка олежек олегушка паша пашка павлик пашенька пётр петр петя петька
+петенька петруша рома ромка ромчик ромыч ростислав ростик руслан русик русланчик руся святослав свят семён
+семен сёма сема сеня семёнка серёжа сережа серёга серега серёжка сережка серый станислав стас стасик степан
+стёпа степа стёпка степка степашка тима тимоша тимофейка тимоха тимур тимурка фёдор федор федя федька феденька
+федюня филипп филя филипок филька эдуард эдик эдуардик эльдар эльдарка юрий юра юрка юрик юрочка юрась яков
+яша яшка яшенька ярослав ярик арсюша арсен арсенчик макар макарка макарушка платон платоша платонка мирон
+мироша мирончик савелий сава савва савка саввушка германчик родион родя родик назар назарка лука лукаша
+добрыня елисей елисейка демид демидка герман амир эмир карим рустам ринат марат ильдар ренат азамат арман
+дамир алан заур аслан магомед ахмед ибрагим самир данияр айдар булат альберт альбертик валдис гавриил гаврюша
+гордей давид дэвид демьян демьянка елизар емельян еремей ерёма ерема игнат игнатий изяслав иннокентий кеша
+климент клим кузьма кузя лаврентий лавр ларион леонтий мефодий модест мстислав наум нестор онисим осип остап
+панкрат парамон пахом порфирий прохор проша рафаил рафик святогор севастьян сева селиван спиридон терентий
+терёха трофим троша устин фадей феликс феоктист филимон фома фрол харитон харлампий христофор эммануил юлиан
+юлий яромир ярополк афанасий афоня бронислав валерьян венедикт вениамин веня викентий виссарион влас всеволод
+вукол гермоген голуб данислав евлампий евсей евстафий елпидифор епифан ждан зиновий зосима ипполит кастусь
+корней ларик любомир мариан мелентий мечислав митрофан никанор никодим нифонт овидий олесь пантелей пётра
+радислав радомир ратибор роберт робик ростиславка савватий самсон святополк сократ созон станимир тарас
+тарасик твердислав феодосий феофан филарет флорентий фортунат фотий якуб януарий яросвет иванов иванова
+смирнов смирнова кузнецов кузнецова попов попова васильев васильева петров петрова соколов соколова михайлов
+михайлова новиков новикова фёдоров федоров фёдорова федорова морозов морозова волков волкова алексеев
+алексеева лебедев лебедева семёнов семенов семёнова семенова егоров егорова павлов павлова козлов козлова
+степанов степанова николаев николаева орлов орлова андреев андреева макаров макарова никитин никитина захаров
+захарова зайцев зайцева соловьёв соловьев соловьёва соловьева борисов борисова яковлев яковлева григорьев
+григорьева романов романова воробьёв воробьев воробьёва воробьева сергеев сергеева кузьмин кузьмина фролов
+фролова александров александрова дмитриев дмитриева королёв королев королёва гусев гусева киселёв киселев
+киселёва киселева ильин ильина максимов максимова поляков полякова сорокин сорокина виноградов виноградова
+ковалёв ковалев ковалёва ковалева белов белова медведев медведева антонов антонова тарасов тарасова жуков
+жукова баранов баранова филиппов филиппова комаров комарова давыдов давыдова беляев беляева герасимов
+герасимова богданов богданова осипов осипова сидоров сидорова матвеев матвеева титов титова марков маркова
+миронов миронова крылов крылова куликов куликова карпов карпова власов власова мельников мельникова денисов
+денисова гаврилов гаврилова тихонов тихонова казаков казакова афанасьев афанасьева данилов данилова савельев
+савельева тимофеев тимофеева фомин фомина чернов чернова абрамов абрамова мартынов мартынова ефимов ефимова
+федотов федотова щербаков щербакова назаров назарова калинин калинина исаев исаева чернышёв чернышев чернышёва
+чернышева быков быкова маслов маслова родионов родионова коновалов коновалова лазарев лазарева воронин
+воронина климов климова филатов филатова пономарёв пономарев пономарёва пономарева голубев голубева кудрявцев
+кудрявцева прохоров прохорова наумов наумова потапов потапова журавлёв журавлев журавлёва журавлева овчинников
+овчинникова трофимов трофимова леонов леонова соболев соболева ермаков ермакова колесников колесникова
+гончаров гончарова емельянов емельянова никифоров никифорова грачёв грачев котов котова гурьев гурьева зыков
+зыкова сазонов сазонова дроздов дроздова князев князева воронов воронова лобанов лобанова кабанов кабанова
+рябов рябова горбунов горбунова одинцов одинцова сафонов сафонова копылов копылова панов панова кудряшов
+кудряшова быстров быстрова логинов логинова корнеев корнеева горбачёв горбачев елисеев елисеева бобров боброва
+рыбаков рыбакова зуев зуева дементьев дементьева голиков голикова агафонов агафонова турков туркова бабушкин
+бабушкина панфилов панфилова гаврюшин гаврюшина носов носова дорофеев дорофеева ершов ершова ларионов
+ларионова аникин аникина селезнёв селезнев кулаков кулакова горшков горшкова савин савина евсеев евсеева
+скворцов скворцова коротков короткова нестеров нестерова крюков крюкова шубин шубина поздняков позднякова
+кондратьев кондратьева шашков шашкова маркин маркина большаков большакова горбатов горбатова хохлов хохлова
+галкин галкина бурцев бурцева шевченко бондаренко ткаченко коваленко бойко кравченко савченко петренко швец
+литвиненко мельник гончаренко бондарчук коваль левченко тимошенко василенко руденко карпенко сидоренко
+клименко шаповалов шаповалова вишневский вишневская покровский покровская орловский орловская соколовский
+соколовская рождественский рождественская преображенский преображенская успенский успенская троицкий троицкая
+лебединский лебединская березовский березовская вербицкий вербицкая яковенко григоренко ткачук мазур гаврилюк
+власенко лысенко костенко панченко юрченко захарченко романенко москаленко дяченко мартыненко бабенко радченко
+овчаренко это как так что все всё вот нет там тут где куда кто чем чём они она оно мне меня тебя тебе нас вас
+нам вам его него нее неё них ним нами вами мной тобой собой себя себе мой моя мои моё твой твоя твои твоё наш
+наша наше наши ваш ваша ваше ваши свой своя своё свои этот эта эти того тот той тех том тем теми весь вся всех
+всем всеми всего кого кому кем чего чему чей чья чьё чьи какой какая какое какие такой такая такое такие
+который которая которое которые каждый каждая каждое каждые любой любая любое другой другая другое другие сам
+сама само сами самый самая самое самые никто ничто ничего никого некого нечего некто нечто кое некоторый
+некоторые несколько сколько столько много мало больше меньше более менее очень совсем почти чуть слишком
+довольно вполне крайне абсолютно полностью именно только лишь даже тоже также ещё еще уже теперь сейчас потом
+затем тогда когда всегда никогда иногда часто редко снова опять вдруг сразу скоро рано поздно давно недавно
+вчера сегодня завтра послезавтра позавчера утром днём днем вечером ночью утро вечер здесь сюда туда оттуда
+отсюда откуда нигде никуда везде всюду повсюду рядом близко далеко высоко низко быстро медленно тихо громко
+хорошо плохо легко трудно тяжело просто сложно верно точно конечно наверно наверное возможно вероятно случайно
+нарочно напрасно обязательно непременно вместе отдельно вместо кроме около против среди между вокруг сквозь
+вдоль внутри снаружи вперёд вперед назад вверх вниз направо налево прямо обратно домой дома кругом насквозь
+слегка сильно нежно грубо смело робко гордо честно нечестно мирно дружно весело грустно скучно страшно смешно
+странно удивительно прекрасно отлично замечательно ужасно кошмарно нормально спокойно тревожно уютно холодно
+жарко прохладно сыро сухо светло темно ярко тускло чисто грязно пусто полно тесно просторно без перед через
+после при про для над под обо безо ради вроде насчёт насчет благодаря несмотря если чтобы потому поэтому хотя
+пока будто словно однако зато или либо ибо итак значит следовательно впрочем кстати например наоборот причём
+причем притом зачем почему отчего насколько поскольку разве неужели ужель пускай пусть ладно хватит айда ага
+угу увы ура эх ах ох ой эй алло стоп один одна одно одни два две три четыре пять шесть семь восемь девять
+десять одиннадцать двенадцать тринадцать четырнадцать пятнадцать шестнадцать семнадцать восемнадцать
+девятнадцать двадцать тридцать сорок пятьдесят шестьдесят семьдесят восемьдесят девяносто сто двести триста
+четыреста пятьсот шестьсот семьсот восемьсот девятьсот тысяча миллион миллиард первый первая первое второй
+вторая третий третья четвёртый четвертый пятый шестой седьмой восьмой девятый десятый сотый тысячный последний
+последняя крайний единый двойной тройной половина треть четверть пара дюжина десяток сотня нуль ноль оба обе
+вдвоём вдвоем втроём втроем однажды дважды трижды впервые быть есть был была было были будет буду будешь будем
+будете будут стать стал стала стало стали станет стану станешь станем станут мочь могу можешь может можем
+можете могут мог могла могли сказать скажу скажешь скажет скажем скажут скажи сказал сказала сказали говорить
+говорю говоришь говорит говорим говорите говорят говорил говорила думать думаю думаешь думает думаем думают
+думал думала знать знаю знаешь знает знаем знаете знают знал знала знали хотеть хочу хочешь хочет хотим хотите
+хотят хотел хотела хотели видеть вижу видишь видит видим видят видел видела видели смотреть смотрю смотришь
+смотрит смотрим смотрят смотрел смотрела посмотреть посмотри идти иду идёшь идет идёт идём идут шёл шел шла
+шли прийти приду придёт придет придут пришёл пришел пришла пришли ходить хожу ходишь ходит ходим ходят ходил
+ходила уйти ушёл ушел ушла ушли войти вошёл вошел выйти вышел вышла делать делаю делаешь делает делаем делают
+делал делала сделать сделаю сделает сделал сделала жить живу живёшь живет живёт живём живут жил жила жили
+любить любишь любит любим любите любят любил любила любили полюбить полюбил работать работаю работаешь
+работает работаем работают работал работала играть играю играешь играет играют играл играла сыграть читать
+читаю читаешь читает читают читал читала прочитать писать пишу пишешь пишет пишем пишут писал писала написать
+написал стоять стою стоишь стоит стоим стоят стоял стояла сидеть сижу сидишь сидит сидим сидят сидел сидела
+лежать лежу лежишь лежит лежат лежал лежала бежать бегу бежишь бежит бегут бежал бежала бегать спать сплю
+спишь спит спим спят спал спала заснуть проснуться проснулся ем ешь ест едим едят ел ела кушать поесть пить
+пью пьёшь пьет пьёт пьём пьют пил пила выпить дать дам дашь даёт дает даём дают дал дала дай давать даю даёшь
+брать беру берёшь берет берёт берут брал брала взять возьму возьмёшь возьмёт возьмет возьмут взял взяла нести
+несу несёшь несёт несет несут нёс нес несла носить ношу носит носил вести веду ведёшь ведёт ведет ведут вёл
+вел вела водить вожу возить везти везёт везет хотеться хочется казаться кажется казался остаться останусь
+останется остался осталась остались оставаться понять пойму поймёшь поймёт поймет поймут понял поняла поняли
+понимать понимаю понимаешь понимает помнить помню помнишь помнит помнят помнил забыть забуду забудет забыл
+забыла забывать искать ищу ищешь ищет ищут искал искала найти найду найдёшь найдёт найдет найдут нашёл нашел
+нашла нашли звать зову зовёшь зовёт зовет зовут звал звала позвать позвонить позвоню ждать жду ждёшь ждёт ждет
+ждут ждал ждала подождать слышать слышу слышишь слышит слышат слышал слышала услышать слушать слушаю слушает
+помочь помогу поможешь поможет помогут помог помогла помогать спросить спрошу спросит спросил спросила
+спрашивать отвечать отвечаю отвечает ответить отвечу ответил ответила открыть открою откроет открыл открыла
+открывать закрыть закрою закроет закрыл закрыла начать начну начнёт начнет начал начала начинать начинаю
+кончить кончился закончить закончил продолжать продолжаю падать упасть упал упала вставать встать встану
+встанет встал встала садиться сесть сяду сядет сел села ложиться лечь лягу ляжет лёг лег легла бояться боюсь
+боишься боится боятся боялся боялась смеяться смеюсь смеётся смеется смеялся смеялась улыбаться улыбаюсь
+улыбается улыбнулся плакать плачу плачешь плачет плачут плакал плакала заплакать радоваться радуюсь радуется
+обрадоваться гулять гуляю гуляет гулял погулять бегаю прыгать прыгаю летать летаю лететь лечу летит плыть
+плыву плавать кричать кричу кричит кричал крикнуть молчать молчу молчит молчал шептать шепчу петь пою поёшь
+поёт поет поют пел пела спеть танцевать танцую рисовать рисую строить строю ломать ломаю сломать резать режу
+варить варю жарить жарю готовить готовлю мыть мою моет стирать стираю убирать убираю покупать покупаю купить
+куплю купит купил купила продавать продаю продать продал платить заплатить считать считаю посчитать учить учу
+учит учил учиться учусь учится изучать изучаю решать решаю решает решить решу решил решила проверять
+исправлять менять меняю изменить изменил мешать мешаю беспокоиться волноваться волнуюсь переживать скучать
+скучаю мечтать мечтаю надеяться надеюсь верить верю веришь верит верят верил поверить доверять обещать обещаю
+обещал обманывать врать вру соврать прощать прощаю простить прости простил благодарить дарить дарю подарить
+подарю встречать встречаю встретить встретил провожать обнимать обнимаю обнять целовать целую поцеловать
+ласкать беречь берегу защищать защищаю спасать спасаю спасти жалеть жалею пожалеть человек люди мужчина
+женщина парень девушка мальчик девочка взрослый старик старушка юноша подросток товарищ приятель знакомый
+сосед соседка гость хозяин хозяйка родители мать отец сын дочь внук внучка племянник племянница муж жена
+супруг супруга невеста жених тёща теща свекровь зять невестка род родня предки потомок народ нация толпа
+общество имя фамилия отчество прозвище голова лицо лоб глаз глаза бровь ресница нос рот губа губы зуб зубы
+язык щека подбородок ухо уши волосы коса шея горло плечо плечи рука руки локоть ладонь палец пальцы ноготь
+грудь спина живот бок нога ноги колено пятка стопа сердце кровь кость кожа мозг тело голос взгляд улыбка слеза
+дыхание сон дом изба хата квартира комната кухня спальня зал прихожая коридор ванная туалет балкон крыша стена
+потолок пол дверь окно порог лестница ступенька угол этаж подвал чердак двор забор ворота калитка крыльцо
+труба печь камин мебель стол стул кресло диван кровать полка шкаф комод тумбочка зеркало ковёр ковер штора
+занавеска лампа люстра свеча картина часы будильник телефон компьютер телевизор радио посуда тарелка чашка
+кружка стакан ложка вилка нож кастрюля сковорода чайник бутылка банка ведро корзина коробка мешок сумка рюкзак
+кошелёк кошелек ключ замок гвоздь молоток топор лопата игла нитка ножницы карандаш ручка бумага книга тетрадь
+альбом газета журнал письмо конверт марка открытка краска кисть мяч кукла игрушка велосипед машина автомобиль
+колесо руль мотор бензин дорога улица переулок площадь проспект тротуар перекрёсток перекресток мост тоннель
+вокзал станция остановка аэропорт порт пристань магазин рынок киоск аптека больница школа университет институт
+колледж библиотека музей театр кино цирк стадион бассейн парк сквер сад огород поле луг лес роща бор чаща
+опушка поляна тропинка овраг холм горы вершина скала утёс утес пещера долина равнина степь пустыня тундра
+болото озеро река ручей родник водопад залив пролив остров берег пляж волна волны прибой глубина дно песок
+камень земля почва глина пыль грязь лужа облако туча туман комета планета воздух буря ураган гром молния
+ливень метель вьюга иней роса лёд лед сосулька заря сумерки тень свет огонь пламя искра дым пепел зола природа
+погода климат время год неделя сутки час минута секунда мгновение миг эпоха век столетие январь февраль март
+апрель май июнь июль август сентябрь октябрь ноябрь декабрь понедельник вторник среда четверг пятница суббота
+воскресенье юбилей рождение похороны дерево берёза береза дуб сосна ель ёлка елка клён клен ива рябина осина
+куст трава лист листья ветка ветви корень ствол кора почка бутон семя семена плод ягода гриб мох колос зерно
+пшеница рожь овёс овес ячмень кукуруза картофель морковь свёкла свекла лук чеснок огурец помидор перец тыква
+кабачок горох фасоль яблоко слива вишня черешня абрикос виноград арбуз дыня лимон мандарин ананас клубника
+малина смородина крыжовник черника земляника орех животное зверь телёнок теленок жеребёнок жеребенок свинья
+овца баран коза козёл козел кролик ёж мышь крыса крот лось олень кабан барсук бобр выдра рысь зебра верблюд
+бегемот носорог крокодил черепаха змея ящерица лягушка жаба воробей ворона сорока синица снегирь соловей
+ласточка скворец дятел сова ястреб журавль аист утка гусь индюк рыба щука окунь карась карп сом лещ плотва
+форель лосось акула кит осьминог краб рак улитка червяк насекомое муха комар пчела оса шмель муравей жук
+кузнечик паук таракан гусеница муравейник улей гнездо нора берлога логово большой большая большое большие
+маленький маленькая маленькое огромный громадный крошечный высокий высокая низкий длинный длинная короткий
+широкий узкий толстый тонкий глубокий мелкий тяжёлый тяжелый лёгкий легкий быстрый медленный сильный сильная
+слабый крепкий мягкий твёрдый твердый гладкий острый тупой горячий холодный тёплый теплый прохладный сухой
+мокрый влажный новый новая новое старый старая молодой молодая древний свежий прошлый будущий ранний поздний
+плохой плохая добрый добрая злой злая весёлый веселый грустный печальный радостный счастливый счастливая
+несчастный довольный сердитый спокойный нервный смелый храбрый трусливый гордый скромный честный лживый глупый
+мудрый хитрый простой сложный трудный интересный скучный важный главный нужный полезный вредный опасный
+безопасный страшный ужасный прекрасный некрасивый симпатичный очаровательный ласковый грубый вежливый дешёвый
+дешевый богатый бедный щедрый жадный чистый грязный светлый тёмный темный яркий тусклый блестящий прозрачный
+пёстрый пестрый белый белая чёрный черный красный красная синий синяя голубой зелёный зеленый жёлтый желтый
+оранжевый фиолетовый розовый коричневый бежевый золотой серебряный бронзовый алый багровый бордовый лазурный
+бирюзовый малиновый сиреневый лиловый полный пустой целый половинный одинаковый разный различный похожий
+подобный обычный обыкновенный необычный странный удивительный чудесный волшебный сказочный настоящий
+ненастоящий истинный ложный правильный неправильный верный неверный точный приблизительный готовый способный
+возможный невозможный реальный живой живая мёртвый мертвый здоровый больной бодрый усталый голодный сытый
+сонный весёлая чужой собственный общий частный личный народный государственный ненавистный желанный
+долгожданный свободный свободная независимый вольный пленный веселье удовольствие наслаждение восторг
+восхищение нежность верность преданность доверие уважение благодарность желание стремление цель смысл скука
+горе беда несчастье страдание мука обида злость гнев ярость ненависть зависть ревность страх ужас испуг
+тревога волнение беспокойство стыд вина совесть гордость честь достоинство позор жизнь смерть доля рок случай
+удача везение счастьице несчастьице успех провал поражение ум разум мысль идея мнение знание опыт память
+воображение фантазия внимание интерес любопытство воля характер нрав привычка талант способность дар гений дух
+настроение чувство эмоция ощущение впечатление правда истина ложь обман тайна секрет загадка колдовство магия
+уродство добро зло польза вред благо мир война битва сражение бой схватка борьба драка ссора спор скандал
+конфликт согласие покой тишина шум грохот звук музыка песня мелодия ритм танец слово речь разговор беседа
+рассказ история легенда миф стихи поэзия проза повесть пьеса комедия трагедия труд дело задача задание проект
+план занятие профессия ремесло мастерство служба должность карьера бизнес торговля доход прибыль зарплата цена
+стоимость долг кредит налог копейка евро монета купюра банк касса счёт счет учитель ученик студент профессор
+врач доктор медсестра инженер рабочий строитель водитель шофёр шофер лётчик летчик моряк солдат офицер генерал
+капитан милиционер полицейский пожарный повар пекарь портной сапожник плотник столяр слесарь художник писатель
+поэт музыкант певец певица актёр актер актриса танцор режиссёр режиссер журналист фотограф продавец кассир
+официант парикмахер бухгалтер секретарь директор начальник руководитель президент министр депутат царь князь
+принц богатырь великан гном эльф колдун волшебник демон чёрт черт богиня дьявол призрак одежда платье рубашка
+блузка юбка брюки штаны джинсы шорты куртка пальто шуба плащ пиджак костюм свитер кофта майка футболка бельё
+белье носки колготки чулки шапка шляпа кепка платок шарф перчатки варежки обувь ботинки туфли сапоги кроссовки
+тапки валенки пояс ремень пуговица карман воротник рукав ткань шёлк шелк шерсть хлопок мех еда пища завтрак
+обед ужин закуска блюдо суп борщ щи каша пюре макароны лапша пельмени вареники блины оладьи пирог булка батон
+хлеб сухарь печенье торт пирожное конфета шоколад мороженое варенье мёд мед сахар соль масло молоко сметана
+творог сыр йогурт кефир сливки яйцо мясо говядина свинина баранина колбаса ветчина сало икра крупа тесто
+напиток вода сок чай кофе какао компот кисель лимонад квас коктейль мастер урок оценка экзамен зачёт зачет
+диплом аттестат наука математика физика химия биология география литература грамматика буква цифра число
+пример вопрос ответ правило закон теория практика метод способ система порядок хаос причина следствие
+результат вывод факт данные информация новость сообщение известие весть доклад отчёт отчет статья заметка
+запись список таблица схема чертёж чертеж рисунок картинка фотография снимок кадр фильм мультфильм передача
+концерт спектакль представление выступление интернет сайт почта логин аккаунт файл папка программа приложение
+экран клавиша клавиатура мышка принтер камера микрофон колонка наушники зарядка батарея провод розетка кнопка
+сеть связь сигнал антенна спутник ракета робот прибор устройство механизм двигатель насос станок инструмент
+отвёртка отвертка плоскогубцы дрель поезд вагон электричка трамвай троллейбус автобус метро такси самолёт
+самолет вертолёт вертолет корабль лодка катер яхта паром грузовик трактор мотоцикл самокат коляска сани телега
+колесница повозка спорт команда корт ринг бег прыжок плавание бокс баскетбол волейбол теннис шахматы шашки
+гимнастика лыжи коньки санки тренер судья медаль кубок рекорд соревнование турнир первенство олимпиада
+здоровье болезнь лекарство таблетка укол бинт рана температура кашель насморк грипп простуда аптечка пациент
+палата операция прививка витамин власть право равенство справедливость государство страна родина отечество
+граница столица область край район округ республика империя царство королевство город посёлок поселок деревня
+село хутор станица украина беларусь казахстан германия франция англия америка китай япония индия италия
+испания греция египет турция канада бразилия австралия европа азия африка русский русская украинец немец
+француз англичанин американец китаец японец петербург новосибирск екатеринбург волгоград воронеж владивосток
+хабаровск иркутск красноярск челябинск ярославль серебро железо медь сталь чугун олово свинец алмаз жемчуг
+янтарь хрусталь стекло пластик резина бетон кирпич цемент гранит мрамор уголь нефть торф руда металл доска
+бревно фанера картон отдых прогулка покупка уборка готовка ремонт отпуск каникулы выходной будни срок период
+момент начало конец середина продолжение бросать кидать ловить тянуть толкать держать трогать хватать ронять
+поднимать опускать вешать снимать надевать одеваться раздеваться обуваться умываться купаться мыться бриться
+причёсываться прятать прятаться находить терять чинить копать сажать поливать собирать рвать косить пахать
+сеять доить кормить поить пасти охотиться рыбачить нырять кататься скользить качаться кружиться вертеться
+трястись дрожать мёрзнуть мерзнуть греться потеть уставать отдыхать дышать зевать чихать кашлять храпеть
+вкусный невкусный горький кислый солёный соленый пресный пряный душистый ароматный шумный звонкий глухой
+слепой немой хромой босой голый одетый пьяный трезвый ленивый трудолюбивый аккуратный неряшливый осторожный
+внимательный рассеянный забывчивый находчивый любопытный болтливый молчаливый серьёзный серьезный шутливый
+строгий заботливый жестокий добродушный великодушный благородный подлый коварный наивный доверчивый
+подозрительный решительный нерешительный упрямый покорный тщеславный завистливый ревнивый обидчивый
+вспыльчивый терпеливый удачливый неудачливый везучий отважный робкий стеснительный застенчивый наглый дерзкий
+грубоватый воспитанный культурный образованный грамотный талантливый гениальный бездарный опытный неопытный
+рассудительный легкомысленный серьёзность мудрость глупость доброта злоба жадность щедрость смелость трусость
+скромность честность измена предательство вражда союз договор обещание клятва просьба приказ совет подсказка
+намёк намек шутка анекдот пословица поговорка сказание предание молитва заклинание проклятие благословение
+пожелание поздравление прощание расставание знакомство родство соседство компания коллектив бригада отряд
+дружина войско армия флот полк рота взвод солдатик генеральчик

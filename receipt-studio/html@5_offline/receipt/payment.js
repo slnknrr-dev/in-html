@@ -1,0 +1,7 @@
+import{roundCash,mulDivRound}from"./money.js";import{LOYALTY_DEFAULTS,checkSpend}from"./loyalty.js";function settle(total,pay={},loyalty={},{cashStep=1}={}){const errors=[];const pointValue=loyalty.pointValue??LOYALTY_DEFAULTS.pointValue;let points=pay.points??0;const pe=checkSpend(points,total,{...loyalty,balance:loyalty.balance??0,pointValue});if(pe){errors.push(pe);points=0;}
+const pointsValue=points*pointValue;const payable=total-pointsValue;let card=pay.card==='rest'?payable:pay.card??0;if(card>payable){errors.push('card_exceeds');card=payable;}
+const rest=payable-card;const cashDue=roundCash(rest,cashStep);const rounding=cashDue-rest;const tendered=pay.cash??null;let change=0,short=0;if(tendered!=null){if(tendered<cashDue){short=cashDue-tendered;errors.push('cash_short');}
+else change=tendered-cashDue;}
+const cash=tendered==null?cashDue:Math.min(tendered,cashDue);const method=payable===0&&points?'points':card&&cashDue?'mixed':card?'card':'cash';return{total,points,pointsValue,payable,card,cashDue,cash,tendered,change,short,rounding,method,errors};}
+function refundSplit(salePayment,salePayable,refund,alreadyCash=0){if(salePayment.method==='card')return{cash:0,card:refund};if(salePayment.method!=='mixed'||!(salePayable>0))return{cash:refund,card:0};const share=mulDivRound(refund,salePayment.cash??0,salePayable,'half-up');const cash=Math.max(0,Math.min(share,(salePayment.cash??0)-alreadyCash,refund));return{cash,card:refund-cash};}
+export{refundSplit,settle};

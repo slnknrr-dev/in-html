@@ -1,0 +1,6 @@
+import{glossKeys}from"./bilex.js";const keyOf=(s)=>String(s).toLowerCase().normalize('NFC').replace(/́/g,'').replace(/ё/g,'е').replace(/\s+/g,' ').trim();const first=(gloss)=>String(gloss).split(/;\s*/)[0].trim();function deckLanguages(entries){const s=new Set();for(const e of entries){s.add(e.lang);for(const l of Object.keys(e.m||{}))s.add(l);}
+return[...s];}
+function deckPairs(entries,from,to,{pivots=['ru','en'],limit=2000}={}){if(!from||!to||from===to)return[];const out=[];const seen=new Set();const push=(front,back,via)=>{const k=keyOf(front.w);if(!k||seen.has(k)||!back.w)return;seen.add(k);out.push({id:`x:${from}>${to}:${k}`.slice(0,200),front,back,via});};for(const e of entries){if(e.lang===to&&e.m&&e.m[from])push({lang:from,w:first(e.m[from])},{lang:to,w:e.w,tr:e.tr||''},'gloss');else if(e.lang===from&&e.m&&e.m[to])push({lang:from,w:e.w,tr:e.tr||''},{lang:to,w:first(e.m[to])},'gloss');}
+for(const p of pivots){if(p===from||p===to)continue;const byKey=new Map();for(const e of entries)if(e.lang===to&&e.m&&e.m[p])for(const k of glossKeys(e.m[p],p))if(!byKey.has(k))byKey.set(k,e);for(const e of entries){if(e.lang!==from||!e.m||!e.m[p])continue;const k=glossKeys(e.m[p],p).find((x)=>byKey.has(x));if(k){const b=byKey.get(k);push({lang:from,w:e.w,tr:e.tr||''},{lang:to,w:b.w,tr:b.tr||''},p);}}}
+return out.slice(0,limit);}
+export{deckLanguages,deckPairs};

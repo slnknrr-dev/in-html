@@ -1,0 +1,178 @@
+// regexp/patterns.js - a curated library of common patterns with sample texts. Names and descriptions are given in
+// English (`name`, `desc`); applications localize them by `key`.
+//
+// Each entry: { key, cat, source, flags, sample, name, desc, tab?, replacement? } — `tab` suggests the most telling
+// view ('replace', 'split'), `replacement` a template for the Replace view.
+//
+// Unlike validators.js, these are teaching patterns for finding text inside prose (g flag, \b boundaries, no ^...$),
+// deliberately readable rather than complete: each sample includes near-misses that show where the pattern stops.
+// Sources are JS string literals, so every regex backslash is doubled ('\\d' in the file is \d in the pattern).
+
+export const CATEGORIES = ['web', 'net', 'datetime', 'ids', 'numbers', 'text', 'code', 'unicode', 'security'];
+
+export const PATTERNS = [
+  {
+    key: 'email', cat: 'web', flags: 'g', name: 'Email address', desc: 'A practical address check: local part, @, domain with a top-level domain.',
+    source: '[\\w.%+-]+@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}',
+    sample: 'Write to anna.k+news@example.com or support@mail.example.org.\nNot addresses: user@localhost, @example.com, john@.com',
+  },
+  {
+    key: 'url', cat: 'web', flags: 'gi', name: 'Web address (URL)', desc: 'http and https links with an optional port, path, query and fragment.',
+    source: '\\bhttps?:\\/\\/[\\w-]+(?:\\.[\\w-]+)+(?::\\d{2,5})?(?:\\/[^\\s?#]*)?(?:\\?[^\\s#]*)?(?:#\\S*)?',
+    sample: 'Docs: https://example.com/docs/regex?lang=en#flags\nLocal: http://dev.example.test:8080/api/v2\nNot matched: ftp://example.com, https://localhost',
+  },
+  {
+    key: 'domain', cat: 'web', flags: 'gi', name: 'Domain name', desc: 'Host names made of labels of up to 63 characters.',
+    source: '\\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}\\b',
+    sample: 'example.com, mail.example.co.uk and sub-domain.example.org\nNot domains: -bad.example, example',
+  },
+  {
+    key: 'ipv4', cat: 'net', flags: 'g', name: 'IPv4 address', desc: 'Four numbers from 0 to 255 separated by dots.',
+    source: '\\b(?:(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\b',
+    sample: 'Gateway 192.168.0.1, DNS 8.8.8.8, broadcast 255.255.255.255\nNot addresses: 256.1.1.1, 10.0.0, 1.2.3.04x',
+  },
+  {
+    key: 'ipv6', cat: 'net', flags: 'gi', name: 'IPv6 address', desc: 'Full and compressed (::) IPv6 forms.',
+    source: '(?:[0-9a-f]{1,4}:){7}[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,7}:|(?:[0-9a-f]{1,4}:){1,6}:[0-9a-f]{1,4}|(?:[0-9a-f]{1,4}:){1,5}(?::[0-9a-f]{1,4}){1,2}|(?:[0-9a-f]{1,4}:){1,4}(?::[0-9a-f]{1,4}){1,3}|(?:[0-9a-f]{1,4}:){1,3}(?::[0-9a-f]{1,4}){1,4}|(?:[0-9a-f]{1,4}:){1,2}(?::[0-9a-f]{1,4}){1,5}|[0-9a-f]{1,4}:(?::[0-9a-f]{1,4}){1,6}|:(?:(?::[0-9a-f]{1,4}){1,7}|:)',
+    sample: '2001:0db8:85a3:0000:0000:8a2e:0370:7334\nfe80::1ff:fe23:4567:890a\n::1\n2001:db8::',
+  },
+  {
+    key: 'mac', cat: 'net', flags: 'g', name: 'MAC address', desc: 'Six pairs of hexadecimal digits separated by colons or dashes.',
+    source: '\\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\\b',
+    sample: '00:1A:2B:3C:4D:5E and 00-1a-2b-3c-4d-5e\nNot MAC addresses: 00:1A:2B:3C:4D, 0G:1A:2B:3C:4D:5E',
+  },
+  {
+    key: 'isoDate', cat: 'datetime', flags: 'g', name: 'ISO date', desc: 'YYYY-MM-DD with a valid month and day number.',
+    source: '\\b\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])\\b',
+    sample: 'Released 2026-10-12, patched 2026-11-03.\nNot dates: 2026-13-01, 2026-02-32, 26-10-12',
+  },
+  {
+    key: 'isoDateTime', cat: 'datetime', flags: 'g', name: 'ISO date and time', desc: 'Date, time, optional seconds and time zone, with named groups.',
+    source: '(?<year>\\d{4})-(?<month>0[1-9]|1[0-2])-(?<day>0[1-9]|[12]\\d|3[01])T(?<hour>[01]\\d|2[0-3]):(?<minute>[0-5]\\d)(?::(?<second>[0-5]\\d)(?:\\.\\d+)?)?(?<tz>Z|[+-](?:[01]\\d|2[0-3]):[0-5]\\d)?',
+    sample: '2026-10-12T09:30:00Z\n2026-10-12T21:05+04:00\n2026-10-12T18:45:09.250-07:00\nNot valid: 2026-10-12T24:00:00Z',
+    tab: 'replace', replacement: '$<day>.$<month>.$<year> $<hour>:$<minute>',
+  },
+  {
+    key: 'time24', cat: 'datetime', flags: 'g', name: 'Time (24 h)', desc: 'HH:MM with optional seconds, 00:00 to 23:59.',
+    source: '\\b(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d)?\\b',
+    sample: 'Doors 18:30, show 20:00:15, last train 23:59.\nNot times: 24:00, 7:5, 12:60',
+  },
+  {
+    key: 'uuid', cat: 'ids', flags: 'gi', name: 'UUID', desc: 'RFC 9562 identifiers, versions 1 to 8.',
+    source: '\\b[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\b',
+    sample: '550e8400-e29b-41d4-a716-446655440000\n018f3c4e-7a2b-7cde-9f01-23456789abcd\nNot UUIDs: 550e8400-e29b-91d4-a716-446655440000, 1234',
+  },
+  {
+    key: 'cardNumber', cat: 'ids', flags: 'g', name: 'Card-like number', desc: '13 to 19 digits, optionally grouped with spaces or dashes.',
+    source: '\\b(?:\\d[ -]?){12,18}\\d\\b',
+    sample: 'Test numbers: 4111 1111 1111 1111, 5555-5555-5555-4444, 378282246310005\nToo short: 1234 5678',
+  },
+  {
+    key: 'phone', cat: 'ids', flags: 'g', name: 'Phone number (E.164)', desc: 'International format: + and up to 15 digits.',
+    source: '\\+[1-9]\\d{6,14}\\b',
+    sample: '+14155552671, +995322123456, +442071838750\nNot E.164: +0123456, 4155552671, +1 415 555',
+  },
+  {
+    key: 'slug', cat: 'text', flags: 'gm', name: 'URL slug', desc: 'Lowercase words joined by single dashes, one per line.',
+    source: '^[a-z0-9]+(?:-[a-z0-9]+)*$',
+    sample: 'hello-world\nregex-studio-2026\nHello-World\ntrailing-\ndouble--dash',
+  },
+  {
+    key: 'htmlTag', cat: 'code', flags: 'gi', name: 'HTML element', desc: 'An opening tag, its content and the matching closing tag (via a back-reference).',
+    source: '<(?<tag>[a-z][a-z0-9-]*)\\b[^>]*>(?<content>.*?)<\\/\\k<tag>>',
+    sample: '<b>bold</b> and <a href="#top">a link</a>\n<span class="note">nested <i>italic</i></span>\n<p>never closed',
+  },
+  {
+    key: 'jsonString', cat: 'code', flags: 'g', name: 'JSON string', desc: 'A double-quoted JSON string with valid escapes.',
+    source: '"(?:[^"\\\\\\u0000-\\u001f]|\\\\(?:["\\\\/bfnrt]|u[0-9a-fA-F]{4}))*"',
+    sample: '{"name": "Regex \\"Studio\\"", "path": "C:\\\\temp", "smile": "\\u263A", "bad": "\\x41"}',
+  },
+  {
+    key: 'number', cat: 'numbers', flags: 'g', name: 'Decimal number', desc: 'Integers and decimals with an optional sign and exponent.',
+    source: '[-+]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][-+]?\\d+)?',
+    sample: 'Values: 42, -3.14, +0.5, .75, 6.02e23, 1E-9',
+  },
+  {
+    key: 'thousands', cat: 'numbers', flags: 'g', name: 'Thousands separators', desc: 'Empty positions before groups of three digits: replace them with a comma.',
+    source: '\\B(?=(?:\\d{3})+(?!\\d))',
+    sample: '1234567 and 9876543210 and 999',
+    tab: 'replace', replacement: ',',
+  },
+  {
+    key: 'duplicateWords', cat: 'text', flags: 'gi', name: 'Repeated words', desc: 'A word followed by the same word (a back-reference).',
+    source: '\\b(\\w+)\\s+\\1\\b',
+    sample: 'This is is a test of the the repeated word finder.\nNothing doubled here.',
+    tab: 'replace', replacement: '$1',
+  },
+  {
+    key: 'trim', cat: 'text', flags: 'gm', name: 'Leading and trailing spaces', desc: 'Spaces and tabs at the start or end of each line.',
+    source: '^[ \\t]+|[ \\t]+$',
+    sample: '   indented line\ntrailing spaces   \n\t tabs and spaces \t\nclean line',
+    tab: 'replace', replacement: '',
+  },
+  {
+    key: 'spaces', cat: 'text', flags: 'g', name: 'Runs of whitespace', desc: 'Two or more whitespace characters in a row.',
+    source: '\\s{2,}',
+    sample: 'Too   many    spaces\tand\t\ttabs here.',
+    tab: 'replace', replacement: ' ',
+  },
+  {
+    key: 'camelSplit', cat: 'text', flags: 'g', name: 'camelCase boundaries', desc: 'Empty positions between a lowercase letter or digit and a capital: split words.',
+    source: '(?<=[a-z0-9])(?=[A-Z])',
+    sample: 'parseRegExpLiteral',
+    tab: 'split',
+  },
+  {
+    key: 'price', cat: 'numbers', flags: 'g', name: 'Price after a currency sign', desc: 'Amounts preceded by $, € or £ (a lookbehind).',
+    source: '(?<=[$€£])\\d{1,3}(?:[,.]\\d{3})*(?:[.,]\\d{2})?',
+    sample: 'Total $1,299.99, shipping €15,50, tax £0.80, but not 42.00',
+  },
+  {
+    key: 'hexColor', cat: 'code', flags: 'gi', name: 'CSS hex colour', desc: '#rgb, #rgba, #rrggbb and #rrggbbaa.',
+    source: '#(?:[0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{3,4})\\b',
+    sample: 'color: #3b82f6; background: #FFF; border-color: #00000080;\nNot colours: #12345, #ggg',
+  },
+  {
+    key: 'semver', cat: 'code', flags: 'gm', name: 'Semantic version', desc: 'The official SemVer 2.0 pattern with named groups.',
+    source: '^(?<major>0|[1-9]\\d*)\\.(?<minor>0|[1-9]\\d*)\\.(?<patch>0|[1-9]\\d*)(?:-(?<prerelease>(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+(?<build>[0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$',
+    sample: '1.0.0\n2.10.3-beta.2\n1.0.0-rc.1+build.5\n01.2.3\n1.2',
+  },
+  {
+    key: 'markdownLink', cat: 'code', flags: 'g', name: 'Markdown link', desc: '[text](url "title") with named groups.',
+    source: '\\[(?<text>[^\\]]+)\\]\\((?<url>[^)\\s]+)(?:\\s+"(?<title>[^"]*)")?\\)',
+    sample: 'See [the docs](https://example.com/docs "Docs") and [home](/).\nNot a link: [text] (url)',
+    tab: 'replace', replacement: '<a href="$<url>">$<text></a>',
+  },
+  {
+    key: 'logLine', cat: 'code', flags: 'gm', name: 'Web server log line', desc: 'Common log format: address, time, request, status and size.',
+    source: '^(?<ip>\\S+) \\S+ \\S+ \\[(?<time>[^\\]]+)\\] "(?<method>[A-Z]+) (?<path>\\S+) [^"]*" (?<status>\\d{3}) (?<size>\\d+|-)',
+    sample: '203.0.113.7 - - [12/Oct/2026:10:15:32 +0400] "GET /index.html HTTP/1.1" 200 5120\n198.51.100.23 - jane [12/Oct/2026:10:16:01 +0400] "POST /api/login HTTP/2" 401 -',
+  },
+  {
+    key: 'hashtag', cat: 'unicode', flags: 'gu', name: 'Hashtag in any script', desc: 'Letters and digits of every script with \\p{…} (u flag).',
+    source: '#[\\p{L}\\p{N}_]+',
+    sample: '#regex #Студия #თბილისი #café_2026 #東京\n# not-a-tag',
+  },
+  {
+    key: 'emoji', cat: 'unicode', flags: 'gv', name: 'Emoji', desc: 'Whole emoji, including sequences, with \\p{RGI_Emoji} (v flag).',
+    source: '\\p{RGI_Emoji}',
+    sample: 'Ship it 🚀, family 👨‍👩‍👧, flag 🇬🇪, thumbs 👍🏽, keycap 1️⃣ and a plain ☺ sign',
+  },
+  {
+    key: 'password', cat: 'security', flags: 'gm', name: 'Password rules', desc: 'At least 8 characters with lowercase, uppercase, a digit and a symbol (lookaheads).',
+    source: '^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[^\\w\\s]).{8,}$',
+    sample: 'Tr0ub4dor&3\npassword\nCorrect-Horse-9\nShort1!',
+  },
+  // Intentionally dangerous: (a+)+ on a failing input explores ~2^n splits. Exists to demonstrate the worker
+  // timeout in run.js and the nestedQuantifier warning in lint.js.
+  {
+    key: 'redos', cat: 'security', flags: '', name: 'Catastrophic backtracking (demo)', desc: 'Nested quantifiers that explode on a failing input: watch the time limit stop it.',
+    source: '^(a+)+$',
+    sample: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa!',
+  },
+];
+
+/** The library entry with this key (or null). */
+export function findPattern(key) {
+  return PATTERNS.find((p) => p.key === key) || null;
+}

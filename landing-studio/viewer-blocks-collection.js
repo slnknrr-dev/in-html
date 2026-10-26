@@ -1,0 +1,1327 @@
+// landing-studio/viewer-blocks-collection.js - the collection block: a generic, explicit catalog primitive. Items carry a
+// title, subtitle, cover, rich description, tags, label–value attributes, price / SKU, date, link and files; variants
+// grid, list, shelf, table and feature; search, facet and range filters, sorting, paging and item details (features
+// `collection` and `reader`, viewer-runtime-collection.js). Legacy `works` blocks are migrated to it (viewer-migrate.js).
+import { isB64 } from '../codec/base64.js';
+import { numOpts } from '../doc/schema.js';
+import { attOf, fileTypeLabel, formatSize, hasData, isImage, mimeBase } from '../doc/attach.js';
+import { uiText } from '../doc/dict.js';
+import { addItemBox, breakable, di, feature, fld, grp, has, icon, needUi, noItems, plainIn, txt, ui } from '../doc/render.js';
+import { escapeAttr, escapeHTML } from '../html/escape.js';
+import { htmlToText, normI18n, pickText } from '../i18n/text.js';
+import { uid } from '../util/id.js';
+import { isObj, num, oneOf, own, str } from '../util/value.js';
+import { mediaBox, objectHTML } from './viewer-render.js';
+import { bcAmount, bcHref, bcNeedAtt, bcSku, bcVar, buyHTML, formatDay, priceHTML } from './viewer-blocks-c.js';
+import { worksToCollection } from './viewer-migrate.js';
+
+// See CONTRACT.md §5 (collection), §8 (features collection / reader).
+//
+// Rules shared by every viewer-blocks-* part:
+// - render(b, ctx) is pure: HTML string out, usage recorded on ctx.use (features, UI keys, attachments, requests); no
+//   DOM, no globals, so the same code renders in the editor, in Node builds and in tests.
+// - ctx.edit = canvas (every item shown, fields editable, no runtime hooks); otherwise export (empty parts dropped,
+//   runtime hooks added only when a control is emitted, so unused features never ship).
+// - User text reaches markup only through escapeHTML / escapeAttr / fld / txt; links through hrefAttr / normURL.
+// - CSS lives in template strings (no comments inside them: they would ship in every export); its rationale sits in
+//   comments above each table.
+// Collection specifics: filtering data is pre-computed into data-* attributes at export (folded search text, facet
+// tokens, numeric values), so the runtime only compares strings and numbers and never parses item markup.
+
+/* ---------- constants ---------- */
+
+const CL_VARIANTS = ['grid', 'list', 'shelf', 'table', 'feature'];
+const CL_DETAILS = ['modal', 'expand', 'none'];
+const CL_RATIOS = ['2/3', '3/4', '1/1', '4/3', '16/9'];
+const CL_KINDS = ['auto', 'audio', 'video', 'text', 'pdf', 'image', 'file'];
+// Kinds the reader opens, in the order cards offer them.
+const CL_OPEN = ['audio', 'video', 'text', 'pdf', 'image'];
+// Kind → [action UI key, button icon, file-list icon].
+const CL_ACT = {
+  audio: ['col.listen', 'headphones', 'music'], video: ['col.watch', 'play', 'video'], text: ['col.read', 'book', 'filetext'],
+  pdf: ['col.view', 'open', 'pdf'], image: ['col.view', 'image', 'image'], file: ['download', 'download', 'file'],
+};
+// Built-in keys of the filters / ranges / sorts lists (everything else is an attribute label key).
+const CL_SPECIAL = ['$title', '$date', '$price', '$tags', '$kind'];
+const CL_MAX_ATTRS = 40;
+const CL_MAX_FILES = 60;
+const CL_MAX_KEYS = 12;
+// Runtime strings of the collection feature (cfg.ui).
+const CL_RT_UI = ['col.count', 'col.countOf', 'col.more', 'dlgClose'];
+// Runtime strings of the reader feature (cfg.ui).
+const CL_RD_UI = ['rd.play', 'rd.pause', 'rd.prev', 'rd.next', 'rd.back', 'rd.fwd', 'rd.speed', 'rd.seek', 'rd.chapters',
+  'rd.chapter', 'rd.resumed', 'rd.smaller', 'rd.larger', 'rd.theme', 'rd.light', 'rd.sepia', 'rd.dark', 'rd.progress',
+  'rd.loading', 'rd.failed', 'rd.now', 'rd.open', 'rd.stop', 'dlgClose', 'download', 'open'];
+
+const clArr = (v) => (Array.isArray(v) ? v : []);
+const clInt = (v, def, min, max) => Math.round(num(v, def, min, max));
+
+/* ---------- keys, numbers, text ---------- */
+
+// Label key: case-, width- and space-insensitive text ('Rooms ' → 'rooms').
+function clLabelKey(s) {
+  return str(s).normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 80);
+}
+
+// Entry of a filters / ranges / sorts list: a built-in '$…' key or an attribute label key; '' when unusable.
+function clKey(s) {
+  const t = str(s).trim();
+  if (t[0] === '$') return CL_SPECIAL.includes(t.toLowerCase()) ? t.toLowerCase() : '';
+  return clLabelKey(t);
+}
+
+// Search text: lower case, no diacritics, single spaces (the runtime folds the visitor's query the same way).
+function clFold(s) {
+  return str(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Number in an attribute value: durations h:mm:ss / m:ss → seconds, else the first number with thousands separators
+ * (spaces, apostrophes, groups of three) and a decimal point or comma ("1 250 000 ₾" → 1250000, "85,5 m²" → 85.5).
+ * null when there is none.
+ */
+function clNum(s) {
+  const t = str(s).trim();
+  if (!t) return null;
+  let m = /^(\d{1,3}):([0-5]\d)(?::([0-5]\d))?$/.exec(t);
+  if (m) return m[3] != null ? +m[1] * 3600 + +m[2] * 60 + +m[3] : +m[1] * 60 + +m[2];
+  m = /-?\d[\d\s  '’.,]*/.exec(t);
+  if (!m) return null;
+  let x = m[0].replace(/[\s  '’]/g, '').replace(/[.,]+$/, '');
+  const c = x.lastIndexOf(',');
+  const d = x.lastIndexOf('.');
+  if (c >= 0 && d >= 0) x = c > d ? x.replace(/\./g, '').replace(',', '.') : x.replace(/,/g, '');
+  else if (c >= 0) x = /^-?\d{1,3}(,\d{3})+$/.test(x) ? x.replace(/,/g, '') : x.replace(',', '.');
+  else if (/^-?\d{1,3}(\.\d{3}){2,}$/.test(x)) x = x.replace(/\./g, '');
+  const n = Number(x);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Text cut at a word boundary with an ellipsis.
+function clClip(s, n) {
+  const t = str(s).trim();
+  if (t.length <= n) return t;
+  const cut = t.slice(0, n);
+  const sp = cut.lastIndexOf(' ');
+  return (sp > n * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,.;:–—-]+$/, '') + '…';
+}
+
+// Plain text of an i18n value in the document's default language (keys, numbers and facet tokens).
+const clDef = (ctx, v) => htmlToText(pickText(v, ctx.doc.defaultLang, ctx.doc));
+
+// Every label key of an attribute (its label in any language), so filters typed in any language match.
+function clAttrKeys(a) {
+  const s = new Set();
+  if (isObj(a) && isObj(a.label)) for (const v of Object.values(a.label)) { const k = clLabelKey(htmlToText(v)); if (k) s.add(k); }
+  return s;
+}
+
+// First attribute of an item whose label has key k.
+function clAttrOf(it, k) {
+  for (const a of clArr(it.attrs)) if (isObj(a) && clAttrKeys(a).has(k)) return a;
+  return null;
+}
+
+// Primary key of an attribute: its default-language label.
+const clAttrKey = (ctx, a) => clLabelKey(clDef(ctx, a.label));
+
+// Tags of an item in one language: "a, b; c" → ['a', 'b', 'c'].
+function clTagList(ctx, it, l) {
+  return str(pickText(it.tags, l, ctx.pd || ctx.doc)).split(/[,;،、]\s*/).map((x) => x.trim()).filter(Boolean).slice(0, 20);
+}
+
+// `{lang: value}` when the output languages differ, else the shared value.
+function clLangVal(ctx, fn) {
+  const v0 = fn(ctx.langs[0]);
+  if (ctx.langs.length < 2) return v0;
+  const m = {};
+  let diff = false;
+  for (const l of ctx.langs) { m[l] = fn(l); if (m[l] !== v0) diff = true; }
+  return diff ? m : v0;
+}
+
+// JSON of per-language texts for the runtime ('' when there is one language or all agree).
+function clLangJSON(ctx, fn) {
+  if (ctx.edit || ctx.langs.length < 2) return '';
+  const v = clLangVal(ctx, fn);
+  return typeof v === 'object' ? JSON.stringify(v) : '';
+}
+
+// Attributes in the default output language + data-lp-i18n (rtI18n switches allowlisted attributes per language).
+function clI18nAttrs(ctx, map) {
+  let s = '';
+  const j = {};
+  let any = false;
+  for (const a of Object.keys(map)) {
+    const fn = map[a];
+    s += ` ${a}="${escapeAttr(fn(ctx.lang))}"`;
+    if (ctx.edit || ctx.langs.length < 2) continue;
+    const v = clLangVal(ctx, fn);
+    if (typeof v === 'object') { j[a] = v; any = true; }
+  }
+  return any ? s + ` data-lp-i18n="${escapeAttr(JSON.stringify(j))}"` : s;
+}
+
+/* ---------- normalization (registry hook, doc/model.js normBlock) ---------- */
+
+function clNormKeys(v, drop) {
+  const src = Array.isArray(v) ? v : typeof v === 'string' ? v.split(',') : [];
+  const out = [];
+  for (const x of src) {
+    const k = typeof x === 'string' ? clKey(x) : '';
+    if (k && !drop.includes(k) && !out.includes(k) && out.length < CL_MAX_KEYS) out.push(k);
+  }
+  return out;
+}
+
+// Attributes: [{label, value}] (also [label, value] pairs); labels / values are i18n (a string fills the default language).
+function clNormAttrs(list, dl) {
+  const out = [];
+  for (const x of clArr(list)) {
+    if (out.length >= CL_MAX_ATTRS) break;
+    const pair = Array.isArray(x) ? x : isObj(x) ? [x.label, x.value] : null;
+    if (!pair) continue;
+    const v = typeof pair[1] === 'number' && Number.isFinite(pair[1]) ? String(pair[1]) : pair[1];
+    const label = normI18n(pair[0], dl);
+    const value = normI18n(v, dl);
+    if (!Object.values(label).some((s) => s.trim()) && !Object.values(value).some((s) => s.trim())) continue;
+    out.push({ label, value });
+  }
+  return out;
+}
+
+// Files: [{att, label, kind}] (also bare attachment ids); unknown attachments are dropped.
+function clNormFiles(list, ctx) {
+  const out = [];
+  for (const x of clArr(list)) {
+    if (out.length >= CL_MAX_FILES) break;
+    const f = typeof x === 'string' ? { att: x } : isObj(x) ? x : null;
+    if (!f || typeof f.att !== 'string' || !isObj(own(ctx.atts, f.att))) continue;
+    out.push({ att: f.att, label: normI18n(f.label, ctx.dl), kind: oneOf(f.kind, CL_KINDS, 'auto') });
+  }
+  return out;
+}
+
+function clNormalize(out, b, ctx) {
+  out.filters = clNormKeys(b.filters, ['$title', '$date', '$price']);
+  out.ranges = clNormKeys(b.ranges, ['$title', '$date', '$tags', '$kind']);
+  out.sorts = clNormKeys(b.sorts, ['$tags', '$kind']);
+  for (const it of clArr(out.items)) {
+    it.attrs = clNormAttrs(it.attrs, ctx.dl);
+    it.files = clNormFiles(it.files, ctx);
+  }
+}
+
+/* ---------- files ---------- */
+
+// Kind of a file: the item's choice, else from the media type / extension. Active formats (HTML, XML, scripts) are
+// never shown inline: they are download-only whatever the choice; SVG only as a picture (an <img> runs no scripts).
+function clKind(a, k) {
+  const m = mimeBase(a.mime);
+  if (m === 'image/svg+xml') return k === 'file' ? 'file' : 'image';
+  if (/html|xml|javascript|ecmascript/.test(m)) return 'file';
+  if (k && k !== 'auto' && CL_KINDS.includes(k)) return k;
+  const n = str(a.name).toLowerCase();
+  if (/^audio\//.test(m)) return 'audio';
+  if (/^video\//.test(m)) return 'video';
+  if (m === 'application/pdf') return 'pdf';
+  if (/^text\/(plain|markdown|x-markdown)$/.test(m) || /\.(txt|text|md|markdown)$/.test(n)) return 'text';
+  if (isImage(a)) return 'image';
+  return 'file';
+}
+
+// Files of an item that can be offered: the attachment exists and (view) its bytes are in the document.
+function clFiles(ctx, it) {
+  const out = [];
+  for (const f of clArr(it.files)) {
+    if (!isObj(f)) continue;
+    const a = attOf(ctx, f.att);
+    if (!a || (!ctx.edit && !isB64(a.data))) continue;
+    out.push({ a, f, kind: clKind(a, f.kind) });
+  }
+  return out;
+}
+
+// View: the item's files go to the attachment store; openable ones need the reader, the rest the download buttons.
+function clNeedFiles(ctx, r) {
+  if (ctx.edit || r.need) return;
+  r.need = true;
+  for (const x of r.files) bcNeedAtt(ctx, x.a, 'embed');
+  if (r.files.some((x) => x.kind !== 'file')) {
+    feature(ctx, 'reader');
+    needUi(ctx, ...CL_RD_UI);
+  }
+}
+
+// Visible label of a file: its own label, else the attachment title, else the file name without extension.
+function clFileLabel(ctx, x) {
+  if (has(ctx, x.f.label)) return txt(ctx, x.f.label);
+  if (has(ctx, x.a.title)) return txt(ctx, x.a.title);
+  return breakable(str(x.a.name).replace(/\.[a-z0-9]{1,6}$/i, '') || x.a.name);
+}
+
+/* ---------- rows and the discovery plan ---------- */
+
+function clCoverOK(ctx, it) {
+  const a = attOf(ctx, it.cover);
+  return !!a && isImage(a) && hasData(ctx, a);
+}
+
+// Items to render (view: those with something to show), with their resolved files and attributes.
+function clRows(ctx, b) {
+  const rows = [];
+  clArr(b.items).forEach((it, i) => {
+    if (!isObj(it)) return;
+    const files = clFiles(ctx, it);
+    if (!ctx.edit && !has(ctx, it.title) && !has(ctx, it.html) && !files.length && !clCoverOK(ctx, it)) return;
+    rows.push({ it, i, p: 'items.' + i + '.', files, attrs: clArr(it.attrs).filter(isObj), need: false });
+  });
+  return rows;
+}
+
+function clFacetAttr(ctx, rows, k) {
+  const m = new Map();
+  let label = null;
+  rows.forEach((r, ri) => {
+    const a = clAttrOf(r.it, k);
+    if (!a) return;
+    label = label || a.label;
+    const id = clLabelKey(clDef(ctx, a.value));
+    if (!id) return;
+    let o = m.get(id);
+    if (!o) { o = { src: a.value, rows: new Set() }; m.set(id, o); }
+    o.rows.add(ri);
+  });
+  if (!label) return null;
+  const opts = [...m.values()];
+  const dl = ctx.doc.defaultLang;
+  if (opts.every((o) => clNum(clDef(ctx, o.src)) != null)) opts.sort((x, y) => clNum(clDef(ctx, x.src)) - clNum(clDef(ctx, y.src)));
+  else {
+    opts.sort((x, y) => {
+      try { return clDef(ctx, x.src).localeCompare(clDef(ctx, y.src), dl, { numeric: true }); } catch (e) { return clDef(ctx, x.src) < clDef(ctx, y.src) ? -1 : 1; }
+    });
+  }
+  return { key: k, chips: false, label: (l) => plainIn(ctx, label, l), opts: opts.map((o) => ({ label: (l) => plainIn(ctx, o.src, l), rows: o.rows })) };
+}
+
+function clFacetTags(ctx, rows) {
+  const m = new Map();
+  rows.forEach((r, ri) => {
+    const base = clTagList(ctx, r.it, ctx.doc.defaultLang);
+    const per = {};
+    for (const l of ctx.langs) per[l] = clTagList(ctx, r.it, l);
+    base.forEach((tg, j) => {
+      const id = clLabelKey(tg);
+      if (!id) return;
+      let o = m.get(id);
+      if (!o) {
+        o = { names: {}, rows: new Set(), t: tg };
+        for (const l of ctx.langs) o.names[l] = per[l][j] || tg;
+        m.set(id, o);
+      }
+      o.rows.add(ri);
+    });
+  });
+  const opts = [...m.values()].sort((x, y) => y.rows.size - x.rows.size || (x.t < y.t ? -1 : x.t > y.t ? 1 : 0)).slice(0, 40);
+  return { key: '$tags', chips: true, label: (l) => uiText('col.tags', l, ctx.doc), opts: opts.map((o) => ({ label: (l) => o.names[l] || o.t, rows: o.rows })) };
+}
+
+function clFacetKinds(ctx, rows) {
+  const opts = [];
+  for (const k of [...CL_OPEN, 'file']) {
+    const set = new Set();
+    rows.forEach((r, ri) => { if (r.files.some((x) => x.kind === k)) set.add(ri); });
+    if (set.size) opts.push({ label: (l) => uiText('col.k.' + k, l, ctx.doc), rows: set });
+  }
+  return { key: '$kind', chips: true, label: (l) => uiText('col.kind', l, ctx.doc), opts };
+}
+
+function clRange(ctx, rows, k) {
+  const vals = new Map();
+  let label = null;
+  rows.forEach((r, ri) => {
+    let n = null;
+    if (k === '$price') n = bcAmount(r.it.price);
+    else {
+      const a = clAttrOf(r.it, k);
+      if (a) { label = label || a.label; n = clNum(clDef(ctx, a.value)); }
+    }
+    if (n != null) vals.set(ri, n);
+  });
+  if (vals.size < 2) return null;
+  const arr = [...vals.values()];
+  const min = Math.min(...arr);
+  const max = Math.max(...arr);
+  if (!(max > min)) return null;
+  const lab = k === '$price' ? (l) => uiText('col.price', l, ctx.doc) : (l) => plainIn(ctx, label, l);
+  return { key: k, label: lab, vals, min, max };
+}
+
+function clSort(ctx, rows, k, si) {
+  const u = (key, vars) => (l) => uiText(key, l, ctx.doc, vars ? vars(l) : undefined);
+  const vals = new Map();
+  if (k === '$title') {
+    rows.forEach((r, ri) => { const v = clLangVal(ctx, (l) => plainIn(ctx, r.it.title, l)); if (v) vals.set(ri, v); });
+    return vals.size > 1 ? { id: 't', vals, opts: [['t:a', u('col.sortTitleAsc')], ['t:d', u('col.sortTitleDesc')]] } : null;
+  }
+  if (k === '$date') {
+    rows.forEach((r, ri) => { const d = str(r.it.date); if (/^\d{4}-\d{2}-\d{2}$/.test(d)) vals.set(ri, d); });
+    return vals.size > 1 ? { id: 'd', vals, opts: [['d:d', u('col.sortNew')], ['d:a', u('col.sortOld')]] } : null;
+  }
+  if (k === '$price') {
+    rows.forEach((r, ri) => { const p = bcAmount(r.it.price); if (p != null) vals.set(ri, p); });
+    const lab = (l) => ({ label: uiText('col.price', l, ctx.doc) });
+    return vals.size > 1 ? { id: 'p', vals, opts: [['p:a', u('col.sortLow', lab)], ['p:d', u('col.sortHigh', lab)]] } : null;
+  }
+  let label = null;
+  const raw = new Map();
+  rows.forEach((r, ri) => {
+    const a = clAttrOf(r.it, k);
+    if (!a) return;
+    label = label || a.label;
+    const t = clDef(ctx, a.value);
+    if (t) raw.set(ri, t);
+  });
+  if (raw.size < 2) return null;
+  const numeric = [...raw.values()].every((t) => clNum(t) != null);
+  for (const [ri, t] of raw) vals.set(ri, numeric ? clNum(t) : clFold(t));
+  const id = 's' + si;
+  const lab = (l) => ({ label: plainIn(ctx, label, l) });
+  return {
+    id, vals,
+    opts: numeric ? [[id + ':a', u('col.sortLow', lab)], [id + ':d', u('col.sortHigh', lab)]]
+      : [[id + ':a', u('col.sortAz', lab)], [id + ':d', u('col.sortZa', lab)]],
+  };
+}
+
+// What the visitor can do with the list (view only): search, facets, ranges, sorts.
+function clPlan(ctx, b, rows) {
+  const P = { search: false, facets: [], ranges: [], sorts: [], tools: false };
+  if (ctx.edit || rows.length < 2) return P;
+  P.search = !!b.search;
+  for (const k of clArr(b.filters)) {
+    const f = k === '$tags' ? clFacetTags(ctx, rows) : k === '$kind' ? clFacetKinds(ctx, rows) : clFacetAttr(ctx, rows, k);
+    if (f && f.opts.length >= 2) P.facets.push(f);
+  }
+  for (const k of clArr(b.ranges)) { const g = clRange(ctx, rows, k); if (g) P.ranges.push(g); }
+  clArr(b.sorts).forEach((k, si) => { const g = clSort(ctx, rows, k, si); if (g) P.sorts.push(g); });
+  P.tools = P.search || P.facets.length > 0 || P.ranges.length > 0 || P.sorts.length > 0;
+  return P;
+}
+
+// Search text of an item in every output language (title, subtitle, badge, tags, attribute values, file labels, the
+// start of the description, SKU), folded.
+function clHay(ctx, r) {
+  const parts = new Set();
+  const add = (v) => { const s = clFold(v); if (s) parts.add(s); };
+  for (const l of ctx.langs) {
+    for (const k of ['title', 'subtitle', 'badge', 'tags']) add(plainIn(ctx, r.it[k], l));
+    for (const a of r.attrs) add(plainIn(ctx, a.value, l));
+    for (const x of r.files) add(plainIn(ctx, x.f.label, l));
+    add(plainIn(ctx, r.it.html, l).slice(0, 600));
+  }
+  add(r.it.sku);
+  return [...parts].join(' ').slice(0, 4000);
+}
+
+// Item root attributes: edit → data-item; view → index, item id, search text, facet tokens, sort / range values.
+function clDataAttrs(ctx, P, r, ri) {
+  if (ctx.edit) return di(ctx, r.i);
+  let s = ` data-lp-ci="${ri}" data-lp-iid="${escapeAttr(str(r.it.id))}"`;
+  if (P.search) s += ` data-lp-q="${escapeAttr(clHay(ctx, r))}"`;
+  const toks = [];
+  P.facets.forEach((f, fi) => f.opts.forEach((o, oi) => { if (o.rows.has(ri)) toks.push(fi + ':' + oi); }));
+  if (toks.length) s += ` data-lp-f="${toks.join(' ')}"`;
+  const v = {};
+  P.ranges.forEach((g, gi) => { if (g.vals.has(ri)) v['r' + gi] = g.vals.get(ri); });
+  for (const g of P.sorts) if (g.vals.has(ri)) v[g.id] = g.vals.get(ri);
+  if (Object.keys(v).length) s += ` data-lp-v="${escapeAttr(JSON.stringify(v))}"`;
+  const sku = bcSku(r.it.sku);
+  if (sku) s += ` data-lp-product="${escapeAttr(sku)}"`;
+  return s;
+}
+
+/* ---------- toolbar (view: feature collection; edit: static look-alike) ---------- */
+
+const clIdOf = (b) => 'lpc' + str(b.id).replace(/[^A-Za-z0-9]/g, '');
+const clPill = (inner, lid, n) => `<summary class="lp-cl-pill"><span id="${lid}">${inner}</span>`
+  + `<span class="lp-cl-pn" data-lp-cl-n hidden>${n || ''}</span><span class="lp-cl-car" aria-hidden="true"></span></summary>`;
+
+function clDropdown(ctx, f, fi, id) {
+  const lid = `${id}-f${fi}`;
+  const opts = f.opts.map((o, oi) => `<label class="lp-cl-opt"><input type="checkbox" data-lp-cl-fo="${fi}:${oi}">`
+    + `<span class="lp-cl-ot">${grp(ctx, (l) => escapeHTML(o.label(l)), false)}</span><span class="lp-cl-oc">${o.rows.size}</span></label>`).join('');
+  return `<details class="lp-cl-dd" data-lp-cl-dd>${clPill(grp(ctx, (l) => escapeHTML(f.label(l)), false), lid)}`
+    + `<div class="lp-cl-pop" role="group" aria-labelledby="${lid}">${opts}</div></details>`;
+}
+
+function clChips(ctx, f, fi, id) {
+  const lid = `${id}-f${fi}`;
+  const chips = f.opts.map((o, oi) => `<button type="button" class="lp-cl-chip" aria-pressed="false" data-lp-cl-fo="${fi}:${oi}">`
+    + `${grp(ctx, (l) => escapeHTML(o.label(l)), false)}</button>`).join('');
+  return `<div class="lp-cl-chips" role="group" aria-labelledby="${lid}"><span class="lp-cl-cl" id="${lid}">`
+    + `${grp(ctx, (l) => escapeHTML(f.label(l)), false)}</span>${chips}</div>`;
+}
+
+function clRangeHTML(ctx, g, gi, id) {
+  const lid = `${id}-r${gi}`;
+  const fmt = (n) => String(Math.round(n * 100) / 100);
+  const inp = (k, key, ph) => `<label class="lp-cl-rf"><span>${ui(ctx, key)}</span><input type="number" class="lp-cl-num" inputmode="decimal"`
+    + ` step="any" data-lp-cl-${k}="r${gi}" placeholder="${fmt(ph)}"></label>`;
+  return `<details class="lp-cl-dd" data-lp-cl-dd>${clPill(grp(ctx, (l) => escapeHTML(g.label(l)), false), lid)}`
+    + `<div class="lp-cl-pop lp-cl-rng" role="group" aria-labelledby="${lid}">${inp('min', 'col.from', g.min)}${inp('max', 'col.to', g.max)}</div></details>`;
+}
+
+function clSortHTML(ctx, sorts) {
+  const opt = (v, fn) => {
+    const j = clLangJSON(ctx, fn);
+    return `<option value="${v}"${j ? ` data-lp-l="${escapeAttr(j)}"` : ''}>${escapeHTML(fn(ctx.lang))}</option>`;
+  };
+  let o = opt('', (l) => uiText('col.sortNone', l, ctx.doc));
+  for (const g of sorts) for (const [v, fn] of g.opts) o += opt(v, fn);
+  return `<div class="lp-cl-sort">${icon(ctx, 'sort')}<select class="lp-cl-sel" data-lp-cl-sort`
+    + `${clI18nAttrs(ctx, { 'aria-label': (l) => uiText('col.sort', l, ctx.doc) })}>${o}</select></div>`;
+}
+
+function clToolsHTML(ctx, b, P) {
+  const id = clIdOf(b);
+  let row = '';
+  if (P.search) {
+    row += `<div class="lp-cl-search">${icon(ctx, 'search')}<input type="search" class="lp-cl-q" data-lp-cl-q`
+      + `${clI18nAttrs(ctx, { placeholder: (l) => uiText('col.search', l, ctx.doc), 'aria-label': (l) => uiText('col.searchIn', l, ctx.doc) })}`
+      + ' autocomplete="off" spellcheck="false" enterkeyhint="search"></div>';
+  }
+  P.facets.forEach((f, fi) => { if (!f.chips) row += clDropdown(ctx, f, fi, id); });
+  P.ranges.forEach((g, gi) => { row += clRangeHTML(ctx, g, gi, id); });
+  if (P.sorts.length) row += clSortHTML(ctx, P.sorts);
+  let chips = '';
+  P.facets.forEach((f, fi) => { if (f.chips) chips += clChips(ctx, f, fi, id); });
+  const info = `<div class="lp-cl-info"><p class="lp-cl-count" data-lp-cl-count aria-live="polite"></p>`
+    + `<button type="button" class="lp-cl-reset" data-lp-cl-reset hidden>${ui(ctx, 'col.reset')}</button></div>`;
+  return `<div class="lp-cl-bar lp-js-only" data-lp-cl-tools>${row ? `<div class="lp-cl-row">${row}</div>` : ''}${chips}${info}</div>`;
+}
+
+// Edit mode: what the visitor will see, without controls (the tools only work on the published page).
+function clToolsLook(ctx, b, rows) {
+  const keys = clArr(b.filters).concat(clArr(b.ranges));
+  if (!b.search && !keys.length && !clArr(b.sorts).length) return '';
+  const T = (k) => escapeHTML(uiText(k, ctx.lang, ctx.doc));
+  const label = (k) => {
+    if (k === '$tags') return T('col.tags');
+    if (k === '$kind') return T('col.kind');
+    if (k === '$price') return T('col.price');
+    for (const r of rows) { const a = clAttrOf(r.it, k); if (a) return escapeHTML(plainIn(ctx, a.label, ctx.lang)); }
+    return escapeHTML(k);
+  };
+  let s = b.search ? `<span class="lp-cl-search">${icon(ctx, 'search')}<span class="lp-cl-q lp-cl-q-ed">${T('col.search')}</span></span>` : '';
+  for (const k of keys) s += `<span class="lp-cl-pill">${label(k)}<span class="lp-cl-car"></span></span>`;
+  if (clArr(b.sorts).length) s += `<span class="lp-cl-pill">${icon(ctx, 'sort')}${T('col.sortNone')}<span class="lp-cl-car"></span></span>`;
+  return `<div class="lp-cl-bar lp-cl-bar-ed" aria-hidden="true"><div class="lp-cl-row">${s}</div></div>`;
+}
+
+/* ---------- item parts ---------- */
+
+function clCover(ctx, r, ratio, ph) {
+  const m = mediaBox(ctx, r.it.cover, { ratio, fit: 'cover', cls: 'lp-cl-media', path: r.p + 'cover', alt: (l) => plainIn(ctx, r.it.title, l) });
+  if (m || !ph) return m;
+  // No cover on a shelf: a typographic cover (title on the accent colour) keeps the row even.
+  const k = (r.files.find((x) => x.kind !== 'file') || r.files[0] || { kind: 'file' }).kind;
+  return `<div class="lp-cl-nocv" style="--lp-ratio:${ratio}" aria-hidden="true"><span class="lp-cl-nocv-t">${txt(ctx, r.it.title)}</span>`
+    + `${icon(ctx, CL_ACT[k][2])}</div>`;
+}
+
+const clBadge = (ctx, b, r) => fld(ctx, b, r.p + 'badge', 'plain', 'span', 'lp-badge lp-cl-badge', 'ph.colBadge', { ecls: 'lp-opt' });
+
+function clTitle(ctx, b, r, tag = 'h3') {
+  return fld(ctx, b, r.p + 'title', 'plain', tag, 'lp-cl-title', 'ph.colTitle');
+}
+
+const clSub = (ctx, b, r) => fld(ctx, b, r.p + 'subtitle', 'plain', 'p', 'lp-cl-sub', 'ph.colSub', { ecls: 'lp-opt' });
+
+function clDate(ctx, r) {
+  const d = str(r.it.date);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return '';
+  return `<time class="lp-cl-date" datetime="${d}">${grp(ctx, (l) => escapeHTML(formatDay(d, l, ctx.doc)), false)}</time>`;
+}
+
+// Attribute rows with a value (label: value) as <div><dt><dd> (the first n, all when n is null).
+function clAttrRows(ctx, r, n) {
+  let s = '';
+  let k = 0;
+  for (const a of r.attrs) {
+    if (n != null && k >= n) break;
+    if (!has(ctx, a.value)) continue;
+    s += `<div><dt>${txt(ctx, a.label)}</dt><dd>${txt(ctx, a.value)}</dd></div>`;
+    k++;
+  }
+  return s;
+}
+const clShown = (ctx, r, n) => Math.min(n, r.attrs.filter((a) => has(ctx, a.value)).length);
+
+function clTags(ctx, b, r) {
+  if (ctx.edit) return fld(ctx, b, r.p + 'tags', 'plain', 'div', 'lp-cl-tags-ed', 'ph.colTags', { ecls: 'lp-opt' });
+  if (!has(ctx, r.it.tags)) return '';
+  const chips = grp(ctx, (l) => clTagList(ctx, r.it, l).map((x) => `<span class="lp-chip">${escapeHTML(x)}</span>`).join(''), false);
+  return chips ? `<div class="lp-cl-tags">${chips}</div>` : '';
+}
+
+// Description: 'full' rich text (editable in edit mode), 'ex' a plain excerpt, '' nothing.
+function clDesc(ctx, b, r, mode) {
+  if (ctx.edit) return fld(ctx, b, r.p + 'html', 'rich', 'div', 'lp-cl-desc lp-rich', 'ph.colDesc', { ecls: 'lp-opt' });
+  if (!mode || !has(ctx, r.it.html)) return '';
+  if (mode === 'full') return fld(ctx, b, r.p + 'html', 'rich', 'div', 'lp-cl-desc lp-rich', null);
+  return `<p class="lp-cl-ex">${grp(ctx, (l) => escapeHTML(clClip(plainIn(ctx, r.it.html, l), 220)), false)}</p>`;
+}
+
+// Price line + buy control (SKU) like products; nothing for items without a price and a SKU.
+function clBuy(ctx, b, r) {
+  const sku = bcSku(r.it.sku);
+  const p = bcAmount(r.it.price);
+  if (p == null && !sku) return '';
+  const price = priceHTML(ctx, p, r.it.old, r.it.unit, { blk: b, unitPath: r.p + 'unit', cls: 'lp-cl-price' });
+  const buy = sku ? buyHTML(ctx, sku, { qty: !!b.qty, label: b.buy, sm: true, blk: b, path: 'buy' }) : '';
+  return `<div class="lp-cl-foot">${price}${buy}</div>`;
+}
+
+// Reader button of one file (view: JS-only; edit: static look-alike). own: label with the file's own label (when
+// two buttons of a card would read the same, e.g. "View" for a plan picture and a PDF brochure).
+function clReadBtn(ctx, r, x, cls, own = false) {
+  const [key, ic] = CL_ACT[x.kind];
+  const label = own && has(ctx, x.f.label) ? txt(ctx, x.f.label) : ui(ctx, key);
+  if (ctx.edit) return `<span class="lp-btn lp-btn-sm ${cls}">${icon(ctx, ic)}<span>${label}</span></span>`;
+  clNeedFiles(ctx, r);
+  return `<button type="button" class="lp-btn lp-btn-sm ${cls} lp-js-only" data-lp-read="${escapeAttr(x.a.id)}" data-lp-rk="${x.kind}"`
+    + ` aria-haspopup="dialog">${icon(ctx, ic)}<span>${label}</span></button>`;
+}
+
+// Round play / read button on the cover (first file of `kinds`).
+function clFab(ctx, r, kinds) {
+  const x = r.files.find((f) => kinds.includes(f.kind));
+  if (!x) return ['', ''];
+  const [key, ic] = CL_ACT[x.kind];
+  if (ctx.edit) return [`<span class="lp-cl-fab" aria-hidden="true">${icon(ctx, ic)}</span>`, x.kind];
+  clNeedFiles(ctx, r);
+  const sr = grp(ctx, (l) => escapeHTML(uiText(key, l, ctx.doc) + (plainIn(ctx, r.it.title, l) ? ': ' + plainIn(ctx, r.it.title, l) : '')), false);
+  return [`<button type="button" class="lp-cl-fab lp-js-only" data-lp-read="${escapeAttr(x.a.id)}" data-lp-rk="${x.kind}" aria-haspopup="dialog">`
+    + `${icon(ctx, ic)}<span class="lp-sr">${sr}</span></button>`, x.kind];
+}
+
+function clLinkBtn(ctx, b, r, cls = 'lp-btn-ghost') {
+  const raw = str(r.it.href).trim();
+  if (!raw) return '';
+  const label = has(ctx, b.linkLabel) ? txt(ctx, b.linkLabel) : ui(ctx, 'col.link');
+  if (ctx.edit) return `<span class="lp-btn lp-btn-sm ${cls}">${label}</span>`;
+  const h = bcHref(ctx, raw);
+  return h ? `<a class="lp-btn lp-btn-sm ${cls}"${h}>${label}</a>` : '';
+}
+
+// Primary actions of a card: up to `max` reader buttons (skipping kinds shown elsewhere), the details button, the link.
+function clActs(ctx, b, r, o) {
+  const picked = [];
+  for (const k of CL_OPEN) {
+    if (picked.length >= o.max) break;
+    if ((o.skip || []).includes(k)) continue;
+    const x = r.files.find((f) => f.kind === k);
+    if (x) picked.push(x);
+  }
+  const keys = picked.map((x) => CL_ACT[x.kind][0]);
+  let s = '';
+  picked.forEach((x, n) => {
+    s += clReadBtn(ctx, r, x, n ? 'lp-btn-secondary' : 'lp-btn-primary', keys.indexOf(keys[n]) !== keys.lastIndexOf(keys[n]));
+  });
+  s += (o.det || '') + clLinkBtn(ctx, b, r);
+  return s ? `<div class="lp-cl-acts">${s}</div>` : '';
+}
+
+// File list: kind icon, label, type · size, open and download buttons ([data-lp-file] rows are also the reader's
+// playlist source).
+function clFileList(ctx, r, hidden) {
+  if (!r.files.length) return '';
+  let s = '';
+  for (const x of r.files) {
+    const [key, ic, fic] = CL_ACT[x.kind];
+    const info = `${escapeHTML(fileTypeLabel(x.a))} · ${grp(ctx, (l) => escapeHTML(formatSize(x.a.size, l)), false)}`;
+    let acts = '';
+    if (ctx.edit) {
+      if (x.kind !== 'file') acts += `<span class="lp-btn lp-btn-sm lp-btn-secondary">${icon(ctx, ic)}<span>${ui(ctx, key)}</span></span>`;
+    } else {
+      clNeedFiles(ctx, r);
+      const id = escapeAttr(x.a.id);
+      if (x.kind !== 'file') {
+        acts += `<button type="button" class="lp-btn lp-btn-sm lp-btn-secondary lp-js-only" data-lp-read="${id}" data-lp-rk="${x.kind}"`
+          + ` aria-haspopup="dialog">${icon(ctx, ic)}<span>${ui(ctx, key)}</span></button>`;
+      }
+      acts += `<button type="button" class="lp-btn lp-btn-sm lp-btn-ghost lp-cl-dl lp-js-only" data-att-dl data-att="${id}">`
+        + `${icon(ctx, 'download')}<span class="lp-sr">${ui(ctx, 'download')}</span></button>`;
+    }
+    s += `<li class="lp-cl-file"${ctx.edit ? '' : ` data-lp-file="${escapeAttr(x.a.id)}" data-lp-rk="${x.kind}"`}>${icon(ctx, fic, 'lp-cl-fic')}`
+      + `<span class="lp-cl-fm"><span class="lp-cl-fl">${clFileLabel(ctx, x)}</span><span class="lp-cl-fi">${info}</span></span>`
+      + `${acts ? `<span class="lp-cl-fa">${acts}</span>` : ''}</li>`;
+  }
+  return `<ul class="lp-cl-files"${hidden ? ' hidden' : ''}>${s}</ul>`;
+}
+
+/**
+ * Item details: every attribute, the description when the card does not show it, the file list. mode 'modal' → a
+ * <details> for pages without JavaScript (hidden once the runtime runs) + a "Details" button that opens the runtime's
+ * dialog; 'expand' → a <details> on the card. Returns {btn, el} ('' when the card already shows everything).
+ */
+function clDetails(ctx, b, r, o) {
+  const mode = oneOf(b.details, CL_DETAILS, 'modal');
+  if (ctx.edit || mode === 'none') return { btn: '', el: '' };
+  const kv = clAttrRows(ctx, r, null);
+  const more = clShown(ctx, r, Infinity) > (o.shown || 0) || (o.desc !== 'full' && has(ctx, r.it.html)) || r.files.length > 0;
+  if (!more) return { btn: '', el: '' };
+  const body = `<div class="lp-cl-dbody" data-lp-det>${o.desc !== 'full' ? clDesc(ctx, b, r, 'full') : ''}`
+    + `${kv ? `<dl class="lp-kv lp-cl-kv">${kv}</dl>` : ''}${clFileList(ctx, r, false)}</div>`;
+  const sum = `<summary class="lp-cl-sum">${ui(ctx, 'col.details')}</summary>`;
+  if (mode === 'expand') return { btn: '', el: `<details class="lp-cl-det">${sum}${body}</details>` };
+  feature(ctx, 'collection');
+  needUi(ctx, ...CL_RT_UI);
+  const btn = `<button type="button" class="${o.btnCls || 'lp-btn lp-btn-sm lp-btn-ghost'} lp-js-only" data-lp-det-open aria-haspopup="dialog">`
+    + `${o.btnInner || ui(ctx, 'col.details')}</button>`;
+  return { btn, el: `<details class="lp-cl-det lp-cl-det-m">${sum}${body}</details>` };
+}
+
+// Edit mode: what the inspector holds but the card does not show (files, more attributes).
+function clEdInfo(ctx, r, shown) {
+  const parts = [];
+  if (r.files.length) parts.push(icon(ctx, 'paperclip') + escapeHTML(uiText('col.ed.files', ctx.uiLang, ctx.doc, { n: r.files.length })));
+  const extra = r.attrs.length - shown;
+  if (extra > 0) parts.push(icon(ctx, 'list') + escapeHTML(uiText('col.ed.attrs', ctx.uiLang, ctx.doc, { n: extra })));
+  return parts.length ? `<p class="lp-cl-edinfo">${parts.map((x) => `<span>${x}</span>`).join('')}</p>` : '';
+}
+
+// media: 'inline' → the first audio / video plays on the card in a native player ([player html, kind]).
+function clInline(ctx, b, r, allow) {
+  if (!allow || b.media !== 'inline') return ['', ''];
+  const x = r.files.find((f) => f.kind === 'audio' || f.kind === 'video');
+  if (!x || !/^(audio|video)\//.test(mimeBase(x.a.mime))) return ['', ''];
+  const video = x.kind === 'video';
+  const h = objectHTML(ctx, x.a, { player: 'native', ratio: video ? '16/9' : 'auto', title: plainIn(ctx, r.it.title, ctx.lang) || x.a.name, poster: r.it.cover });
+  return h ? [h, x.kind] : ['', ''];
+}
+
+/* ---------- variants ---------- */
+
+// Card of the grid, list and feature variants.
+function clCard(ctx, b, P, r, ri, v) {
+  const ratio = oneOf(b.ratio, CL_RATIOS, '4/3');
+  const list = v === 'list';
+  const det = oneOf(b.details, CL_DETAILS, 'modal');
+  const [inl, inlKind] = clInline(ctx, b, r, true);
+  const cover = inlKind === 'video' ? '' : clCover(ctx, r, list ? '1/1' : ratio, false);
+  const [fab, fabKind] = cover && !list ? clFab(ctx, r, ['audio', 'video'].filter((k) => k !== inlKind)) : ['', ''];
+  let media = '';
+  if (inlKind === 'video') media = `<div class="lp-cl-cv lp-cl-vid">${inl}</div>`;
+  else if (cover) media = `<div class="lp-cl-cv">${cover}${clBadge(ctx, b, r)}${fab}</div>`;
+  const n = clInt(b.cardAttrs, 3, 0, 12);
+  const shown = clShown(ctx, r, n);
+  const kv = clAttrRows(ctx, r, n);
+  const descMode = list || det === 'none' ? 'full' : 'ex';
+  const d = clDetails(ctx, b, r, { shown, desc: descMode });
+  const acts = clActs(ctx, b, r, { max: 2, skip: [fabKind, inlKind], det: d.btn });
+  // Without details the card lists the files, unless its only file is already the play / read button.
+  const single = r.files.length === 1 && r.files[0].kind !== 'file';
+  const files = det === 'none' && !ctx.edit ? clFileList(ctx, r, single) : '';
+  const meta = clDate(ctx, r);
+  const audio = inlKind === 'audio' ? `<div class="lp-cl-player">${inl}</div>` : '';
+  const body = `${media ? '' : clBadge(ctx, b, r)}${meta ? `<p class="lp-cl-meta">${meta}</p>` : ''}${clTitle(ctx, b, r)}${clSub(ctx, b, r)}`
+    + `${kv ? `<dl class="lp-cl-attrs">${kv}</dl>` : ''}${clDesc(ctx, b, r, descMode)}${audio}${clTags(ctx, b, r)}`
+    + `${ctx.edit ? clEdInfo(ctx, r, shown) : ''}${files}`
+    + `<div class="lp-cl-end">${clBuy(ctx, b, r)}${acts}</div>${d.el}`;
+  const hero = v === 'feature' && ri === 0 ? ' lp-cl-hero' : '';
+  return `<article class="lp-cl-it lp-cl-card${hero}"${clDataAttrs(ctx, P, r, ri)}>${media}<div class="lp-cl-body">${body}</div></article>`;
+}
+
+// Book on a shelf: cover first (a typographic one when missing), title and subtitle under it.
+function clBook(ctx, b, P, r, ri) {
+  const ratio = oneOf(b.ratio, CL_RATIOS, '2/3');
+  const cover = clCover(ctx, r, ratio, true);
+  const [fab, fabKind] = clFab(ctx, r, CL_OPEN);
+  const d = clDetails(ctx, b, r, {
+    shown: 0, desc: '', btnCls: 'lp-cl-open',
+    btnInner: `<span class="lp-sr">${grp(ctx, (l) => escapeHTML(uiText('col.details', l, ctx.doc) + ': ' + plainIn(ctx, r.it.title, l)), false)}</span>`,
+  });
+  const det = oneOf(b.details, CL_DETAILS, 'modal');
+  const files = det === 'none' && !ctx.edit ? clFileList(ctx, r, true) : '';
+  const acts = clActs(ctx, b, r, { max: 0, skip: [fabKind] });
+  return `<div class="lp-cl-it lp-cl-book"${clDataAttrs(ctx, P, r, ri)}><div class="lp-cl-cv">${cover}${clBadge(ctx, b, r)}${d.btn}${fab}</div>`
+    + `<div class="lp-cl-bk">${clTitle(ctx, b, r)}${clSub(ctx, b, r)}${ctx.edit ? clDesc(ctx, b, r, 'full') + clEdInfo(ctx, r, 0) : ''}`
+    + `${clBuy(ctx, b, r)}${acts}${files}${d.el}</div></div>`;
+}
+
+// Table: title (+ thumbnail) column, the first `cardAttrs` attribute columns, price, actions.
+function clTable(ctx, b, P, rows) {
+  const n = clInt(b.cardAttrs, 3, 0, 12);
+  const cols = [];
+  for (const r of rows) {
+    for (const a of r.attrs) {
+      if (cols.length >= n) break;
+      const k = clAttrKey(ctx, a);
+      if (k && !cols.some((c) => c.k === k)) cols.push({ k, label: a.label });
+    }
+  }
+  const priced = rows.some((r) => bcAmount(r.it.price) != null || bcSku(r.it.sku));
+  const ratio = oneOf(b.ratio, CL_RATIOS, '1/1');
+  const det = oneOf(b.details, CL_DETAILS, 'modal');
+  let body = '';
+  let anyAct = false;
+  const trs = rows.map((r, ri) => {
+    const thumb = clCover(ctx, r, ratio, false);
+    const d = clDetails(ctx, b, r, { shown: cols.length, desc: '' });
+    const files = det === 'none' && !ctx.edit ? clFileList(ctx, r, true) : '';
+    const acts = clActs(ctx, b, r, { max: 1, det: d.btn });
+    if (acts) anyAct = true;
+    const tds = cols.map((c) => {
+      const a = clAttrOf(r.it, c.k);
+      const v = a && has(ctx, a.value) ? txt(ctx, a.value) : '<span class="lp-cl-na" aria-hidden="true">—</span>';
+      return `<td class="lp-cl-tc"><span class="lp-cl-th" aria-hidden="true">${txt(ctx, c.label)}</span><span class="lp-cl-tv">${v}</span></td>`;
+    }).join('');
+    const tc = `<td class="lp-cl-tc-t"><div class="lp-cl-tt">${thumb ? `<div class="lp-cl-thumb">${thumb}</div>` : ''}<div class="lp-cl-ti">`
+      + `${clTitle(ctx, b, r, 'h3')}${clSub(ctx, b, r)}${ctx.edit ? clDesc(ctx, b, r, 'full') + clEdInfo(ctx, r, cols.length) : ''}${files}${d.el}</div></div></td>`;
+    return { r, ri, tc, tds, acts };
+  });
+  for (const x of trs) {
+    const p = priced ? `<td class="lp-cl-tc-p">${clBuy(ctx, b, x.r)}</td>` : '';
+    const a = anyAct ? `<td class="lp-cl-tc-a">${x.acts}</td>` : '';
+    body += `<tr class="lp-cl-it lp-cl-tr"${clDataAttrs(ctx, P, x.r, x.ri)}>${x.tc}${x.tds}${p}${a}</tr>`;
+  }
+  const head = `<thead><tr><th scope="col">${ui(ctx, 'col.title')}</th>`
+    + cols.map((c) => `<th scope="col">${txt(ctx, c.label)}</th>`).join('')
+    + `${priced ? `<th scope="col" class="lp-cl-tc-p">${ui(ctx, 'col.price')}</th>` : ''}`
+    + `${anyAct ? `<th scope="col" class="lp-cl-tc-a"><span class="lp-sr">${ui(ctx, 'col.actions')}</span></th>` : ''}</tr></thead>`;
+  return `<div class="lp-cl-scroll"><table class="lp-cl-tbl">${head}<tbody class="lp-cl-items" data-lp-cl-list>${body}</tbody></table></div>`;
+}
+
+/* ---------- block ---------- */
+
+function clRender(b, ctx) {
+  if (noItems(ctx, b)) return addItemBox(ctx);
+  const v = oneOf(b.variant, CL_VARIANTS, 'grid');
+  bcVar(ctx, 'collection', 'variant', v);
+  const rows = clRows(ctx, b);
+  if (!rows.length) return '';
+  const P = clPlan(ctx, b, rows);
+  let list;
+  if (v === 'table') list = clTable(ctx, b, P, rows);
+  else {
+    const items = rows.map((r, ri) => (v === 'shelf' ? clBook(ctx, b, P, r, ri) : clCard(ctx, b, P, r, ri, v))).join('');
+    const cols = oneOf(clInt(b.columns, 3, 2, 6), [2, 3, 4, 5, 6], 3);
+    list = v === 'list' ? `<div class="lp-cl-items" data-lp-cl-list>${items}</div>`
+      : `<div class="lp-cl-items lp-grid" style="--lp-cols:${cols}" data-lp-cl-list>${items}</div>`;
+  }
+  let tools = '';
+  let tail = '';
+  let attrs = '';
+  if (ctx.edit) tools = clToolsLook(ctx, b, rows);
+  else {
+    const more = clInt(b.more, 0, 0, 200);
+    const paged = more > 0 && rows.length > more;
+    if (P.tools || paged) {
+      feature(ctx, 'collection');
+      needUi(ctx, ...CL_RT_UI);
+      attrs = ' data-lp-cl' + (paged ? ` data-lp-cl-more="${more}"` : '') + (v === 'feature' ? ' data-lp-cl-v="feature"' : '');
+    }
+    if (P.tools) {
+      bcVar(ctx, 'collection', 'tools', 'on');
+      tools = clToolsHTML(ctx, b, P);
+      const empty = has(ctx, b.empty) ? txt(ctx, b.empty) : ui(ctx, 'col.empty');
+      tail += `<div class="lp-cl-none" data-lp-cl-empty hidden><p>${empty}</p>`
+        + `<button type="button" class="lp-btn lp-btn-secondary lp-btn-sm" data-lp-cl-reset>${ui(ctx, 'col.reset')}</button></div>`;
+    }
+    if (paged) {
+      bcVar(ctx, 'collection', 'tools', 'on');
+      tail += '<div class="lp-cl-morebox lp-js-only"><button type="button" class="lp-btn lp-btn-secondary" data-lp-cl-morebtn hidden></button></div>';
+    }
+  }
+  return `<div class="lp-cl lp-cl-v-${v}"${attrs}>${tools}${list}${tail}</div>`;
+}
+
+/* ---------- catalog entries (collectProducts, CONTRACT.md §5) ---------- */
+
+// Items of a collection block that can be bought: [{sku, price, old, name (i18n), unit (i18n), img}].
+function clCatalog(b) {
+  const out = [];
+  for (const it of clArr(b && b.items)) {
+    if (!isObj(it)) continue;
+    const sku = bcSku(it.sku);
+    if (sku) out.push({ sku, price: bcAmount(it.price), old: bcAmount(it.old), name: it.title, unit: it.unit, img: it.cover });
+  }
+  return out;
+}
+
+/* ---------- registry ---------- */
+
+// Legacy `works` blocks (documents and templates that still create them): normalizeTop migrates them to collection
+// blocks (viewer-migrate.js); a works block that reaches a renderer unmigrated (inserted programmatically into an open
+// editor document) is drawn through the collection renderer. Not offered in the palette (palette: false).
+function clRenderWorks(b, ctx) {
+  const dl = ctx.doc.defaultLang;
+  const c = worksToCollection(b, ctx.doc.langs, dl);
+  const t = BT_COL.collection;
+  const def = t.defaults();
+  const x = { ...def, ...c, filters: [], ranges: [], sorts: [] };
+  x.items = c.items.map((it, i) => ({
+    ...t.itemDefaults(), ...it, id: str(it.id) || 'w' + i,
+    attrs: clNormAttrs(it.attrs, dl), files: clNormFiles(it.files, { atts: ctx.doc.attachments || {}, dl }),
+  }));
+  if (!ctx.edit) ctx.use.types.add('collection');
+  return clRender(x, ctx);
+}
+
+const CL_PRICE_F = { type: 'number', nullable: true, min: 0, max: 999999999, step: 0.01 };
+const clRatioOpts = (...vals) => vals.map((v) => ({ v, l: v.replace('/', ':') }));
+
+const BT_COL = {
+  collection: {
+    category: 'media', icon: 'book', container: false, variants: ['variant'],
+    i18nFields: ['buy', 'linkLabel', 'empty'], itemI18nFields: ['title', 'subtitle', 'badge', 'html', 'tags', 'unit'],
+    itemRichFields: { html: 'rich' }, itemLabel: 'title',
+    defaults: () => ({
+      variant: 'grid', columns: 3, ratio: '4/3', cardAttrs: 3, details: 'modal', media: 'reader',
+      search: false, filters: [], ranges: [], sorts: [], more: 0, qty: false, buy: {}, linkLabel: {}, empty: {}, items: [],
+    }),
+    schema: [
+      { key: 'variant', type: 'select', label: 'f.variant', noSeg: true, options: [{ v: 'grid', l: 'o.grid' }, { v: 'list', l: 'o.list' }, { v: 'shelf', l: 'o.shelf' }, { v: 'table', l: 'o.table' }, { v: 'feature', l: 'o.clFeature' }] },
+      { key: 'columns', type: 'select', label: 'f.columns', options: numOpts(2, 3, 4, 5, 6), when: { variant: ['grid', 'shelf', 'feature'] } },
+      { key: 'ratio', type: 'select', label: 'f.coverRatio', options: clRatioOpts(...CL_RATIOS) },
+      { key: 'cardAttrs', type: 'number', label: 'f.cardAttrs', min: 0, max: 12, step: 1, hint: 'hint.cl.cardAttrs', when: { variant: ['grid', 'list', 'table', 'feature'] } },
+      { key: 'details', type: 'select', label: 'f.details', options: [{ v: 'modal', l: 'o.detModal' }, { v: 'expand', l: 'o.detExpand' }, { v: 'none', l: 'o.detNone' }] },
+      { key: 'media', type: 'select', label: 'f.clMedia', options: [{ v: 'reader', l: 'o.mdReader' }, { v: 'inline', l: 'o.mdInline' }], when: { variant: ['grid', 'list', 'feature'] }, hint: 'hint.cl.media' },
+      { key: 'search', type: 'checkbox', label: 'f.search' },
+      { key: 'filters', type: 'clkeys', mode: 'filter', label: 'f.filters', hint: 'hint.cl.filters' },
+      { key: 'ranges', type: 'clkeys', mode: 'range', label: 'f.ranges', hint: 'hint.cl.ranges' },
+      { key: 'sorts', type: 'clkeys', mode: 'sort', label: 'f.sorts', hint: 'hint.cl.sorts' },
+      { key: 'more', type: 'number', label: 'f.perPage', min: 0, max: 200, step: 1, hint: 'hint.cl.more' },
+      { key: 'empty', type: 'i18n', label: 'f.emptyText' },
+      { key: 'linkLabel', type: 'i18n', label: 'f.linkLabel' },
+      { key: 'qty', type: 'checkbox', label: 'f.qty' },
+      { key: 'buy', type: 'i18n', label: 'f.buyLabel', hint: 'hint.c.buy' },
+    ],
+    itemSchema: [
+      { key: 'title', type: 'i18n', label: 'f.title' },
+      { key: 'subtitle', type: 'i18n', label: 'f.subtitle' },
+      { key: 'cover', type: 'att', label: 'f.cover', accept: 'image/' },
+      { key: 'badge', type: 'i18n', label: 'f.badge' },
+      { key: 'attrs', type: 'kvlist', label: 'f.attrs', hint: 'hint.cl.attrs', wide: true },
+      { key: 'tags', type: 'i18n', label: 'f.tags', hint: 'hint.c.tags' },
+      { key: 'files', type: 'filelist', label: 'f.files', hint: 'hint.cl.files', wide: true },
+      { key: 'date', type: 'day', label: 'f.date', hint: 'hint.cl.date' },
+      { key: 'href', type: 'text', label: 'f.link', suggest: 'anchors' },
+      { key: 'price', label: 'f.price', ...CL_PRICE_F },
+      { key: 'old', label: 'f.old', ...CL_PRICE_F },
+      { key: 'unit', type: 'i18n', label: 'f.unit', hint: 'hint.c.unit' },
+      { key: 'sku', type: 'text', label: 'f.sku', hint: 'hint.cl.sku' },
+      { key: 'html', type: 'i18n', label: 'f.html' },
+    ],
+    itemDefaults: () => ({
+      id: uid(), title: {}, subtitle: {}, cover: null, badge: {}, html: {}, tags: {}, attrs: [], files: [], date: '', href: '',
+      price: null, old: null, unit: {}, sku: '',
+    }),
+    normalize: clNormalize,
+    render: clRender,
+  },
+  works: {
+    category: 'media', icon: 'music', container: false, variants: [], palette: false, legacy: 'collection', noSource: true,
+    i18nFields: [], itemI18nFields: ['title', 'genre', 'music', 'html', 'tags'], itemRichFields: { html: 'rich' }, itemLabel: 'title',
+    defaults: () => ({ variant: 'grid', columns: 3, play: 'modal', items: [] }),
+    schema: [],
+    itemSchema: [
+      { key: 'cover', type: 'att', label: 'f.cover', accept: 'image/' },
+      { key: 'media', type: 'att', label: 'f.media', accept: '' },
+    ],
+    itemDefaults: () => ({ id: uid(), title: {}, genre: {}, music: {}, year: '', duration: '', cover: null, media: null, html: {}, tags: {} }),
+    render: clRenderWorks,
+  },
+};
+
+/* ---------- CSS (CONTRACT.md §7 / §13: tokens, container queries; edit tweaks under [data-mode=edit]) ---------- */
+
+const CSS_BLOCKS_COL = {
+  collection: `
+.lp-cl{min-width:0}
+.lp-cl-items{margin:0;padding:0}
+.lp-cl-it{position:relative;min-width:0}
+.lp-cl-card{display:flex;flex-direction:column;background:var(--lp-surface);color:var(--lp-text);border:1px solid var(--lp-border);border-radius:var(--lp-radius);overflow:hidden;transition:transform .3s var(--lp-ease),box-shadow .3s var(--lp-ease),border-color .3s var(--lp-ease)}
+.lp-cl-card:hover{transform:translateY(-3px);box-shadow:var(--lp-shadow-lg);border-color:var(--lp-border-s)}
+.lp-cl-cv{position:relative;overflow:hidden}
+.lp-cl-card .lp-cl-cv .lp-media{border-radius:0}
+.lp-cl-cv .lp-media img{transition:transform .7s var(--lp-ease)}
+.lp-cl-it:hover .lp-cl-cv .lp-media img{transform:scale(1.04)}
+.lp-cl-cv>.lp-cl-badge{position:absolute;top:12px;inset-inline-start:12px;z-index:2;box-shadow:var(--lp-shadow)}
+.lp-cl-vid video{display:block;width:100%;aspect-ratio:16/9;background:#000}
+.lp-cl-vid .lp-att-prev{border:0}
+.lp-cl-body{display:flex;flex-direction:column;gap:8px;flex:1;min-width:0;padding:18px 20px 20px}
+.lp-cl-body>.lp-cl-badge{align-self:flex-start}
+.lp-cl-meta{display:flex;flex-wrap:wrap;gap:4px 12px;margin:0;color:var(--lp-muted);font-size:.8em;font-variant-numeric:tabular-nums}
+.lp-cl-title{margin:0;font-family:var(--lp-font-h);font-size:1.14em;font-weight:650;line-height:1.25;overflow-wrap:anywhere;hyphens:auto}
+.lp-cl-sub{margin:0;color:var(--lp-muted);font-size:.93em;line-height:1.4;overflow-wrap:anywhere}
+.lp-cl-attrs{display:flex;flex-wrap:wrap;gap:3px 16px;margin:2px 0 0;font-size:.85em;line-height:1.4}
+.lp-cl-attrs>div{display:inline-flex;align-items:baseline;gap:.35em;min-width:0}
+.lp-cl-attrs dt{margin:0;color:var(--lp-muted)}
+.lp-cl-attrs dt::after{content:":"}
+.lp-cl-attrs dd{margin:0;font-weight:600;overflow-wrap:anywhere}
+.lp-cl-ex{margin:0;color:var(--lp-muted);font-size:.92em;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.lp-cl-desc{font-size:.94em;overflow-wrap:anywhere}
+.lp-cl-desc>:first-child{margin-top:0}
+.lp-cl-desc>:last-child{margin-bottom:0}
+.lp-cl-player audio{display:block;width:100%}
+.lp-cl-player .lp-att-prev{border:0;background:none}
+.lp-cl-player .lp-att-prev audio{padding:0}
+.lp-cl-tags{display:flex;flex-wrap:wrap;gap:6px}
+.lp-cl-tags>[data-l]{display:contents}
+.lp-cl-end{display:flex;flex-direction:column;gap:12px;margin-top:auto;padding-top:6px}
+.lp-cl-end:empty{display:none}
+.lp-cl-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px 12px}
+.lp-cl-price .lp-price-now{font-size:1.18em}
+.lp-cl-acts{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.lp-cl-acts .lp-btn{white-space:nowrap}
+.lp-cl-fab{position:absolute;inset-inline-end:14px;bottom:14px;z-index:3;display:inline-flex;align-items:center;justify-content:center;width:50px;height:50px;padding:0;border:0;border-radius:50%;background:var(--lp-accent);color:var(--lp-on-accent);box-shadow:0 10px 26px -8px rgba(0,0,0,.6);cursor:pointer;transition:transform .25s var(--lp-ease),box-shadow .25s var(--lp-ease)}
+.lp-cl-fab .lp-ic{width:22px;height:22px}
+.lp-cl-fab:hover{transform:scale(1.08);box-shadow:0 14px 30px -8px rgba(0,0,0,.65),0 0 0 6px color-mix(in srgb,var(--lp-accent) 26%,transparent)}
+.lp-cl-fab:focus-visible{outline:3px solid var(--lp-link);outline-offset:3px}
+.lp-cl-open{position:absolute;inset:0;z-index:1;width:100%;height:100%;margin:0;padding:0;border:0;background:transparent;cursor:pointer}
+.lp-cl-open:focus-visible{outline:3px solid var(--lp-link);outline-offset:-3px}
+.lp-cl-nocv{position:relative;display:flex;flex-direction:column;justify-content:space-between;gap:10px;aspect-ratio:var(--lp-ratio,2/3);padding:16% 13% 12%;overflow:hidden;background:linear-gradient(155deg,var(--lp-accent),color-mix(in srgb,var(--lp-accent) 55%,#000));color:var(--lp-on-accent)}
+.lp-cl-nocv::after{content:"";position:absolute;inset:8% 9%;border:1px solid color-mix(in srgb,currentColor 35%,transparent);pointer-events:none}
+.lp-cl-nocv-t{font-family:var(--lp-font-h);font-size:clamp(.9em,.7em + .8cqi,1.15em);font-weight:700;line-height:1.18;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:5;-webkit-box-orient:vertical;overflow:hidden}
+.lp-cl-nocv .lp-ic{align-self:flex-end;width:24px;height:24px;opacity:.75}
+.lp-cl-det{border-top:1px solid var(--lp-border);padding-top:4px}
+.lp-cl-sum{display:inline-flex;align-items:center;gap:8px;padding:6px 0;color:var(--lp-link);font-size:.9em;font-weight:600;list-style:none;cursor:pointer}
+.lp-cl-sum::-webkit-details-marker{display:none}
+.lp-cl-sum::after{content:"";width:.45em;height:.45em;border:solid currentColor;border-width:0 2px 2px 0;transform:translateY(-2px) rotate(45deg);transition:transform .2s var(--lp-ease)}
+.lp-cl-det[open]>.lp-cl-sum::after{transform:translateY(1px) rotate(-135deg)}
+html.lp-js .lp-cl-det-m{display:none}
+.lp-cl-dbody{display:flex;flex-direction:column;gap:14px;padding:8px 0 4px}
+.lp-cl-kv{font-size:.9em}
+.lp-cl-files{display:grid;gap:8px;margin:0;padding:0;list-style:none}
+.lp-cl-file{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:10px 12px;border:1px solid var(--lp-border);border-radius:var(--lp-radius-s);background:var(--lp-bg)}
+.lp-cl-fic{width:22px;height:22px;color:var(--lp-link)}
+.lp-cl-fm{display:flex;flex-direction:column;flex:1 1 9em;min-width:0}
+.lp-cl-fl{font-weight:600;line-height:1.3;overflow-wrap:anywhere}
+.lp-cl-fi{color:var(--lp-muted);font-size:.8em}
+.lp-cl-fa{display:flex;flex-wrap:wrap;gap:6px;margin-inline-start:auto}
+.lp-cl-dl{padding-inline:.7em}
+.lp-cl-edinfo{display:flex;flex-wrap:wrap;gap:4px 14px;margin:0;color:var(--lp-muted);font-size:.8em}
+.lp-cl-edinfo>span{display:inline-flex;align-items:center;gap:5px}
+.lp-cl-tags-ed{font-size:.84em;color:var(--lp-muted)}
+@media (prefers-reduced-motion:reduce){.lp-cl-card,.lp-cl-cv .lp-media img,.lp-cl-fab{transition:none}.lp-cl-card:hover,.lp-cl-it:hover .lp-cl-cv .lp-media img,.lp-cl-fab:hover{transform:none}}
+.lp-root[data-mode=edit] .lp-cl-card:hover,.lp-root[data-mode=edit] .lp-cl-it:hover .lp-cl-cv .lp-media img{transform:none}
+.lp-root[data-mode=edit] .lp-cl-desc:empty{font-size:.86em}
+`,
+};
+
+const CSS_VARIANTS_COL = {
+  collection: {
+    'variant=grid': '',
+    'variant=list': `
+.lp-cl-v-list .lp-cl-items{display:flex;flex-direction:column;gap:var(--lp-gap)}
+.lp-cl-v-list .lp-cl-card{flex-direction:row;align-items:stretch}
+.lp-cl-v-list .lp-cl-cv{flex:0 0 clamp(150px,28%,280px)}
+.lp-cl-v-list .lp-cl-cv .lp-media{height:100%;min-height:100%}
+.lp-cl-v-list .lp-cl-cv .lp-media img{object-position:50% 15%}
+.lp-cl-v-list .lp-cl-body{padding:22px 26px;gap:10px}
+.lp-cl-v-list .lp-cl-title{font-size:1.28em}
+.lp-cl-v-list .lp-cl-card:hover{transform:translateY(-2px)}
+@container lp (max-width:600px){.lp-cl-v-list .lp-cl-card{flex-direction:column}.lp-cl-v-list .lp-cl-cv{flex-basis:auto}.lp-cl-v-list .lp-cl-cv .lp-media{height:auto;aspect-ratio:16/10}.lp-cl-v-list .lp-cl-body{padding:18px 20px 20px}}
+`,
+    'variant=shelf': `
+.lp-cl-v-shelf .lp-cl-items{gap:clamp(18px,2.4cqi,32px) clamp(14px,2cqi,24px);align-items:start}
+.lp-cl-book{display:flex;flex-direction:column;gap:12px}
+.lp-cl-book .lp-cl-cv{border-radius:calc(var(--lp-radius-s) * .7) var(--lp-radius-s) var(--lp-radius-s) calc(var(--lp-radius-s) * .7);box-shadow:0 1px 2px rgba(0,0,0,.14),0 14px 26px -12px rgba(0,0,0,.42);transform-origin:50% 100%;transition:transform .35s var(--lp-ease),box-shadow .35s var(--lp-ease)}
+.lp-cl-book .lp-cl-cv::before{content:"";position:absolute;inset:0 auto 0 0;z-index:1;width:7%;background:linear-gradient(90deg,rgba(0,0,0,.22),rgba(255,255,255,.14) 55%,transparent);pointer-events:none}
+.lp-cl-book .lp-cl-cv .lp-media{border-radius:0}
+.lp-cl-book:hover .lp-cl-cv{transform:translateY(-6px) rotate(-.8deg);box-shadow:0 2px 4px rgba(0,0,0,.14),0 22px 34px -14px rgba(0,0,0,.5)}
+.lp-cl-book:hover .lp-cl-cv .lp-media img{transform:none}
+.lp-cl-book .lp-cl-fab{width:44px;height:44px;inset-inline-end:10px;bottom:10px}
+.lp-cl-book .lp-cl-fab .lp-ic{width:19px;height:19px}
+.lp-cl-book .lp-cl-cv>.lp-cl-badge{top:10px;inset-inline-start:auto;inset-inline-end:10px}
+.lp-cl-bk{display:flex;flex-direction:column;gap:4px;min-width:0}
+.lp-cl-book .lp-cl-title{font-size:1em;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.lp-cl-book .lp-cl-sub{font-size:.86em;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+.lp-cl-book .lp-cl-foot{margin-top:6px}
+.lp-cl-book .lp-cl-acts{margin-top:6px}
+.lp-cl-book .lp-cl-det{margin-top:6px}
+@container lp (max-width:900px){.lp-cl-v-shelf .lp-cl-items:not(.lp-grid-fit){grid-template-columns:repeat(min(var(--lp-cols,5),4),minmax(0,1fr))}}
+@container lp (max-width:600px){.lp-cl-v-shelf .lp-cl-items:not(.lp-grid-fit){grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (prefers-reduced-motion:reduce){.lp-cl-book .lp-cl-cv{transition:none}.lp-cl-book:hover .lp-cl-cv{transform:none}}
+.lp-root[data-mode=edit] .lp-cl-book:hover .lp-cl-cv{transform:none}
+.lp-root[data-mode=edit] .lp-cl-book .lp-cl-title,.lp-root[data-mode=edit] .lp-cl-book .lp-cl-sub{display:block}
+`,
+    'variant=table': `
+.lp-cl-scroll{overflow-x:auto}
+.lp-cl-tbl{width:100%;border-collapse:separate;border-spacing:0;background:var(--lp-surface);color:var(--lp-text);border:1px solid var(--lp-border);border-radius:var(--lp-radius);overflow:hidden;font-variant-numeric:tabular-nums}
+.lp-cl-tbl th{padding:12px 16px;text-align:start;font-size:.78em;font-weight:650;letter-spacing:.04em;color:var(--lp-muted);background:var(--lp-tint2);border-bottom:1px solid var(--lp-border);white-space:nowrap}
+.lp-cl-tbl td{padding:12px 16px;vertical-align:middle;border-bottom:1px solid var(--lp-border)}
+.lp-cl-tbl tbody tr:last-child>td{border-bottom:0}
+.lp-cl-tr{transition:background-color .2s}
+.lp-cl-tr:hover{background:color-mix(in srgb,var(--lp-tint) 55%,transparent)}
+.lp-cl-tc-t{min-width:14em}
+.lp-cl-tt{display:flex;align-items:center;gap:14px;min-width:0}
+.lp-cl-thumb{flex:0 0 52px;width:52px}
+.lp-cl-thumb .lp-media{border-radius:calc(var(--lp-radius-s) * .8)}
+.lp-cl-ti{display:flex;flex-direction:column;gap:2px;min-width:0}
+.lp-cl-tr .lp-cl-title{font-size:1em}
+.lp-cl-tr .lp-cl-sub{font-size:.84em}
+.lp-cl-tr .lp-cl-det{margin-top:6px}
+.lp-cl-th{display:none}
+.lp-cl-na{color:var(--lp-muted)}
+.lp-cl-tc-p{text-align:end}
+.lp-cl-tc-p .lp-cl-foot{justify-content:flex-end;flex-wrap:nowrap}
+.lp-cl-tc-p .lp-price-now{white-space:nowrap;font-size:1.02em}
+.lp-cl-tc-a{width:1%;text-align:end}
+.lp-cl-tc-a .lp-cl-acts{flex-wrap:nowrap;justify-content:flex-end}
+@container lp (max-width:600px){.lp-cl-tbl thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}.lp-cl-tbl,.lp-cl-tbl tbody,.lp-cl-tbl td{display:block}.lp-cl-tr{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 18px;padding:14px 16px;border-bottom:1px solid var(--lp-border)}.lp-cl-tbl tbody .lp-cl-tr:last-child{border-bottom:0}.lp-cl-tbl td{padding:0;border:0}.lp-cl-tbl .lp-cl-tc-t,.lp-cl-tbl .lp-cl-tc-p,.lp-cl-tbl .lp-cl-tc-a{flex:1 1 100%}.lp-cl-tbl .lp-cl-tc{display:inline-flex;gap:.35em;font-size:.88em}.lp-cl-th{display:inline;color:var(--lp-muted)}.lp-cl-th::after{content:":"}.lp-cl-tc-p,.lp-cl-tc-a{width:auto;text-align:start}.lp-cl-tc-p .lp-cl-foot,.lp-cl-tc-a .lp-cl-acts{justify-content:flex-start;flex-wrap:wrap}}
+`,
+    'variant=feature': `
+.lp-cl-v-feature .lp-cl-items{align-items:stretch}
+.lp-cl-v-feature .lp-cl-hero{grid-column:1/-1;flex-direction:row;align-items:stretch}
+.lp-cl-v-feature .lp-cl-hero .lp-cl-cv{flex:0 0 56%}
+.lp-cl-v-feature .lp-cl-hero .lp-cl-cv .lp-media{height:100%}
+.lp-cl-v-feature .lp-cl-hero .lp-cl-body{justify-content:center;gap:12px;padding:clamp(22px,3.2cqi,44px)}
+.lp-cl-v-feature .lp-cl-hero .lp-cl-title{font-size:clamp(1.4em,1em + 1.4cqi,2.1em)}
+.lp-cl-v-feature .lp-cl-hero .lp-cl-ex{-webkit-line-clamp:6;font-size:1em}
+.lp-cl-v-feature .lp-cl-hero .lp-cl-fab{width:62px;height:62px}
+.lp-cl-v-feature .lp-cl-hero:hover{transform:translateY(-2px)}
+@container lp (max-width:900px){.lp-cl-v-feature .lp-cl-hero{flex-direction:column}.lp-cl-v-feature .lp-cl-hero .lp-cl-cv{flex-basis:auto}.lp-cl-v-feature .lp-cl-hero .lp-cl-cv .lp-media{height:auto}}
+`,
+    'tools=on': `
+.lp-cl-bar{display:flex;flex-direction:column;gap:12px;margin:0 0 22px}
+.lp-cl-row{position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.lp-cl-search{position:relative;display:flex;align-items:center;flex:1 1 16em;min-width:0}
+.lp-cl-search>.lp-ic{position:absolute;inset-inline-start:15px;color:var(--lp-muted);pointer-events:none}
+.lp-cl-q{display:block;width:100%;min-height:2.85em;margin:0;padding:.6em 1.1em;padding-inline-start:2.75em;border:1px solid var(--lp-border-s);border-radius:999px;background:var(--lp-bg);color:var(--lp-text);font:inherit;font-size:max(16px,.95em);transition:border-color var(--lp-dur) var(--lp-ease),box-shadow var(--lp-dur) var(--lp-ease)}
+.lp-cl-q::placeholder{color:var(--lp-muted);opacity:.9}
+.lp-cl-q:hover{border-color:var(--lp-text)}
+.lp-cl-q:focus{outline:none;border-color:var(--lp-link);box-shadow:0 0 0 3px var(--lp-tint)}
+.lp-cl-q-ed{display:flex;align-items:center;color:var(--lp-muted)}
+.lp-cl-dd{position:relative}
+.lp-cl-pill{display:inline-flex;align-items:center;gap:.5em;min-height:2.85em;padding:.5em 1.05em;border:1px solid var(--lp-border-s);border-radius:999px;background:var(--lp-bg);color:var(--lp-text);font-size:.92em;font-weight:600;line-height:1.2;white-space:nowrap;list-style:none;cursor:pointer;-webkit-user-select:none;user-select:none;transition:border-color var(--lp-dur) var(--lp-ease),background-color var(--lp-dur) var(--lp-ease),color var(--lp-dur) var(--lp-ease)}
+.lp-cl-pill::-webkit-details-marker{display:none}
+.lp-cl-pill:hover{border-color:var(--lp-text)}
+.lp-cl-pill .lp-ic{width:1.05em;height:1.05em}
+.lp-cl-dd[open]>.lp-cl-pill,.lp-cl-pill.lp-on{border-color:var(--lp-link);background:var(--lp-tint);color:var(--lp-link)}
+.lp-cl-car{width:.42em;height:.42em;margin-inline-start:.1em;border:solid currentColor;border-width:0 2px 2px 0;transform:translateY(-2px) rotate(45deg);transition:transform .2s var(--lp-ease)}
+.lp-cl-dd[open] .lp-cl-car{transform:translateY(1px) rotate(-135deg)}
+.lp-cl-pn{display:inline-grid;place-items:center;min-width:1.55em;height:1.55em;padding:0 .4em;border-radius:999px;background:var(--lp-accent);color:var(--lp-on-accent);font-size:.74em;font-weight:700;font-variant-numeric:tabular-nums}
+.lp-cl-pop{position:absolute;z-index:40;top:calc(100% + 6px);inset-inline-start:0;display:flex;flex-direction:column;min-width:15em;max-width:min(24em,calc(100vw - 32px));max-height:21em;overflow:auto;padding:6px;border:1px solid var(--lp-border);border-radius:var(--lp-radius-s);background:var(--lp-bg);color:var(--lp-text);box-shadow:var(--lp-shadow-lg);overscroll-behavior:contain}
+.lp-cl-opt{display:flex;align-items:center;gap:.65em;padding:.5em .65em;border-radius:calc(var(--lp-radius-s) * .7);font-size:.93em;line-height:1.3;cursor:pointer}
+.lp-cl-opt:hover{background:var(--lp-hover)}
+.lp-cl-opt input{flex:none;width:1.1em;height:1.1em;margin:0;accent-color:var(--lp-accent);cursor:pointer}
+.lp-cl-ot{min-width:0;overflow-wrap:anywhere}
+.lp-cl-oc{margin-inline-start:auto;padding-inline-start:.8em;color:var(--lp-muted);font-size:.84em;font-variant-numeric:tabular-nums}
+.lp-cl-rng{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px}
+.lp-cl-rf{display:flex;flex-direction:column;gap:5px;min-width:0;color:var(--lp-muted);font-size:.82em;font-weight:600}
+.lp-cl-num{width:100%;min-width:0;min-height:2.6em;margin:0;padding:.45em .7em;border:1px solid var(--lp-border-s);border-radius:var(--lp-radius-s);background:var(--lp-bg);color:var(--lp-text);font:inherit;font-size:max(16px,1em);font-variant-numeric:tabular-nums}
+.lp-cl-num:focus{outline:none;border-color:var(--lp-link);box-shadow:0 0 0 3px var(--lp-tint)}
+.lp-cl-sort{position:relative;display:inline-flex;align-items:center;max-width:100%}
+.lp-cl-sort>.lp-ic{position:absolute;inset-inline-start:14px;width:1.05em;height:1.05em;pointer-events:none}
+.lp-cl-sel{-webkit-appearance:none;appearance:none;max-width:100%;min-height:2.85em;margin:0;padding:.5em 2.4em .5em 2.6em;border:1px solid var(--lp-border-s);border-radius:999px;background-color:var(--lp-bg);background-image:linear-gradient(45deg,transparent 50%,currentColor 50%),linear-gradient(135deg,currentColor 50%,transparent 50%);background-position:calc(100% - 1.25em) 52%,calc(100% - .92em) 52%;background-size:.34em .34em,.34em .34em;background-repeat:no-repeat;color:var(--lp-text);font:inherit;font-size:.92em;font-weight:600;cursor:pointer}
+[dir=rtl] .lp-cl-sel{background-position:1.25em 52%,.92em 52%}
+.lp-cl-sel:hover{border-color:var(--lp-text)}
+.lp-cl-sel:focus{outline:none;border-color:var(--lp-link);box-shadow:0 0 0 3px var(--lp-tint)}
+.lp-cl-chips{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.lp-cl-cl{margin-inline-end:4px;color:var(--lp-muted);font-size:.84em;font-weight:600}
+.lp-cl-chip{display:inline-flex;align-items:center;min-height:2.2em;padding:.3em .95em;border:1px solid var(--lp-border);border-radius:999px;background:var(--lp-bg);color:var(--lp-text);font:inherit;font-size:.86em;font-weight:550;line-height:1.2;cursor:pointer;transition:background-color var(--lp-dur) var(--lp-ease),border-color var(--lp-dur) var(--lp-ease),color var(--lp-dur) var(--lp-ease)}
+.lp-cl-chip:hover{border-color:var(--lp-text)}
+.lp-cl-chip[aria-pressed="true"]{border-color:var(--lp-accent);background:var(--lp-accent);color:var(--lp-on-accent)}
+.lp-cl-info{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px 16px;min-height:1.6em;color:var(--lp-muted);font-size:.88em}
+.lp-cl-count{margin:0;font-variant-numeric:tabular-nums}
+.lp-cl-reset{margin:0;padding:4px 2px;border:0;background:none;color:var(--lp-link);font:inherit;font-weight:600;text-decoration:underline;text-underline-offset:.2em;cursor:pointer}
+.lp-cl-none{display:flex;flex-direction:column;align-items:center;gap:14px;margin-top:8px;padding:44px 20px;border:1.5px dashed var(--lp-border-s);border-radius:var(--lp-radius);color:var(--lp-muted);text-align:center}
+.lp-cl-none p{margin:0;max-width:34em}
+.lp-cl-morebox{display:flex;justify-content:center;margin-top:28px}
+.lp-cl-morebox:not(:has(button:not([hidden]))){display:none}
+.lp-cl-bar-ed{pointer-events:none}
+@container lp (max-width:600px){.lp-cl-dd{position:static}.lp-cl-pop{inset-inline:0;max-width:none}.lp-cl-search{flex-basis:100%}.lp-cl-sort{flex:1 1 auto}.lp-cl-sel{width:100%}}
+`,
+  },
+};
+
+// Shared CSS chunks (CSS_SHARED) the block needs.
+const BLOCK_DEPS_COL = { collection: ['grid', 'media', 'chip', 'price', 'qty', 'kv'] };
+
+// Theme rule shaking: class prefix → owning block type.
+const OWN_COL = [[/\.lp-cl\b/, 'collection']];
+
+/* ---------- viewer strings (7 UI languages; keys unique across parts) ---------- */
+
+const UI_COL = {
+  en: {
+    'col.search': 'Search…', 'col.searchIn': 'Search in this list', 'col.sort': 'Sort', 'col.sortNone': 'Default order',
+    'col.sortTitleAsc': 'Title: A–Z', 'col.sortTitleDesc': 'Title: Z–A', 'col.sortNew': 'Newest first', 'col.sortOld': 'Oldest first',
+    'col.sortLow': '{label}: low to high', 'col.sortHigh': '{label}: high to low', 'col.sortAz': '{label}: A–Z', 'col.sortZa': '{label}: Z–A',
+    'col.title': 'Title', 'col.price': 'Price', 'col.tags': 'Tags', 'col.kind': 'Format', 'col.actions': 'Actions',
+    'col.k.audio': 'Audio', 'col.k.video': 'Video', 'col.k.text': 'Text', 'col.k.pdf': 'PDF', 'col.k.image': 'Images', 'col.k.file': 'Other files',
+    'col.from': 'From', 'col.to': 'To', 'col.reset': 'Reset filters',
+    'col.empty': 'Nothing matches your search. Try other words or reset the filters.',
+    'col.details': 'Details', 'col.link': 'Learn more', 'col.listen': 'Listen', 'col.watch': 'Watch', 'col.read': 'Read', 'col.view': 'View',
+    'col.count': { one: '{n} item', other: '{n} items' }, 'col.countOf': '{n} of {total}', 'col.more': 'Show more ({n})',
+    'ph.colTitle': 'Title', 'ph.colSub': 'Subtitle', 'ph.colDesc': 'Description…', 'ph.colBadge': 'Badge', 'ph.colTags': 'Tags, comma-separated',
+    'col.ed.files': { one: '{n} file', other: '{n} files' }, 'col.ed.attrs': { one: '+{n} attribute in the details', other: '+{n} attributes in the details' },
+    'rd.play': 'Play', 'rd.pause': 'Pause', 'rd.prev': 'Previous chapter', 'rd.next': 'Next chapter', 'rd.back': 'Back 15 seconds',
+    'rd.fwd': 'Forward 15 seconds', 'rd.speed': 'Playback speed', 'rd.seek': 'Position', 'rd.chapters': 'Chapters',
+    'rd.chapter': 'Chapter {n} of {total}', 'rd.resumed': 'Continuing from {time}', 'rd.smaller': 'Smaller text', 'rd.larger': 'Larger text',
+    'rd.theme': 'Page colours', 'rd.light': 'Light', 'rd.sepia': 'Sepia', 'rd.dark': 'Dark', 'rd.progress': '{p}% read',
+    'rd.loading': 'Loading…', 'rd.failed': 'This file cannot be shown here. You can download it instead.', 'rd.now': 'Now playing',
+    'rd.open': 'Open the player', 'rd.stop': 'Stop',
+  },
+  ru: {
+    'col.search': 'Поиск…', 'col.searchIn': 'Поиск по списку', 'col.sort': 'Сортировка', 'col.sortNone': 'Обычный порядок',
+    'col.sortTitleAsc': 'Название: А–Я', 'col.sortTitleDesc': 'Название: Я–А', 'col.sortNew': 'Сначала новые', 'col.sortOld': 'Сначала старые',
+    'col.sortLow': '{label}: по возрастанию', 'col.sortHigh': '{label}: по убыванию', 'col.sortAz': '{label}: А–Я', 'col.sortZa': '{label}: Я–А',
+    'col.title': 'Название', 'col.price': 'Цена', 'col.tags': 'Теги', 'col.kind': 'Формат', 'col.actions': 'Действия',
+    'col.k.audio': 'Аудио', 'col.k.video': 'Видео', 'col.k.text': 'Текст', 'col.k.pdf': 'PDF', 'col.k.image': 'Изображения', 'col.k.file': 'Другие файлы',
+    'col.from': 'От', 'col.to': 'До', 'col.reset': 'Сбросить фильтры',
+    'col.empty': 'Ничего не найдено. Попробуйте другие слова или сбросьте фильтры.',
+    'col.details': 'Подробнее', 'col.link': 'Узнать больше', 'col.listen': 'Слушать', 'col.watch': 'Смотреть', 'col.read': 'Читать', 'col.view': 'Открыть',
+    'col.count': { one: '{n} позиция', few: '{n} позиции', many: '{n} позиций', other: '{n} позиции' }, 'col.countOf': '{n} из {total}',
+    'col.more': 'Показать ещё ({n})',
+    'ph.colTitle': 'Название', 'ph.colSub': 'Подзаголовок', 'ph.colDesc': 'Описание…', 'ph.colBadge': 'Метка', 'ph.colTags': 'Теги через запятую',
+    'col.ed.files': { one: '{n} файл', few: '{n} файла', many: '{n} файлов', other: '{n} файла' },
+    'col.ed.attrs': { one: '+{n} характеристика в подробностях', few: '+{n} характеристики в подробностях', many: '+{n} характеристик в подробностях', other: '+{n} характеристики в подробностях' },
+    'rd.play': 'Воспроизвести', 'rd.pause': 'Пауза', 'rd.prev': 'Предыдущая глава', 'rd.next': 'Следующая глава', 'rd.back': 'Назад на 15 секунд',
+    'rd.fwd': 'Вперёд на 15 секунд', 'rd.speed': 'Скорость воспроизведения', 'rd.seek': 'Позиция', 'rd.chapters': 'Главы',
+    'rd.chapter': 'Глава {n} из {total}', 'rd.resumed': 'Продолжаем с {time}', 'rd.smaller': 'Мельче', 'rd.larger': 'Крупнее',
+    'rd.theme': 'Цвет страницы', 'rd.light': 'Светлый', 'rd.sepia': 'Сепия', 'rd.dark': 'Тёмный', 'rd.progress': 'Прочитано {p}%',
+    'rd.loading': 'Загрузка…', 'rd.failed': 'Этот файл нельзя показать здесь. Его можно скачать.', 'rd.now': 'Сейчас звучит',
+    'rd.open': 'Открыть плеер', 'rd.stop': 'Остановить',
+  },
+  uk: {
+    'col.search': 'Пошук…', 'col.searchIn': 'Пошук у списку', 'col.sort': 'Сортування', 'col.sortNone': 'Звичайний порядок',
+    'col.sortTitleAsc': 'Назва: А–Я', 'col.sortTitleDesc': 'Назва: Я–А', 'col.sortNew': 'Спочатку нові', 'col.sortOld': 'Спочатку старі',
+    'col.sortLow': '{label}: за зростанням', 'col.sortHigh': '{label}: за спаданням', 'col.sortAz': '{label}: А–Я', 'col.sortZa': '{label}: Я–А',
+    'col.title': 'Назва', 'col.price': 'Ціна', 'col.tags': 'Теги', 'col.kind': 'Формат', 'col.actions': 'Дії',
+    'col.k.audio': 'Аудіо', 'col.k.video': 'Відео', 'col.k.text': 'Текст', 'col.k.pdf': 'PDF', 'col.k.image': 'Зображення', 'col.k.file': 'Інші файли',
+    'col.from': 'Від', 'col.to': 'До', 'col.reset': 'Скинути фільтри',
+    'col.empty': 'Нічого не знайдено. Спробуйте інші слова або скиньте фільтри.',
+    'col.details': 'Докладніше', 'col.link': 'Дізнатися більше', 'col.listen': 'Слухати', 'col.watch': 'Дивитися', 'col.read': 'Читати', 'col.view': 'Відкрити',
+    'col.count': { one: '{n} позиція', few: '{n} позиції', many: '{n} позицій', other: '{n} позиції' }, 'col.countOf': '{n} з {total}',
+    'col.more': 'Показати ще ({n})',
+    'ph.colTitle': 'Назва', 'ph.colSub': 'Підзаголовок', 'ph.colDesc': 'Опис…', 'ph.colBadge': 'Мітка', 'ph.colTags': 'Теги через кому',
+    'col.ed.files': { one: '{n} файл', few: '{n} файли', many: '{n} файлів', other: '{n} файлу' },
+    'col.ed.attrs': { one: '+{n} характеристика в подробицях', few: '+{n} характеристики в подробицях', many: '+{n} характеристик у подробицях', other: '+{n} характеристики в подробицях' },
+    'rd.play': 'Відтворити', 'rd.pause': 'Пауза', 'rd.prev': 'Попередній розділ', 'rd.next': 'Наступний розділ', 'rd.back': 'Назад на 15 секунд',
+    'rd.fwd': 'Уперед на 15 секунд', 'rd.speed': 'Швидкість відтворення', 'rd.seek': 'Позиція', 'rd.chapters': 'Розділи',
+    'rd.chapter': 'Розділ {n} з {total}', 'rd.resumed': 'Продовжуємо з {time}', 'rd.smaller': 'Дрібніше', 'rd.larger': 'Більше',
+    'rd.theme': 'Колір сторінки', 'rd.light': 'Світлий', 'rd.sepia': 'Сепія', 'rd.dark': 'Темний', 'rd.progress': 'Прочитано {p}%',
+    'rd.loading': 'Завантаження…', 'rd.failed': 'Цей файл не можна показати тут. Його можна завантажити.', 'rd.now': 'Зараз звучить',
+    'rd.open': 'Відкрити плеєр', 'rd.stop': 'Зупинити',
+  },
+  de: {
+    'col.search': 'Suchen…', 'col.searchIn': 'In dieser Liste suchen', 'col.sort': 'Sortieren', 'col.sortNone': 'Standardreihenfolge',
+    'col.sortTitleAsc': 'Titel: A–Z', 'col.sortTitleDesc': 'Titel: Z–A', 'col.sortNew': 'Neueste zuerst', 'col.sortOld': 'Älteste zuerst',
+    'col.sortLow': '{label}: aufsteigend', 'col.sortHigh': '{label}: absteigend', 'col.sortAz': '{label}: A–Z', 'col.sortZa': '{label}: Z–A',
+    'col.title': 'Titel', 'col.price': 'Preis', 'col.tags': 'Schlagwörter', 'col.kind': 'Format', 'col.actions': 'Aktionen',
+    'col.k.audio': 'Audio', 'col.k.video': 'Video', 'col.k.text': 'Text', 'col.k.pdf': 'PDF', 'col.k.image': 'Bilder', 'col.k.file': 'Andere Dateien',
+    'col.from': 'Von', 'col.to': 'Bis', 'col.reset': 'Filter zurücksetzen',
+    'col.empty': 'Keine Treffer. Versuchen Sie andere Begriffe oder setzen Sie die Filter zurück.',
+    'col.details': 'Details', 'col.link': 'Mehr erfahren', 'col.listen': 'Anhören', 'col.watch': 'Ansehen', 'col.read': 'Lesen', 'col.view': 'Ansehen',
+    'col.count': { one: '{n} Eintrag', other: '{n} Einträge' }, 'col.countOf': '{n} von {total}', 'col.more': 'Mehr anzeigen ({n})',
+    'ph.colTitle': 'Titel', 'ph.colSub': 'Untertitel', 'ph.colDesc': 'Beschreibung…', 'ph.colBadge': 'Label', 'ph.colTags': 'Schlagwörter, durch Kommas getrennt',
+    'col.ed.files': { one: '{n} Datei', other: '{n} Dateien' }, 'col.ed.attrs': { one: '+{n} Merkmal in den Details', other: '+{n} Merkmale in den Details' },
+    'rd.play': 'Abspielen', 'rd.pause': 'Pause', 'rd.prev': 'Vorheriges Kapitel', 'rd.next': 'Nächstes Kapitel', 'rd.back': '15 Sekunden zurück',
+    'rd.fwd': '15 Sekunden vor', 'rd.speed': 'Wiedergabegeschwindigkeit', 'rd.seek': 'Position', 'rd.chapters': 'Kapitel',
+    'rd.chapter': 'Kapitel {n} von {total}', 'rd.resumed': 'Weiter ab {time}', 'rd.smaller': 'Kleinere Schrift', 'rd.larger': 'Größere Schrift',
+    'rd.theme': 'Seitenfarbe', 'rd.light': 'Hell', 'rd.sepia': 'Sepia', 'rd.dark': 'Dunkel', 'rd.progress': '{p} % gelesen',
+    'rd.loading': 'Wird geladen…', 'rd.failed': 'Diese Datei kann hier nicht angezeigt werden. Sie können sie herunterladen.', 'rd.now': 'Läuft gerade',
+    'rd.open': 'Player öffnen', 'rd.stop': 'Stoppen',
+  },
+  fr: {
+    'col.search': 'Rechercher…', 'col.searchIn': 'Rechercher dans cette liste', 'col.sort': 'Trier', 'col.sortNone': 'Ordre par défaut',
+    'col.sortTitleAsc': 'Titre : A–Z', 'col.sortTitleDesc': 'Titre : Z–A', 'col.sortNew': 'Plus récents d’abord', 'col.sortOld': 'Plus anciens d’abord',
+    'col.sortLow': '{label} : croissant', 'col.sortHigh': '{label} : décroissant', 'col.sortAz': '{label} : A–Z', 'col.sortZa': '{label} : Z–A',
+    'col.title': 'Titre', 'col.price': 'Prix', 'col.tags': 'Mots-clés', 'col.kind': 'Format', 'col.actions': 'Actions',
+    'col.k.audio': 'Audio', 'col.k.video': 'Vidéo', 'col.k.text': 'Texte', 'col.k.pdf': 'PDF', 'col.k.image': 'Images', 'col.k.file': 'Autres fichiers',
+    'col.from': 'De', 'col.to': 'À', 'col.reset': 'Réinitialiser les filtres',
+    'col.empty': 'Aucun résultat. Essayez d’autres mots ou réinitialisez les filtres.',
+    'col.details': 'Détails', 'col.link': 'En savoir plus', 'col.listen': 'Écouter', 'col.watch': 'Regarder', 'col.read': 'Lire', 'col.view': 'Voir',
+    'col.count': { one: '{n} élément', other: '{n} éléments' }, 'col.countOf': '{n} sur {total}', 'col.more': 'Afficher plus ({n})',
+    'ph.colTitle': 'Titre', 'ph.colSub': 'Sous-titre', 'ph.colDesc': 'Description…', 'ph.colBadge': 'Badge', 'ph.colTags': 'Mots-clés séparés par des virgules',
+    'col.ed.files': { one: '{n} fichier', other: '{n} fichiers' }, 'col.ed.attrs': { one: '+{n} caractéristique dans les détails', other: '+{n} caractéristiques dans les détails' },
+    'rd.play': 'Lecture', 'rd.pause': 'Pause', 'rd.prev': 'Chapitre précédent', 'rd.next': 'Chapitre suivant', 'rd.back': 'Reculer de 15 secondes',
+    'rd.fwd': 'Avancer de 15 secondes', 'rd.speed': 'Vitesse de lecture', 'rd.seek': 'Position', 'rd.chapters': 'Chapitres',
+    'rd.chapter': 'Chapitre {n} sur {total}', 'rd.resumed': 'Reprise à {time}', 'rd.smaller': 'Texte plus petit', 'rd.larger': 'Texte plus grand',
+    'rd.theme': 'Couleur de la page', 'rd.light': 'Clair', 'rd.sepia': 'Sépia', 'rd.dark': 'Sombre', 'rd.progress': '{p} % lu',
+    'rd.loading': 'Chargement…', 'rd.failed': 'Ce fichier ne peut pas être affiché ici. Vous pouvez le télécharger.', 'rd.now': 'En cours de lecture',
+    'rd.open': 'Ouvrir le lecteur', 'rd.stop': 'Arrêter',
+  },
+  es: {
+    'col.search': 'Buscar…', 'col.searchIn': 'Buscar en esta lista', 'col.sort': 'Ordenar', 'col.sortNone': 'Orden predeterminado',
+    'col.sortTitleAsc': 'Título: A–Z', 'col.sortTitleDesc': 'Título: Z–A', 'col.sortNew': 'Más recientes primero', 'col.sortOld': 'Más antiguos primero',
+    'col.sortLow': '{label}: de menor a mayor', 'col.sortHigh': '{label}: de mayor a menor', 'col.sortAz': '{label}: A–Z', 'col.sortZa': '{label}: Z–A',
+    'col.title': 'Título', 'col.price': 'Precio', 'col.tags': 'Etiquetas', 'col.kind': 'Formato', 'col.actions': 'Acciones',
+    'col.k.audio': 'Audio', 'col.k.video': 'Vídeo', 'col.k.text': 'Texto', 'col.k.pdf': 'PDF', 'col.k.image': 'Imágenes', 'col.k.file': 'Otros archivos',
+    'col.from': 'Desde', 'col.to': 'Hasta', 'col.reset': 'Restablecer filtros',
+    'col.empty': 'No hay resultados. Prueba con otras palabras o restablece los filtros.',
+    'col.details': 'Detalles', 'col.link': 'Más información', 'col.listen': 'Escuchar', 'col.watch': 'Ver', 'col.read': 'Leer', 'col.view': 'Ver',
+    'col.count': { one: '{n} elemento', other: '{n} elementos' }, 'col.countOf': '{n} de {total}', 'col.more': 'Mostrar más ({n})',
+    'ph.colTitle': 'Título', 'ph.colSub': 'Subtítulo', 'ph.colDesc': 'Descripción…', 'ph.colBadge': 'Etiqueta', 'ph.colTags': 'Etiquetas separadas por comas',
+    'col.ed.files': { one: '{n} archivo', other: '{n} archivos' }, 'col.ed.attrs': { one: '+{n} atributo en los detalles', other: '+{n} atributos en los detalles' },
+    'rd.play': 'Reproducir', 'rd.pause': 'Pausa', 'rd.prev': 'Capítulo anterior', 'rd.next': 'Capítulo siguiente', 'rd.back': 'Retroceder 15 segundos',
+    'rd.fwd': 'Avanzar 15 segundos', 'rd.speed': 'Velocidad de reproducción', 'rd.seek': 'Posición', 'rd.chapters': 'Capítulos',
+    'rd.chapter': 'Capítulo {n} de {total}', 'rd.resumed': 'Continuando desde {time}', 'rd.smaller': 'Texto más pequeño', 'rd.larger': 'Texto más grande',
+    'rd.theme': 'Color de la página', 'rd.light': 'Claro', 'rd.sepia': 'Sepia', 'rd.dark': 'Oscuro', 'rd.progress': '{p} % leído',
+    'rd.loading': 'Cargando…', 'rd.failed': 'Este archivo no se puede mostrar aquí. Puedes descargarlo.', 'rd.now': 'Reproduciendo',
+    'rd.open': 'Abrir el reproductor', 'rd.stop': 'Detener',
+  },
+  ka: {
+    'col.search': 'ძიება…', 'col.searchIn': 'ძიება ამ სიაში', 'col.sort': 'დალაგება', 'col.sortNone': 'ჩვეულებრივი რიგი',
+    'col.sortTitleAsc': 'სათაური: ა–ჰ', 'col.sortTitleDesc': 'სათაური: ჰ–ა', 'col.sortNew': 'ჯერ ახალი', 'col.sortOld': 'ჯერ ძველი',
+    'col.sortLow': '{label}: ზრდადობით', 'col.sortHigh': '{label}: კლებადობით', 'col.sortAz': '{label}: ა–ჰ', 'col.sortZa': '{label}: ჰ–ა',
+    'col.title': 'სათაური', 'col.price': 'ფასი', 'col.tags': 'თეგები', 'col.kind': 'ფორმატი', 'col.actions': 'მოქმედებები',
+    'col.k.audio': 'აუდიო', 'col.k.video': 'ვიდეო', 'col.k.text': 'ტექსტი', 'col.k.pdf': 'PDF', 'col.k.image': 'სურათები', 'col.k.file': 'სხვა ფაილები',
+    'col.from': 'დან', 'col.to': 'მდე', 'col.reset': 'ფილტრების გასუფთავება',
+    'col.empty': 'ვერაფერი მოიძებნა. სცადეთ სხვა სიტყვები ან გაასუფთავეთ ფილტრები.',
+    'col.details': 'დეტალურად', 'col.link': 'გაიგეთ მეტი', 'col.listen': 'მოსმენა', 'col.watch': 'ყურება', 'col.read': 'კითხვა', 'col.view': 'ნახვა',
+    'col.count': { one: '{n} ერთეული', other: '{n} ერთეული' }, 'col.countOf': '{n} / {total}', 'col.more': 'მეტის ჩვენება ({n})',
+    'ph.colTitle': 'სათაური', 'ph.colSub': 'ქვესათაური', 'ph.colDesc': 'აღწერა…', 'ph.colBadge': 'ნიშანი', 'ph.colTags': 'თეგები, მძიმით გამოყოფილი',
+    'col.ed.files': { one: '{n} ფაილი', other: '{n} ფაილი' }, 'col.ed.attrs': { one: '+{n} მახასიათებელი დეტალებში', other: '+{n} მახასიათებელი დეტალებში' },
+    'rd.play': 'დაკვრა', 'rd.pause': 'პაუზა', 'rd.prev': 'წინა თავი', 'rd.next': 'შემდეგი თავი', 'rd.back': '15 წამით უკან',
+    'rd.fwd': '15 წამით წინ', 'rd.speed': 'დაკვრის სიჩქარე', 'rd.seek': 'პოზიცია', 'rd.chapters': 'თავები',
+    'rd.chapter': 'თავი {n} / {total}', 'rd.resumed': 'ვაგრძელებთ {time}-დან', 'rd.smaller': 'უფრო პატარა ტექსტი', 'rd.larger': 'უფრო დიდი ტექსტი',
+    'rd.theme': 'გვერდის ფერი', 'rd.light': 'ღია', 'rd.sepia': 'სეპია', 'rd.dark': 'მუქი', 'rd.progress': 'წაკითხულია {p}%',
+    'rd.loading': 'იტვირთება…', 'rd.failed': 'ამ ფაილის აქ ჩვენება შეუძლებელია. შეგიძლიათ ჩამოტვირთოთ.', 'rd.now': 'ახლა ჟღერს',
+    'rd.open': 'პლეერის გახსნა', 'rd.stop': 'შეჩერება',
+  },
+};
+
+// Icons of the collection and the reader (merged into the landing icon set).
+const COL_ICONS = {
+  headphones: 'M4 15v-3a8 8 0 0 1 16 0v3 M4 14.5h2.5a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z M20 14.5h-2.5a1 1 0 0 0-1 1v4a1 1 0 0 0 1 1H19a1 1 0 0 0 1-1z',
+  filetext: 'M14 3H6.5A1.5 1.5 0 0 0 5 4.5v15A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5V8z M14 3v5h5 M8.5 12.5h7 M8.5 16h7 M8.5 9h2.5',
+  sort: 'M7 4v16 M3.5 16.5 7 20l3.5-3.5 M17 20V4 M13.5 7.5 17 4l3.5 3.5',
+  filter: 'M3.5 5h17l-6.5 8v6l-4 2v-8z',
+};
+
+export {
+  BLOCK_DEPS_COL,
+  BT_COL,
+  CL_ACT,
+  CL_DETAILS,
+  CL_KINDS,
+  CL_OPEN,
+  CL_RATIOS,
+  CL_RD_UI,
+  CL_RT_UI,
+  CL_SPECIAL,
+  CL_VARIANTS,
+  COL_ICONS,
+  CSS_BLOCKS_COL,
+  CSS_VARIANTS_COL,
+  OWN_COL,
+  UI_COL,
+  clAttrKeys,
+  clAttrOf,
+  clCatalog,
+  clFold,
+  clKey,
+  clKind,
+  clLabelKey,
+  clNormAttrs,
+  clNormFiles,
+  clNormKeys,
+  clNum,
+  clRender
+};

@@ -1,0 +1,1661 @@
+// knowledge-processor/templates-georgian.js - template "Georgian language study": a study base for Georgian (ქართული)
+// explained in English: the script and its sounds, grammar (cases, postpositions, pronouns, verbs), numbers, phrases,
+// vocabulary cards, parallel texts with toggleable layers (transliteration, IPA, glosses, English, Russian, notes),
+// annotated diagrams (a verb form split into morphemes, the alphabet grouped by sound, places of articulation) and an
+// exercises page whose answer key is a 451 secret variant (password 'pasukhi451').
+//
+// Structure (top to bottom): helpers -> SVG illustrations (strings built at import, stored as media via svgMedia from
+// kit.js) -> shared blocks (navbox etc.) -> page specs -> the default export { id, icon, name, desc, spec({ lang }) }.
+// Contract checked by test.js: every page and version renders with no missing block and no red link (links to 451
+// pages excepted), every declared password opens at least one envelope, name/desc exist in all 7 UI languages.
+// Pages are data, not code: a block is { type, ...fields } as defined in blocks.js; text fields use markup.js syntax
+// ([[link]], {{template|...}}, {ruby|reading}). Comments stay outside template literals: inside, they would become
+// content. This is a large data file: only structure and non-obvious helpers are commented.
+import { svgMedia } from './kit.js';
+
+const FONT = 'font-family="system-ui, sans-serif"';
+const r2 = (n) => Math.round(n * 100) / 100;
+
+// ---------------------------------------------------------------------------------------------
+// Markup helpers
+
+// Georgian text with a language tag.
+const ka = (s) => `{{lang|ka|${s}}}`;
+// A Georgian word in prose: bold Georgian, transliteration and IPA as layers, meaning always shown.
+const w = (geo, tr, en, ipa) => `**${ka(geo)}**{{layer|translit| *${tr}*}}${ipa ? `{{layer|ipa| {{ipa|[${ipa}]}}}}` : ''}${en ? ` ‘${en}’` : ''}`;
+// A table cell: Georgian with the transliteration under it.
+const kc = (geo, tr) => `${ka(geo)}{{layer|translit|{{br}}*${tr}*}}`;
+// An interlinear line: Georgian + tiers.
+const il = (text, translit, ipa, gloss, en, ru) => ({ text, tiers: { translit: `*${translit}*`, ipa: `{{ipa|[${ipa}]}}`, gloss, en, ru } });
+const TIERS = ['translit', 'ipa', 'gloss', 'en', 'ru'];
+
+// ---------------------------------------------------------------------------------------------
+// Illustrations (flat SVG; Georgian text drawn with system fonts)
+
+const LOGO = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" ${FONT}><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#dc2626"/><stop offset="1" stop-color="#7f1d1d"/></linearGradient></defs><rect width="64" height="64" rx="14" fill="url(#g)"/><text x="32" y="42" text-anchor="middle" font-size="28" font-weight="700" fill="#fff">ქა</text></svg>`;
+
+// Old Tbilisi: Narikala walls, a church with a conical dome, houses with wooden balconies, the river, the TV tower.
+const HOUSES = [
+  [250, 64, 96, '#f1c9a5'], [318, 70, 120, '#e8d5b5'], [392, 58, 84, '#f3b9a0'], [454, 62, 108, '#dfe3c8'], [520, 56, 46, '#f1c9a5'],
+  [580, 60, 40, '#e8d5b5'], [646, 66, 112, '#f3c7b0'], [716, 60, 92, '#e6d1b0'], [780, 72, 118, '#f0dcc0'], [856, 58, 86, '#e9c2a6'],
+  [918, 66, 104, '#dcd8bd'], [988, 60, 80, '#f1c9a5'], [1052, 70, 98, '#e8d5b5'], [1126, 74, 110, '#f3b9a0'],
+];
+function house([x, wd, h, c]) {
+  const top = 340 - h;
+  let s = `<rect x="${x}" y="${top}" width="${wd}" height="${h}" fill="${c}"/><path d="M${x - 4} ${top}L${x + wd / 2} ${top - 16}L${x + wd + 4} ${top}Z" fill="#9a3412" opacity=".85"/>`;
+  s += `<rect x="${x + 10}" y="${top + 12}" width="10" height="15" rx="5" fill="#7c5a3a" opacity=".7"/><rect x="${x + wd - 20}" y="${top + 12}" width="10" height="15" rx="5" fill="#7c5a3a" opacity=".7"/>`;
+  if (h > 70) s += `<rect x="${x + 4}" y="${top + 36}" width="${wd - 8}" height="18" fill="#8b5a2b"/><path d="M${x + 7} ${top + 46}h${wd - 14}" stroke="#f6e3c4" stroke-width="12" stroke-dasharray="2 4"/><rect x="${x + 2}" y="${top + 33}" width="${wd - 4}" height="4" fill="#5b3a1a"/>`;
+  return s;
+}
+const BANNER = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400"><defs><linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fde7c7"/><stop offset=".6" stop-color="#f8c4b4"/><stop offset="1" stop-color="#f3d9c9"/></linearGradient><linearGradient id="riv" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5b8fc7"/><stop offset="1" stop-color="#2b4f86"/></linearGradient></defs>` +
+  `<rect width="1200" height="400" fill="url(#sky)"/><circle cx="1010" cy="95" r="46" fill="#fff4e0"/>` +
+  `<path d="M0 215L90 170L170 195L270 140L360 185L450 150L560 200L660 160L760 195L880 150L980 190L1080 160L1200 195V400H0Z" fill="#d8a7a0" opacity=".7"/>` +
+  `<path d="M600 262C760 192 900 172 1200 186V400H600Z" fill="#7b8f4e"/>` +
+  `<g stroke="#b91c1c" stroke-width="4" fill="none"><path d="M1030 183L1046 80L1062 183M1036 142H1056M1040 112H1052M1046 80V52"/></g>` +
+  `<path d="M0 300V200C60 168 150 160 230 190C290 212 330 250 360 300Z" fill="#6f8442"/>` +
+  `<path d="M38 198V158h14v-10h10v10h12v-10h10v10h14v40Z" fill="#b08654"/><path d="M98 172h104v26H98Z" fill="#a37a4a"/><path d="M98 172v-7h9v7h11v-7h9v7h11v-7h9v7h11v-7h9v7h11v-7h9v7h11v-7h4v7Z" fill="#a37a4a"/><path d="M196 196V150h12v-9h8v9h12v-9h8v9h10v46Z" fill="#b08654"/>` +
+  `<rect x="520" y="222" width="110" height="80" fill="#efdcbc"/><path d="M510 226L575 196L640 226Z" fill="#9a3412"/><rect x="556" y="168" width="38" height="46" fill="#e8cfa6"/><path d="M550 171L575 128L600 171Z" fill="#7c2d12"/><rect x="569" y="180" width="12" height="22" rx="6" fill="#7c5a3a"/><path d="M575 128V110M568 117H582" stroke="#7c2d12" stroke-width="3"/>` +
+  HOUSES.map(house).join('') +
+  `<path d="M0 335C200 320 420 345 640 334C860 324 1020 344 1200 332V400H0Z" fill="url(#riv)"/><path d="M120 362h80M420 374h120M780 358h90M980 380h110" stroke="#cfe0f5" stroke-width="3" stroke-linecap="round" opacity=".6"/></svg>`;
+
+// The three scripts card (infobox of the script page).
+const pattee = (x, y, c) => `<path transform="translate(${x} ${y})" d="M-3-3L-6-12H6L3-3L12-6V6L3 3L6 12H-6L-3 3L-12 6V-6Z" fill="${c}"/>`;
+const SCRIPTS = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260" ${FONT}><rect width="400" height="260" rx="16" fill="#f7ecd6"/><rect x="12" y="12" width="376" height="236" rx="10" fill="none" stroke="#b45309" stroke-width="2"/><rect x="18" y="18" width="364" height="224" rx="7" fill="none" stroke="#b45309" opacity=".5"/>` +
+  pattee(40, 40, '#b91c1c') + pattee(360, 40, '#b91c1c') + pattee(40, 220, '#b91c1c') + pattee(360, 220, '#b91c1c') +
+  `<text x="200" y="62" font-size="23" text-anchor="middle" fill="#7c2d12">ქართული დამწერლობა</text><text x="200" y="150" font-size="76" text-anchor="middle" fill="#b91c1c">ა ბ გ</text><text x="200" y="198" font-size="23" text-anchor="middle" fill="#334155" letter-spacing="3">დ ე ვ ზ თ ი კ ლ მ ნ</text><path d="M150 216H250" stroke="#b45309" stroke-width="2" stroke-linecap="round"/></svg>`;
+
+// The alphabet grouped by sound: rows of letter tiles (diagram hotspots link to the pronunciation sections).
+const TILE_GROUPS = [
+  { id: 'vowels', label: 'Vowels', note: 'five pure vowels, never reduced', color: '#b45309', link: 'pronunciation#Vowels', letters: [['ა', 'a'], ['ე', 'e'], ['ი', 'i'], ['ო', 'o'], ['უ', 'u']] },
+  { id: 'voiced', label: 'Voiced stops and affricates', note: 'as in English *b, d, g*', color: '#15803d', link: 'pronunciation#Three series of stops', letters: [['ბ', 'b'], ['დ', 'd'], ['გ', 'g'], ['ძ', 'dz'], ['ჯ', 'j']] },
+  { id: 'aspirated', label: 'Aspirated stops and affricates', note: 'with a puff of air', color: '#1d4ed8', link: 'pronunciation#Three series of stops', letters: [['ფ', 'p'], ['თ', 't'], ['ქ', 'k'], ['ც', 'ts'], ['ჩ', 'ch']] },
+  { id: 'ejectives', label: 'Ejectives', note: 'glottis closed, a sharp pop', color: '#b91c1c', link: 'pronunciation#Ejectives', letters: [['პ', "p'"], ['ტ', "t'"], ['კ', "k'"], ['წ', "ts'"], ['ჭ', "ch'"], ['ყ', "q'"]] },
+  { id: 'fricatives', label: 'Fricatives', note: 'ღ and ხ are made far back', color: '#7e22ce', link: 'pronunciation#Fricatives and sonorants', letters: [['ვ', 'v'], ['ზ', 'z'], ['ს', 's'], ['ჟ', 'zh'], ['შ', 'sh'], ['ღ', 'gh'], ['ხ', 'kh'], ['ჰ', 'h']] },
+  { id: 'sonorants', label: 'Nasals and liquids', note: 'რ is a tap or trill', color: '#0f766e', link: 'pronunciation#Fricatives and sonorants', letters: [['მ', 'm'], ['ნ', 'n'], ['ლ', 'l'], ['რ', 'r']] },
+];
+const ABC_W = 800, ABC_H = 460, ABC_TOP = 16, ABC_ROW = 74;
+const ABCCHART = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${ABC_W} ${ABC_H}" ${FONT}><rect width="${ABC_W}" height="${ABC_H}" rx="18" fill="#fdf8f3"/>` +
+  TILE_GROUPS.map((g, r) => {
+    const y = ABC_TOP + r * ABC_ROW;
+    return `<rect x="18" y="${y - 6}" width="${g.letters.length * 64 + 8}" height="68" rx="14" fill="${g.color}" opacity=".13"/>` +
+      g.letters.map(([l, t], i) => `<rect x="${26 + i * 64}" y="${y}" width="56" height="56" rx="10" fill="${g.color}"/><text x="${54 + i * 64}" y="${y + 31}" font-size="27" text-anchor="middle" fill="#fff">${l}</text><text x="${54 + i * 64}" y="${y + 51}" font-size="11" text-anchor="middle" fill="#fff" opacity=".85">${t}</text>`).join('');
+  }).join('') + '</svg>';
+const ABC_ITEMS = TILE_GROUPS.map((g, r) => {
+  const y = ABC_TOP + r * ABC_ROW - 6;
+  return { id: g.id, shape: 'rect', x: r2((18 / ABC_W) * 100), y: r2((y / ABC_H) * 100), w: r2(((g.letters.length * 64 + 8) / ABC_W) * 100), h: r2((68 / ABC_H) * 100), lx: 73, ly: r2(((y + 34) / ABC_H) * 100), label: g.label, note: g.note, link: g.link, color: g.color };
+});
+
+// One verb form split into morphemes: გა-ვ-ა-კეთ-ებ-თ 'we will do (it)'.
+const MORPHS = [
+  { m: 'გა', tr: 'ga', color: '#b91c1c', label: 'Preverb **გა-**', note: 'completion: turns the present into the future', link: 'verbs#Preverbs' },
+  { m: 'ვ', tr: 'v', color: '#c2410c', label: 'Person prefix **ვ-**', note: 'first person subject: I, we', link: 'pronouns#Person markers in the verb' },
+  { m: 'ა', tr: 'a', color: '#a16207', label: 'Version vowel **ა-**', note: 'the vowel before the root', link: 'verbs#Version' },
+  { m: 'კეთ', tr: "k'et", color: '#15803d', label: 'Root **კეთ**', note: 'do, make', link: 'grammar-terms' },
+  { m: 'ებ', tr: 'eb', color: '#1d4ed8', label: 'Thematic suffix **-ებ**', note: 'marks the present and future stem', link: 'verbs#Screeves and series' },
+  { m: 'თ', tr: 't', color: '#7e22ce', label: 'Plural suffix **-თ**', note: 'with ვ- it means “we”', link: 'pronouns#Person markers in the verb' },
+];
+const MOR_W = 800, MOR_H = 320;
+{
+  const widths = MORPHS.map((m) => [...m.m].length * 40 + 28);
+  let x = (MOR_W - widths.reduce((a, b) => a + b, 0) - 6 * (MORPHS.length - 1)) / 2;
+  MORPHS.forEach((m, i) => { m.x = x; m.w = widths[i]; x += widths[i] + 6; });
+}
+const MORPHEMES = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${MOR_W} ${MOR_H}" ${FONT}><rect width="${MOR_W}" height="${MOR_H}" rx="18" fill="#fbf7f2"/>` +
+  MORPHS.map((m) => `<rect x="${m.x}" y="110" width="${m.w}" height="100" rx="14" fill="${m.color}"/><text x="${m.x + m.w / 2}" y="160" font-size="54" text-anchor="middle" fill="#fff">${m.m}</text><text x="${m.x + m.w / 2}" y="201" font-size="17" text-anchor="middle" fill="#fff" opacity=".9">${m.tr}</text>`).join('') + '</svg>';
+const MORPH_ITEMS = MORPHS.map((m, i) => ({
+  id: 'm' + (i + 1), shape: 'rect', x: r2((m.x / MOR_W) * 100), y: r2((110 / MOR_H) * 100), w: r2((m.w / MOR_W) * 100), h: r2((100 / MOR_H) * 100),
+  lx: r2(((m.x + m.w / 2) / MOR_W) * 100), ly: i % 2 ? 88 : 11, label: m.label, note: m.note, link: m.link, color: m.color,
+}));
+
+// Places of articulation: a head in profile (diagram with numbered points).
+const MOUTH = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 440"><rect width="640" height="440" rx="18" fill="#f1f5f9"/><g transform="translate(170 40) scale(.8)">` +
+  `<path d="M520 70C480 18 380 0 300 18C230 34 186 80 180 140C178 160 172 172 166 182C156 200 140 216 128 232C124 240 128 246 136 248C150 250 162 250 170 254C168 262 162 268 162 274C162 280 168 284 170 286C162 292 162 300 168 306C176 318 172 334 180 348C190 362 220 368 260 366C290 365 310 380 318 420L330 500H480C486 430 520 380 548 330C580 260 584 140 520 70Z" fill="#fcd9b6"/>` +
+  `<ellipse cx="440" cy="230" rx="24" ry="38" fill="#f6c08f"/><circle cx="222" cy="170" r="7" fill="#334155"/><path d="M200 150Q222 140 244 150" stroke="#92400e" stroke-width="5" fill="none" stroke-linecap="round"/>` +
+  `<path d="M140 240C190 224 290 212 352 222C366 226 368 238 356 244C300 240 220 244 172 252Z" fill="#fecdd3"/>` +
+  `<path d="M176 268C200 258 270 250 330 254C356 257 372 268 384 286L392 500H366L362 380C356 330 336 296 290 286C250 280 210 286 178 296Z" fill="#881337"/>` +
+  `<path d="M178 296C214 282 262 278 298 286C336 296 356 330 360 380L362 402C340 406 318 396 304 378C278 350 220 330 178 316Z" fill="#fb7185"/>` +
+  `<path d="M182 262C210 252 280 246 332 252" stroke="#be123c" stroke-width="7" fill="none" stroke-linecap="round"/>` +
+  `<path d="M332 250C356 254 374 266 378 290C379 300 370 302 367 294C364 278 352 266 330 262Z" fill="#e11d48"/>` +
+  `<path d="M176 257h12v14h-12zM174 292h12v12h-12z" fill="#fff"/>` +
+  `<path d="M162 262C170 259 178 262 181 268C176 273 168 275 162 274Z" fill="#f43f5e"/><path d="M164 290C172 286 180 288 183 294C180 302 170 306 166 304Z" fill="#f43f5e"/>` +
+  `<path d="M366 432L377 427M388 432L377 427" stroke="#fef3c7" stroke-width="4" stroke-linecap="round"/></g></svg>`;
+const MOUTH_ITEMS = [
+  { id: 'lips', x: 47.31, y: 60, label: 'Lips: ბ ფ პ მ (and ვ, lips against teeth)', link: 'pronunciation#Three series of stops' },
+  { id: 'teeth', x: 50.31, y: 56, label: 'Teeth and ridge: დ თ ტ ძ ც წ ს ზ ნ ლ რ', link: 'pronunciation#Three series of stops' },
+  { id: 'post', x: 55.56, y: 54.55, label: 'Behind the ridge: ჯ ჩ ჭ შ ჟ', link: 'pronunciation#Fricatives and sonorants' },
+  { id: 'velum', x: 66.31, y: 54.91, label: 'Soft palate: გ ქ კ (ღ ხ for some speakers)', link: 'pronunciation#Three series of stops' },
+  { id: 'uvula', x: 73.06, y: 62.55, label: 'Uvula: ყ, and usually ღ ხ', link: 'pronunciation#Uvular sounds' },
+  { id: 'glottis', x: 73.69, y: 87.27, label: 'Glottis: ჰ; closed for every ejective', link: 'pronunciation#Ejectives' },
+].map((it) => ({ ...it, shape: 'point' }));
+
+// 80 = four twenties, 90 = four twenties and ten.
+function vigesimalSVG() {
+  const cols = ['#b91c1c', '#c2410c', '#a16207', '#15803d'];
+  const block = (x, y, n, c) => Array.from({ length: n }, (_, i) => `<rect x="${x + (i % 5) * 15}" y="${y + Math.floor(i / 5) * 15}" width="12" height="12" rx="3" fill="${c}"/>`).join('');
+  const label = (x, y, t) => `<text x="${x}" y="${y}" font-size="15" text-anchor="middle" fill="#475569">${t}</text>`;
+  let s = '';
+  const row = (y, extra, num, word, sum) => {
+    s += `<text x="24" y="${y + 44}" font-size="34" font-weight="700" fill="#334155">${num}</text>`;
+    for (let k = 0; k < 4; k++) {
+      s += block(100 + k * 92, y, 20, cols[k]) + label(136 + k * 92, y + 84, 'ოცი');
+      if (k) s += `<text x="${90 + k * 92}" y="${y + 36}" font-size="20" text-anchor="middle" fill="#64748b">+</text>`;
+    }
+    if (extra) s += block(468, y, 10, '#64748b') + label(504, y + 84, 'ათი') + `<text x="458" y="${y + 36}" font-size="20" text-anchor="middle" fill="#64748b">+</text>`;
+    s += `<text x="580" y="${y + 30}" font-size="22" font-weight="700" fill="#b91c1c">${word}</text><text x="580" y="${y + 56}" font-size="16" fill="#475569">${sum}</text>`;
+  };
+  row(30, false, '80', 'ოთხმოცი', '4 × 20 = 80');
+  row(160, true, '90', 'ოთხმოცდაათი', '4 × 20 + 10 = 90');
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 290" ${FONT}><rect width="780" height="290" rx="18" fill="#fbf7f2"/>${s}</svg>`;
+}
+
+// A market stall: awning, churchkhela, tomatoes, cheese with a price tag, herbs.
+function marketSVG() {
+  let s = '<rect width="600" height="360" fill="#fef6e7"/><rect x="30" y="40" width="540" height="56" fill="#fff"/>';
+  for (let i = 0; i < 9; i++) s += `<rect x="${30 + i * 60}" y="40" width="30" height="56" fill="#dc2626"/>`;
+  for (let i = 0; i < 18; i++) s += `<circle cx="${45 + i * 30}" cy="96" r="15" fill="${i % 2 ? '#fff' : '#dc2626'}"/>`;
+  s += '<rect x="40" y="110" width="10" height="150" fill="#92400e"/><rect x="550" y="110" width="10" height="150" fill="#92400e"/><rect x="50" y="118" width="500" height="5" fill="#78350f"/>';
+  const ch = ['#7c2d12', '#9a3412', '#581c87', '#7c2d12', '#92400e', '#4c1d95', '#9a3412'];
+  ch.forEach((c, k) => { const x = 362 + k * 24; s += `<path d="M${x} 123V136" stroke="#78350f" stroke-width="2"/><rect x="${x - 7}" y="134" width="14" height="${70 + (k % 3) * 8}" rx="7" fill="${c}"/>`; });
+  s += '<rect x="24" y="244" width="552" height="12" rx="4" fill="#78350f"/><rect x="30" y="256" width="540" height="104" fill="#b45309"/><path d="M30 290H570M30 324H570" stroke="#92400e" stroke-width="3"/>';
+  s += '<rect x="66" y="206" width="160" height="40" fill="#d97706"/><path d="M66 220H226M66 233H226" stroke="#b45309" stroke-width="2"/>';
+  [[86, 196], [118, 194], [150, 197], [182, 194], [210, 197], [102, 176], [134, 174], [166, 176], [196, 175], [150, 156]].forEach(([x, y]) => { s += `<circle cx="${x}" cy="${y}" r="16" fill="#dc2626"/><circle cx="${x - 5}" cy="${y - 5}" r="4" fill="#fca5a5"/><path d="M${x - 5} ${y - 15}l5 3 5-3" stroke="#15803d" stroke-width="3" fill="none" stroke-linecap="round"/>`; });
+  s += '<rect x="250" y="212" width="112" height="32" fill="#fbbf24"/><ellipse cx="306" cy="244" rx="56" ry="10" fill="#fbbf24"/><ellipse cx="306" cy="212" rx="56" ry="12" fill="#fef3c7"/>';
+  s += '<rect x="266" y="186" width="80" height="26" fill="#fcd34d"/><ellipse cx="306" cy="186" rx="40" ry="9" fill="#fffbeb"/><path d="M306 186L346 186L346 212L306 212Z" fill="#fde68a"/>';
+  s += `<path d="M306 150V178" stroke="#78350f" stroke-width="3"/><rect x="264" y="124" width="84" height="30" rx="6" fill="#fff" stroke="#b91c1c" stroke-width="2"/><text x="306" y="145" font-size="15" text-anchor="middle" fill="#b91c1c" ${FONT}>12 ლარი</text>`;
+  [[455, 222, -20], [478, 216, 10], [500, 224, -8], [522, 218, 18], [540, 226, -12]].forEach(([x, y, r]) => { s += `<ellipse cx="${x}" cy="${y}" rx="10" ry="26" transform="rotate(${r} ${x} ${y})" fill="${r > 0 ? '#16a34a' : '#22c55e'}"/>`; });
+  s += '<rect x="446" y="236" width="104" height="10" rx="5" fill="#a3e635"/>';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 360">${s}</svg>`;
+}
+
+// A supra table: clay jug, glasses of red wine, shoti bread, khachapuri, grapes, a drinking horn.
+function supraSVG() {
+  let s = '<rect width="600" height="360" fill="#fdf2e4"/><rect width="600" height="16" fill="#b91c1c" opacity=".85"/>';
+  s += '<path d="M0 64C120 34 220 94 340 54S520 44 600 74" stroke="#4d7c0f" stroke-width="4" fill="none"/>';
+  [[60, 52, -30], [150, 62, 20], [250, 74, -15], [350, 52, 25], [450, 46, -20], [540, 60, 15]].forEach(([x, y, r]) => { s += `<ellipse cx="${x}" cy="${y + 12}" rx="11" ry="17" transform="rotate(${r} ${x} ${y + 12})" fill="#65a30d"/>`; });
+  [[150, 92], [450, 84]].forEach(([x, y]) => { for (let i = 0; i < 6; i++) s += `<circle cx="${x + (i % 3) * 9 - 9 + (i > 2 ? 4 : 0)}" cy="${y + Math.floor(i / 3) * 9}" r="5" fill="#7e22ce"/>`; });
+  s += '<path d="M60 300h14v60H60zM526 300h14v60h-14z" fill="#78350f"/><rect x="30" y="220" width="540" height="18" rx="4" fill="#fff"/>';
+  let cloth = 'M30 238H570V296';
+  for (let x = 570; x > 30; x -= 30) cloth += `Q${x - 15} 312 ${x - 30} 296`;
+  s += `<path d="${cloth}Z" fill="#f8fafc"/><path d="M30 238H570" stroke="#e2e8f0" stroke-width="2"/>`;
+  s += '<path d="M78 220C60 200 60 160 80 140V122h22v18C122 160 122 200 104 220Z" fill="#b45309"/><path d="M80 126h22" stroke="#92400e" stroke-width="4"/><path d="M102 134C126 134 128 170 112 184" stroke="#92400e" stroke-width="6" fill="none"/><path d="M80 132L70 124" stroke="#b45309" stroke-width="6" stroke-linecap="round"/>';
+  const glass = (x) => `<path d="M${x} 176h24l-3 44h-18z" fill="#fff" opacity=".6" stroke="#cbd5e1" stroke-width="2"/><path d="M${x + 2} 194h20l-2 24h-16z" fill="#7f1d1d"/>`;
+  s += glass(140) + glass(470);
+  s += '<path d="M178 220C186 196 236 196 246 220Z" fill="#d6964c"/><path d="M196 206l6 6M212 202l6 6M228 206l6 6" stroke="#a16207" stroke-width="2"/>';
+  s += '<ellipse cx="330" cy="218" rx="72" ry="10" fill="#e2e8f0"/><ellipse cx="330" cy="212" rx="60" ry="12" fill="#e2a54b"/><ellipse cx="330" cy="211" rx="44" ry="8" fill="#fcd34d"/>';
+  [[420, 196], [432, 196], [444, 196], [426, 206], [438, 206], [432, 215], [426, 186], [438, 186]].forEach(([x, y]) => { s += `<circle cx="${x}" cy="${y}" r="6" fill="#6b21a8"/>`; });
+  s += '<ellipse cx="446" cy="178" rx="9" ry="6" fill="#65a30d"/>';
+  s += '<path d="M498 196C530 200 560 190 578 164L583 168C566 206 534 222 500 220Z" fill="#d6b48a"/><ellipse cx="499" cy="208" rx="4" ry="12" fill="#cbd5e1"/>';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 360">${s}</svg>`;
+}
+
+const MEDIA = {
+  logo: svgMedia(LOGO, { name: 'logo.svg', alt: 'The letters ქა in white on a red square' }),
+  banner: svgMedia(BANNER, { name: 'old-tbilisi.svg', alt: 'Flat illustration of Old Tbilisi: fortress walls on a hill, a church with a conical dome, houses with wooden balconies, the river and a TV tower on the ridge' }),
+  scripts: svgMedia(SCRIPTS, { name: 'georgian-script.svg', alt: 'A parchment card with the words ქართული დამწერლობა and the first letters of the alphabet' }),
+  abcchart: svgMedia(ABCCHART, { name: 'alphabet-by-sound.svg', alt: 'The 33 letters of the Georgian alphabet as tiles in six coloured rows: vowels, voiced, aspirated and ejective consonants, fricatives, nasals and liquids' }),
+  morphemes: svgMedia(MORPHEMES, { name: 'verb-morphemes.svg', alt: 'The verb form გავაკეთებთ split into six coloured blocks: გა, ვ, ა, კეთ, ებ, თ' }),
+  mouth: svgMedia(MOUTH, { name: 'places-of-articulation.svg', alt: 'A head in profile with the mouth, tongue, palate, uvula and larynx shown in section' }),
+  vigesimal: svgMedia(vigesimalSVG(), { name: 'counting-in-twenties.svg', alt: 'Eighty drawn as four blocks of twenty squares, ninety as four blocks of twenty and one of ten' }),
+  market: svgMedia(marketSVG(), { name: 'market-stall.svg', alt: 'A market stall with a striped awning, hanging churchkhela, tomatoes, cheese with a price tag of 12 lari and herbs' }),
+  supra: svgMedia(supraSVG(), { name: 'supra.svg', alt: 'A feast table with a clay jug, glasses of red wine, bread, khachapuri, grapes and a drinking horn' }),
+};
+
+// ---------------------------------------------------------------------------------------------
+// Shared blocks
+
+const NAVBOX = {
+  type: 'navbox', title: 'Georgian ({{lang|ka|ქართული}}) study base', color: '#b91c1c', collapsed: false,
+  groups: [
+    { label: 'Script and sounds', links: '[[script|The Georgian script]]\n[[alphabet|Alphabet]]\n[[pronunciation|Pronunciation]]\n[[transliteration|Transliteration]]' },
+    { label: 'Grammar', links: '[[grammar|Overview]]\n[[nouns-and-cases|Nouns and cases]]\n[[postpositions|Postpositions]]\n[[pronouns|Pronouns]]\n[[verbs|Verbs]]\n[[grammar-terms|Grammar terms]]' },
+    { label: 'Words', links: '[[vocabulary|Vocabulary]]\n[[greetings|Greetings and phrases]]\n[[numbers|Numbers]]' },
+    { label: 'Texts', links: '[[parallel-texts|Parallel texts]]\n[[in-tbilisi|In Tbilisi]]\n[[at-the-market|At the market]]\n[[supra-toast|A supra toast]]' },
+    { label: 'Study', links: '[[exercises|Exercises]]\n[[study-plan|Study plan]]\n[[about|About this base]]' },
+  ],
+};
+const seeAlso = (...items) => ({ type: 'seealso', items: items.map(([link, note]) => ({ link, note: note || '' })) });
+const refs = { type: 'references' };
+
+// Citations used on several pages (well-known reference works).
+const CITE = {
+  aronson: '{{cite|author=Howard I. Aronson|title=Georgian: A Reading Grammar|publisher=Slavica Publishers|year=1990}}',
+  hewittRef: '{{cite|author=B. George Hewitt|title=Georgian: A Structural Reference Grammar|publisher=John Benjamins|year=1995}}',
+  hewittLearn: '{{cite|author=B. George Hewitt|title=Georgian: A Learner’s Grammar|publisher=Routledge|year=1996}}',
+  shosted: '{{cite|author=Ryan K. Shosted and Vakhtang Chikovani|title=Standard Georgian|work=Journal of the International Phonetic Association|year=2006}}',
+  shanidze: '{{cite|author=Akaki Shanidze|title=Foundations of Georgian Grammar (ქართული გრამატიკის საფუძვლები)|publisher=Tbilisi University Press|year=1953}}',
+};
+
+// ---------------------------------------------------------------------------------------------
+// Script and sounds
+
+const LETTERS = [
+  ['ა', 'ანი', 'ani', 'a', '/ɑ/', 'ათი', 'ati', 'ten'],
+  ['ბ', 'ბანი', 'bani', 'b', '/b/', 'ბავშვი', 'bavshvi', 'child'],
+  ['გ', 'განი', 'gani', 'g', '/ɡ/', 'გული', 'guli', 'heart'],
+  ['დ', 'დონი', 'doni', 'd', '/d/', 'დედა', 'deda', 'mother'],
+  ['ე', 'ენი', 'eni', 'e', '/ɛ/', 'ენა', 'ena', 'language; tongue'],
+  ['ვ', 'ვინი', 'vini', 'v', '/v/', 'ვაშლი', 'vashli', 'apple'],
+  ['ზ', 'ზენი', 'zeni', 'z', '/z/', 'ზღვა', 'zghva', 'sea'],
+  ['თ', 'თანი', 'tani', 't', '/tʰ/', 'თბილისი', 'tbilisi', 'Tbilisi'],
+  ['ი', 'ინი', 'ini', 'i', '/i/', 'ია', 'ia', 'violet'],
+  ['კ', 'კანი', "k'ani", "k'", '/kʼ/', 'კატა', "k'at'a", 'cat'],
+  ['ლ', 'ლასი', 'lasi', 'l', '/l/', 'ლომი', 'lomi', 'lion'],
+  ['მ', 'მანი', 'mani', 'm', '/m/', 'მთა', 'mta', 'mountain'],
+  ['ნ', 'ნარი', 'nari', 'n', '/n/', 'ნავი', 'navi', 'boat'],
+  ['ო', 'ონი', 'oni', 'o', '/ɔ/', 'ოთახი', 'otakhi', 'room'],
+  ['პ', 'პარი', "p'ari", "p'", '/pʼ/', 'პური', "p'uri", 'bread'],
+  ['ჟ', 'ჟანი', 'zhani', 'zh', '/ʒ/', 'ჟურნალი', 'zhurnali', 'magazine'],
+  ['რ', 'რაე', 'rae', 'r', '/r/', 'რძე', 'rdze', 'milk'],
+  ['ს', 'სანი', 'sani', 's', '/s/', 'სახლი', 'sakhli', 'house'],
+  ['ტ', 'ტარი', "t'ari", "t'", '/tʼ/', 'ტყე', "t'q'e", 'forest'],
+  ['უ', 'უნი', 'uni', 'u', '/u/', 'უბანი', 'ubani', 'neighbourhood'],
+  ['ფ', 'ფარი', 'pari', 'p', '/pʰ/', 'ფული', 'puli', 'money'],
+  ['ქ', 'ქანი', 'kani', 'k', '/kʰ/', 'ქალაქი', 'kalaki', 'city'],
+  ['ღ', 'ღანი', 'ghani', 'gh', '/ɣ/ ~ [ʁ]', 'ღვინო', 'ghvino', 'wine'],
+  ['ყ', 'ყარი', "q'ari", "q'", '/qʼ/', 'ყველი', "q'veli", 'cheese'],
+  ['შ', 'შინი', 'shini', 'sh', '/ʃ/', 'შვილი', 'shvili', 'son or daughter'],
+  ['ჩ', 'ჩინი', 'chini', 'ch', '/tʃʰ/', 'ჩაი', 'chai', 'tea'],
+  ['ც', 'ცანი', 'tsani', 'ts', '/tsʰ/', 'ცა', 'tsa', 'sky'],
+  ['ძ', 'ძილი', 'dzili', 'dz', '/dz/', 'ძაღლი', 'dzaghli', 'dog'],
+  ['წ', 'წილი', "ts'ili", "ts'", '/tsʼ/', 'წყალი', "ts'q'ali", 'water'],
+  ['ჭ', 'ჭარი', "ch'ari", "ch'", '/tʃʼ/', 'ჭიქა', "ch'ika", 'glass, cup'],
+  ['ხ', 'ხანი', 'khani', 'kh', '/x/ ~ [χ]', 'ხე', 'khe', 'tree'],
+  ['ჯ', 'ჯანი', 'jani', 'j', '/dʒ/', 'ჯიბე', 'jibe', 'pocket'],
+  ['ჰ', 'ჰაე', 'hae', 'h', '/h/', 'ჰაერი', 'haeri', 'air'],
+];
+
+function scriptPages() {
+  const script = {
+    slug: 'script', title: 'The Georgian script', cats: ['script-and-sounds'], order: 10,
+    summary: 'Georgian is written in Mkhedruli, a 33-letter alphabet without capital letters; two older scripts, Asomtavruli and Nuskhuri, survive in church use.',
+    blocks: [
+      { type: 'hatnote', kind: 'about', text: 'This page is about the writing system. For the list of letters see [[alphabet]]; for how they sound see [[pronunciation]].' },
+      {
+        type: 'infobox', title: 'Georgian script', subtitle: ka('ქართული დამწერლობა'), image: 'scripts', caption: 'The first letters of the alphabet: ა, ბ, გ…',
+        rows: [
+          { label: 'Romanized', value: "*kartuli damts'erloba*", layer: 'translit' },
+          { label: 'Type', value: 'Alphabet: every vowel and consonant has its own letter' },
+          { label: 'Letters', value: '[[alphabet|33]] in modern use' },
+          { label: 'Direction', value: 'Left to right' },
+          { label: 'Case', value: 'None in ordinary text; Mtavruli forms for all caps' },
+          { label: 'Scripts', header: true },
+          { label: 'Asomtavruli', value: 'oldest, 5th century inscriptions' },
+          { label: 'Nuskhuri', value: 'church manuscripts, from about the 9th century' },
+          { label: 'Mkhedruli', value: 'today’s script, from about the 10th century' },
+          { label: 'Unicode', header: true },
+          { label: 'Mkhedruli', value: 'U+10D0–U+10FF' },
+          { label: 'Asomtavruli', value: 'U+10A0–U+10CD' },
+          { label: 'Nuskhuri', value: 'U+2D00–U+2D2F' },
+          { label: 'Mtavruli', value: 'U+1C90–U+1CBF (since Unicode 11.0)' },
+        ],
+      },
+      {
+        type: 'text',
+        text: `The **Georgian script** is the writing system of the Georgian language. Three scripts have been used over its history; today all everyday Georgian is written in **Mkhedruli** (${w('მხედრული', 'mkhedruli')}), an alphabet of [[alphabet|33 letters]] written from left to right. Spelling follows pronunciation very closely: one letter, one sound.
+
+In 2016 UNESCO inscribed the “living culture of three writing systems of the Georgian alphabet” on the Representative List of the Intangible Cultural Heritage of Humanity.{{ref|name=unesco|UNESCO, Representative List of the Intangible Cultural Heritage of Humanity, 2016.}}
+
+## Three scripts
+- **Asomtavruli** (${w('ასომთავრული', 'asomtavruli', 'capital letters')}) is the oldest form, known from inscriptions of the 5th century. Its letters are all of the same height, round and geometric.
+- **Nuskhuri** (${w('ნუსხური', 'nuskhuri', 'minuscule')}) developed from it and was used in church manuscripts from about the 9th century. Asomtavruli and Nuskhuri used together are called **Khutsuri** (${w('ხუცური', 'khutsuri', 'of priests')}), and the Georgian Orthodox Church still uses them.
+- **Mkhedruli** appears from about the 10th century. The name is linked with ${w('მხედარი', 'mkhedari', 'horseman, warrior')}, that is, the secular script. It gradually became the standard script for all secular writing and, later, for print.{{ref|name=hewitt|${CITE.hewittLearn}}}
+
+## No capital letters
+Mkhedruli is **unicameral**: there is no upper and lower case. Sentences and names begin with the same letters as any other word: ${w('თბილისი', 'tbilisi', 'Tbilisi')}, ${w('ნინო', 'nino', 'Nino')}.
+
+For headings, signs and emphasis designers use **Mtavruli** (${w('მთავრული', 'mtavruli')}), letter forms that look like capitals. They are used for whole words in all caps, never to capitalize only the first letter of a word. Unicode 11.0 (2018) added Mtavruli as separate characters, so all-caps text can now be encoded properly.
+
+## Letter shapes
+Mkhedruli letters are rounded and sit on a common baseline, but their heights differ: some stay within the line (${ka('ა')}, ${ka('ო')}), some rise above it (${ka('ბ')}, ${ka('ძ')}) and some drop below it (${ka('ქ')}, ${ka('ყ')}). Handwriting follows the same basic shapes.
+
+## Typing Georgian
+The usual Georgian keyboard puts letters on phonetically similar Latin keys (${ka('ა')} on A, ${ka('ბ')} on B, ${ka('გ')} on G), and letters without an obvious Latin twin go to Shift combinations: for instance ${ka('შ')} is on Shift+S. For romanized text, see [[transliteration]].`,
+      },
+      {
+        type: 'timeline', title: 'The script through time', style: 'line',
+        items: [
+          { date: '5th century', title: 'Asomtavruli inscriptions', text: 'The oldest dated Georgian inscriptions are written in Asomtavruli.' },
+          { date: 'from the 9th century', title: 'Nuskhuri manuscripts', text: 'Church books are copied in Nuskhuri, with Asomtavruli for headings and initials.' },
+          { date: 'from the 10th century', title: 'Mkhedruli', text: 'The secular script appears in documents and gradually becomes the only everyday script.', link: 'mkhedruli' },
+          { date: '1629', title: 'First book in Georgian type', text: 'A Georgian–Italian dictionary is printed in Rome.' },
+          { date: '1709', title: 'Printing in Tbilisi', text: 'King Vakhtang VI founds a printing press in Tbilisi.' },
+          { date: '1879', title: 'Literacy society', text: 'The Society for the Spreading of Literacy among Georgians is founded; it promotes the 33-letter alphabet in use today.', link: 'alphabet' },
+          { date: '2016', title: 'UNESCO', text: 'The three writing systems are inscribed as intangible cultural heritage.' },
+          { date: '2018', title: 'Mtavruli in Unicode', text: 'Unicode 11.0 encodes Mtavruli, the all-caps forms.' },
+        ],
+      },
+      seeAlso(['alphabet', 'all 33 letters with names and sounds'], ['pronunciation', 'how the letters sound'], ['transliteration', 'writing Georgian in Latin letters']),
+      refs,
+      NAVBOX,
+    ],
+  };
+
+  const letterRows = LETTERS.map(([l, name, nameTr, tr, ipa, word, wordTr, en]) => [`**${ka(l)}**`, kc(name, nameTr), `*${tr}*`, `{{ipa|${ipa}}}`, `${ka(word)}{{layer|translit| *${wordTr}*}} ‘${en}’`]);
+  const alphabet = {
+    slug: 'alphabet', title: 'Alphabet', parent: 'script', cats: ['script-and-sounds'], order: 1,
+    blocks: [
+      {
+        type: 'text',
+        text: `The modern Georgian alphabet (${w('ანბანი', 'anbani', '', 'ɑnbɑni')}) has **33 letters**, all in [[mkhedruli|Mkhedruli]] script. The word ${ka('ანბანი')} is made from the names of the first two letters, ${ka('ან')} and ${ka('ბან')}, just as *alphabet* comes from *alpha* and *beta*.
+
+Each letter stands for one sound and each sound is written with one letter, so once you know the table below you can read any Georgian word aloud. There are no capital letters (see [[script#No capital letters]]), no silent letters and no accents.`,
+      },
+      {
+        type: 'table', caption: 'The 33 letters: name, national romanization and IPA', head: 'row', striped: true, compact: true,
+        rows: [['Letter', 'Name', 'Romanization', 'IPA', 'Example'], ...letterRows],
+      },
+      {
+        type: 'callout', kind: 'tip', title: 'Reading the romanization',
+        text: `The romanization column follows the national system of 2002 (see [[transliteration]]). An apostrophe marks an **ejective** consonant (${ka('კ')} *k'*, ${ka('პ')} *p'*, ${ka('ტ')} *t'*, ${ka('წ')} *ts'*, ${ka('ჭ')} *ch'*, ${ka('ყ')} *q'*), while the plain-looking ${ka('თ')} *t*, ${ka('ფ')} *p*, ${ka('ქ')} *k* are **aspirated**. See [[pronunciation#Three series of stops]].`,
+      },
+      { type: 'heading', text: 'The alphabet by sound', level: '2' },
+      {
+        type: 'text',
+        text: 'The same 33 letters arranged by the kind of sound they stand for. Read the coloured rows down a column and you get the three-way contrast of Georgian stops: ბ ფ პ, დ თ ტ, გ ქ კ, ძ ც წ, ჯ ჩ ჭ. Click a row to open the matching section of [[pronunciation]].',
+      },
+      { type: 'diagram', media: 'abcchart', alt: 'The Georgian alphabet grouped by sound', labels: 'always', align: 'center', caption: 'The alphabet grouped by sound. Each row links to its pronunciation section.', items: ABC_ITEMS },
+      {
+        type: 'text',
+        text: `## Letters no longer used
+Older texts contain five more letters, ${ka('ჱ ჲ ჳ ჴ ჵ')}, which no longer matched distinct sounds of the language and were dropped from the standard alphabet in the late 19th century. Some extra letters, such as ${ka('ჷ')}, are still used to write the related Svan and Mingrelian languages.
+
+## Learning the letters
+- Start with the five vowels and the letters that look like nothing in Latin: ${ka('ა ე ი ო უ')}.
+- Learn ${ka('ბ ფ პ')}, ${ka('დ თ ტ')}, ${ka('გ ქ კ')} as **triplets**: voiced, aspirated, ejective.
+- Copy short words by hand: ${w('დედა', 'deda', 'mother')}, ${w('მამა', 'mama', 'father')}, ${w('თბილისი', 'tbilisi')}.
+- Then read the [[greetings]] and the first [[parallel-texts|parallel text]].`,
+      },
+      {
+        type: 'flashcards', title: 'Tricky letters', lang: 'ka',
+        items: [
+          { front: 'ყ', back: "**ყარი** *q'ari*: uvular ejective /qʼ/, as in ყავა *q'ava* ‘coffee’" },
+          { front: 'ღ', back: '**ღანი** *ghani*: voiced fricative /ɣ/, as in ღვინო *ghvino* ‘wine’' },
+          { front: 'ხ', back: '**ხანი** *khani*: like German *ch* in *Bach*, as in ხე *khe* ‘tree’' },
+          { front: 'წ', back: "**წილი** *ts'ili*: ejective /tsʼ/, as in წყალი *ts'q'ali* ‘water’" },
+          { front: 'ც', back: '**ცანი** *tsani*: aspirated /tsʰ/, as in ცა *tsa* ‘sky’' },
+          { front: 'ჭ', back: "**ჭარი** *ch'ari*: ejective /tʃʼ/, as in ჭიქა *ch'ika* ‘glass’" },
+          { front: 'ჩ', back: '**ჩინი** *chini*: aspirated /tʃʰ/, as in ჩაი *chai* ‘tea’' },
+          { front: 'ჟ', back: '**ჟანი** *zhani*: /ʒ/ as in *pleasure*, as in ჟურნალი *zhurnali* ‘magazine’' },
+        ],
+      },
+      seeAlso(['script', 'history of the three scripts'], ['pronunciation'], ['transliteration'], ['vocabulary', 'first words to read']),
+      NAVBOX,
+    ],
+  };
+
+  const mkhedruli = { slug: 'mkhedruli', title: 'Mkhedruli', kind: 'redirect', target: 'script', parent: 'script', hidden: true };
+
+  const transliteration = {
+    slug: 'transliteration', title: 'Transliteration', parent: 'script', cats: ['script-and-sounds'], order: 3,
+    blocks: [
+      {
+        type: 'text',
+        text: `**Transliteration** writes Georgian in Latin letters. This base uses the **national system** adopted in Georgia in 2002 for official use. Switch the **Transliteration** layer in the *Show* bar to see it under every Georgian example.
+
+## The system
+- Vowels and most consonants map to one Latin letter: ${ka('ა')} *a*, ${ka('ბ')} *b*, ${ka('მ')} *m*…
+- Seven sounds use two letters: ${ka('ღ')} *gh*, ${ka('ჟ')} *zh*, ${ka('შ')} *sh*, ${ka('ჩ')} *ch*, ${ka('ც')} *ts*, ${ka('ძ')} *dz*, ${ka('ხ')} *kh*.
+- **Ejectives** add an apostrophe: ${ka('კ')} *k'*, ${ka('პ')} *p'*, ${ka('ტ')} *t'*, ${ka('ყ')} *q'*, ${ka('წ')} *ts'*, ${ka('ჭ')} *ch'*.
+- The aspirated stops are written plainly: ${ka('თ')} *t*, ${ka('ფ')} *p*, ${ka('ქ')} *k*.`,
+      },
+      {
+        type: 'table', caption: 'National romanization (2002)', head: 'none', compact: true,
+        rows: [0, 1, 2, 3].map((r) => LETTERS.slice(r * 9, r * 9 + 9).map(([l, , , tr]) => `${ka(l)} *${tr}*`)),
+      },
+      {
+        type: 'text',
+        text: `## Apostrophes in practice
+In everyday romanized writing, on signs and in personal names, the apostrophes are often left out. Strictly, ${ka('კახეთი')} is *K'akheti* and ${ka('მესტია')} is *Mest'ia*; on a road sign you will usually read *Kakheti* and *Mestia*. In this base the apostrophes are always written, because they tell you how to pronounce the word.
+
+## Not fully reversible
+The system is made for reading, not for converting back: ${ka('ც')} and the letter sequence ${ka('თ')} + ${ka('ს')} are both written *ts*, so a romanized word cannot always be turned back into Georgian letters without knowing the word. When in doubt, learn the [[alphabet]] and read the original.
+
+## Other romanizations
+Older books and maps may use other conventions, for example scholarly systems with diacritics, or spellings that passed through Russian (*Tskhaltubo*, *Tkibuli*). Recognise them, but use the national system when you write.`,
+      },
+      seeAlso(['alphabet', 'the letters with their romanization'], ['pronunciation', 'what the apostrophe means'], ['about#Layers', 'how the transliteration layer works']),
+      NAVBOX,
+    ],
+  };
+
+  return [script, alphabet, mkhedruli, transliteration];
+}
+
+function pronunciationPage() {
+  const s = (l, tr, ipa) => `${ka(l)} *${tr}* {{ipa|${ipa}}}`;
+  return {
+    slug: 'pronunciation', title: 'Pronunciation', parent: 'script', cats: ['script-and-sounds'], order: 2,
+    blocks: [
+      {
+        type: 'text',
+        text: `Georgian pronunciation is regular: once you know the [[alphabet]], every word can be read aloud. Two things need practice: the **three series of stops** (voiced, aspirated and ejective) and long **consonant clusters**. Switch on the **IPA** layer in the *Show* bar to see a transcription next to every example.{{ref|name=shosted|${CITE.shosted}}}
+
+## Vowels
+Georgian has five vowels. They are pure and fairly short, never reduced to a neutral “uh” and never glided into diphthongs. Every vowel is pronounced, also at the end of a word and next to another vowel: ${w('ჩაი', 'chai', 'tea', 'tʃʰɑi')} has two syllables, *cha-i*.`,
+      },
+      {
+        type: 'table', caption: 'The five vowels', head: 'row', compact: true,
+        rows: [
+          ['Letter', 'IPA', 'Close to', 'Example'],
+          [ka('ა'), '{{ipa|/ɑ/}}', 'the *a* of *father*, but short', w('მამა', 'mama', 'father', 'mɑmɑ')],
+          [ka('ე'), '{{ipa|/ɛ/}}', 'the *e* of *bed*', w('ენა', 'ena', 'language', 'ɛnɑ')],
+          [ka('ი'), '{{ipa|/i/}}', 'the *i* of *machine*', w('ია', 'ia', 'violet', 'iɑ')],
+          [ka('ო'), '{{ipa|/ɔ/}}', 'the *o* of British *pot*', w('ორი', 'ori', 'two', 'ɔri')],
+          [ka('უ'), '{{ipa|/u/}}', 'the *u* of *rule*', w('უბანი', 'ubani', 'neighbourhood', 'ubɑni')],
+        ],
+      },
+      {
+        type: 'text',
+        text: `## Three series of stops
+Georgian stops and affricates come in sets of three, made at the same place in the mouth:
+- **Voiced**: like English *b, d, g*, fully voiced.
+- **Aspirated**: like English *p, t, k* at the start of *pin, tin, kin*, with a clear puff of air.
+- **Ejective**: no puff of air, but a short, sharp “pop” made with the glottis closed (see [[#Ejectives]]).`,
+      },
+      {
+        type: 'table', caption: 'Stops and affricates', head: 'both', compact: true,
+        rows: [
+          ['', 'Voiced', 'Aspirated', 'Ejective'],
+          ['Lips', s('ბ', 'b', '/b/'), s('ფ', 'p', '/pʰ/'), s('პ', "p'", '/pʼ/')],
+          ['Teeth', s('დ', 'd', '/d/'), s('თ', 't', '/tʰ/'), s('ტ', "t'", '/tʼ/')],
+          ['Soft palate', s('გ', 'g', '/ɡ/'), s('ქ', 'k', '/kʰ/'), s('კ', "k'", '/kʼ/')],
+          ['Uvula', '—', '—', s('ყ', "q'", '/qʼ/')],
+          ['Affricates (ts)', s('ძ', 'dz', '/dz/'), s('ც', 'ts', '/tsʰ/'), s('წ', "ts'", '/tsʼ/')],
+          ['Affricates (ch)', s('ჯ', 'j', '/dʒ/'), s('ჩ', 'ch', '/tʃʰ/'), s('ჭ', "ch'", '/tʃʼ/')],
+        ],
+      },
+      {
+        type: 'glossary', title: 'Minimal pairs: aspirated or ejective?', lang: 'ka', layout: 'table', readingLayer: 'translit', meaningLayer: 'en',
+        items: [
+          { term: 'ქარი — კარი', reading: "kari — k'ari", meaning: 'wind — door' },
+          { term: 'ფური — პური', reading: "puri — p'uri", meaning: 'cow — bread' },
+          { term: 'ცელი — წელი', reading: "tseli — ts'eli", meaning: 'scythe — year; waist' },
+        ],
+      },
+      {
+        type: 'text',
+        text: `## Ejectives
+To make an ejective, close the vocal folds as if holding your breath, make the closure for *k*, *p* or *t* in the mouth, raise the larynx a little and release: the air trapped in the mouth comes out with a crisp pop. Hold your breath and say *k*: that is close to ${ka('კ')} {{ipa|[kʼ]}}.
+
+Practise with ${w('კარგი', "k'argi", 'good', 'kʼɑrɡi')}, ${w('პური', "p'uri", 'bread', 'pʼuri')}, ${w('ტყე', "t'q'e", 'forest', 'tʼqʼɛ')}, ${w('წყალი', "ts'q'ali", 'water', 'tsʼqʼɑli')} and ${w('ჭიქა', "ch'ika", 'glass', 'tʃʼikʰɑ')}. Do not replace ejectives with plain sounds: ${ka('ქარი')} ‘wind’ and ${ka('კარი')} ‘door’ are different words.
+
+## Uvular sounds
+${ka('ყ')} {{ipa|[qʼ]}} is an ejective made even further back, with the back of the tongue against the uvula; many speakers pronounce it with some friction, close to {{ipa|[χʼ]}}. English and Russian have nothing like it: ${w('ყავა', "q'ava", 'coffee', 'qʼɑvɑ')}, ${w('ყველი', "q'veli", 'cheese', 'qʼvɛli')}, ${w('ყური', "q'uri", 'ear', 'qʼuri')}.
+
+${ka('ღ')} is a voiced fricative, close to a French or German *r*: ${w('ღვინო', 'ghvino', 'wine', 'ɣvinɔ')}, ${w('ღამე', 'ghame', 'night', 'ɣɑmɛ')}. ${ka('ხ')} is its voiceless partner, like the *ch* of German *Bach* or Russian *х*: ${w('ხე', 'khe', 'tree', 'xɛ')}, ${w('ხაჭაპური', "khach'ap'uri", 'cheese bread', 'xɑtʃʼɑpʼuri')}. Both are pronounced at the soft palate by some speakers and at the uvula by many.{{ref|name=shosted}}
+
+## Fricatives and sonorants
+${ka('ს')} *s* and ${ka('ზ')} *z* are as in English, ${ka('შ')} *sh* as in *ship*, ${ka('ჟ')} *zh* as in *pleasure*, ${ka('ჰ')} *h* as in *house*. ${ka('ვ')} is a light *v*, in some words closer to English *w*.
+
+${ka('მ')} and ${ka('ნ')} are as in English. ${ka('რ')} is a tapped or trilled *r*, as in Spanish or Russian, never the English *r*. ${ka('ლ')} is “dark” (like the *l* of English *full*) before ${ka('ა')}, ${ka('ო')}, ${ka('უ')} and clearer before ${ka('ე')} and ${ka('ი')}.
+
+## Where sounds are made
+The numbered points show where the consonants are formed. Click a point to open its section.`,
+      },
+      { type: 'diagram', media: 'mouth', alt: 'Places of articulation of Georgian consonants', labels: 'numbers', align: 'center', width: 640, caption: 'Places of articulation, from the lips to the glottis.', items: MOUTH_ITEMS },
+      {
+        type: 'text',
+        text: `## Consonant clusters
+Georgian allows long groups of consonants, especially at the start of a word. ${w('მწვრთნელი', "mts'vrtneli", 'trainer, coach', 'mtsʼvrtʰnɛli')} begins with six consonants (${ka('მ წ ვ რ თ ნ')}), and the textbook example ${w('გვფრცქვნი', 'gvprtskvni', 'you are peeling us', 'ɡvpʰrtsʰkʰvni')} has eight in a row. Do not insert vowels between them; pronounce each consonant clearly and let them follow each other quickly.
+
+Many clusters are **harmonic**: a consonant made at the front of the mouth followed by one made at the back, both of the same series (voiced, aspirated or ejective). They are pronounced almost as one complex sound: ${w('დღე', 'dghe', 'day', 'dɣɛ')}, ${w('თქვენ', 'tkven', 'you (plural)', 'tʰkʰvɛn')}, ${w('ცხენი', 'tskheni', 'horse', 'tsʰxɛni')}, ${w('ტყე', "t'q'e", 'forest', 'tʼqʼɛ')}, ${w('წყალი', "ts'q'ali", 'water', 'tsʼqʼɑli')}, ${w('ჭკვიანი', "ch'k'viani", 'clever', 'tʃʼkʼviɑni')}.
+
+## Stress and intonation
+Stress in Georgian is weak and never distinguishes words. Most descriptions place it on the first syllable of shorter words, with a secondary stress in longer ones; learners are understood perfectly well if they give every syllable roughly equal weight. Questions without a question word are marked by intonation alone: ${w('ქართველი ხარ?', 'kartveli khar?', 'are you Georgian?', 'kʰɑrtʰvɛli xɑr')}`,
+      },
+      {
+        type: 'callout', kind: 'tip', title: 'Practice: a tongue twister',
+        text: `${w('ბაყაყი წყალში ყიყინებს.', "baq'aq'i ts'q'alshi q'iq'inebs.", 'The frog croaks in the water.', 'bɑqʼɑqʼi tsʼqʼɑlʃi qʼiqʼinɛbs')}
+
+Five ${ka('ყ')} sounds in four words: say it slowly first, keeping each ${ka('ყ')} ejective.`,
+      },
+      seeAlso(['alphabet', 'the letters by sound'], ['transliteration', 'how the sounds are romanized'], ['greetings', 'useful phrases to practise']),
+      refs,
+      NAVBOX,
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Grammar
+
+function grammarPages() {
+  const grammar = {
+    slug: 'grammar', title: 'Grammar', cats: ['grammar'], order: 20,
+    blocks: [
+      {
+        type: 'text',
+        text: `Georgian grammar in brief: there are **no articles** and **no grammatical gender**, nouns take one of [[nouns-and-cases|seven cases]], relations such as “in” and “for” are expressed by [[postpositions]], and the [[verbs|verb]] packs subject, object, tense, aspect and direction into a single word.{{ref|name=hewittref|${CITE.hewittRef}}}
+
+Georgian belongs to the **Kartvelian** family, together with Mingrelian, Laz and Svan; it is not related to Russian, Armenian or Turkish, although it has borrowed words from all of them.
+
+## Georgian at a glance`,
+      },
+      {
+        type: 'table', caption: 'Key features', head: 'row', striped: true,
+        rows: [
+          ['Feature', 'Georgian', 'Example'],
+          ['Articles', 'none', `${w('კაცი', "k'atsi")} ‘a man, the man’`],
+          ['Gender', 'none: one pronoun for he, she and it', `${w('ის მასწავლებელია', "is masts'avlebelia")} ‘he / she is a teacher’`],
+          ['Cases', '[[nouns-and-cases|seven]], marked by endings', `${ka('კაცი, კაცმა, კაცს, კაცის…')}`],
+          ['Relations', '[[postpositions]] after the noun', `${w('თბილისში', 'tbilisshi', 'in Tbilisi')}`],
+          ['Word order', 'often subject, object, verb; quite free', `${w('მე ქართულს ვსწავლობ', "me kartuls vsts'avlob", 'I am learning Georgian')}`],
+          ['Verb agreement', 'subject and object marked in the [[verbs|verb]]', `${w('გხედავ', 'gkhedav', 'I see you')}`],
+          ['Nouns after numbers', 'singular', `${w('ორი კაცი', "ori k'atsi", 'two men')}`],
+        ],
+      },
+      {
+        type: 'text',
+        text: `## Word order and dropped pronouns
+The verb usually comes last, but any order is possible to stress a word. Since the verb shows the person, the pronoun is normally left out.`,
+      },
+      {
+        type: 'interlinear', title: 'Three ways to say who learns or teaches', lang: 'ka', tiers: TIERS, style: 'stacked', numbered: true,
+        items: [
+          il('მე ქართულს ვსწავლობ.', "me kartuls vsts'avlob.", "mɛ kʰɑrtʰuls vstsʼɑvlɔb", 'I Georgian-DAT 1SG-learn', 'I am learning Georgian.', 'Я учу грузинский.'),
+          il('ქართულს ვსწავლობ.', "kartuls vsts'avlob.", "kʰɑrtʰuls vstsʼɑvlɔb", 'Georgian-DAT 1SG-learn', 'I am learning Georgian (no pronoun needed).', 'Учу грузинский.'),
+          il('ნინო ქართულს ასწავლის.', "nino kartuls asts'avlis.", "ninɔ kʰɑrtʰuls ɑstsʼɑvlis", 'Nino.NOM Georgian-DAT teach-3SG', 'Nino teaches Georgian.', 'Нино преподаёт грузинский.'),
+        ],
+      },
+      { type: 'pagelist', title: 'Grammar pages', source: 'children', style: 'list', summary: true, sort: 'order' },
+      seeAlso(['grammar-terms', 'Georgian names of the grammatical terms'], ['study-plan', 'in which order to learn the grammar'], ['exercises', 'practise cases and verbs']),
+      refs,
+      NAVBOX,
+    ],
+  };
+
+  // Nouns and cases: two versions.
+  const CASES = [
+    ['Nominative', 'სახელობითი', 'sakhelobiti', '-ი', 'კაცი', "k'atsi", 'კაცები', "k'atsebi", 'subject in the present; dictionary form'],
+    ['Ergative', 'მოთხრობითი', 'motkhrobiti', '-მა', 'კაცმა', "k'atsma", 'კაცებმა', "k'atsebma", 'subject of a transitive verb in the aorist (past)'],
+    ['Dative', 'მიცემითი', 'mitsemiti', '-ს', 'კაცს', "k'atss", 'კაცებს', "k'atsebs", 'object in the present; “to” someone; base of -ში, -ზე'],
+    ['Genitive', 'ნათესაობითი', 'natesaobiti', '-ის', 'კაცის', "k'atsis", 'კაცების', "k'atsebis", '“of”, possession; base of -თვის, -გან'],
+    ['Instrumental', 'მოქმედებითი', 'mokmedebiti', '-ით', 'კაცით', "k'atsit", 'კაცებით', "k'atsebit", '“with, by means of”; base of -დან'],
+    ['Adverbial', 'ვითარებითი', 'vitarebiti', '-ად', 'კაცად', "k'atsad", 'კაცებად', "k'atsebad", '“as, into (becoming)”; base of -მდე'],
+    ['Vocative', 'წოდებითი', "ts'odebiti", '-ო', 'კაცო', "k'atso", 'კაცებო', "k'atsebo", 'calling someone'],
+  ];
+  const nIntro = {
+    type: 'text',
+    text: `Georgian nouns have **no gender and no articles**: ${w('კაცი', "k'atsi", '', 'kʼɑtsʰi')} means ‘man’, ‘a man’ or ‘the man’. What changes is the **ending**: seven **cases** show what a noun does in the sentence.{{ref|name=aronson|${CITE.aronson}}} The dictionary form is the nominative, which ends in ${ka('-ი')} after a consonant stem (${ka('კაც-ი')}) and has no ending after a vowel stem (${ka('ძმა')} ‘brother’).`,
+  };
+  const nTable = {
+    type: 'table', caption: 'The seven cases of კაცი ‘man’', head: 'row', striped: true,
+    rows: [['Case', 'Georgian name', 'Ending', 'Singular', 'Plural', 'Main use'], ...CASES.map(([en, g, gt, end, sg, sgt, pl, plt, use]) => [`**${en}**`, kc(g, gt), ka(end), kc(sg, sgt), kc(pl, plt), use])],
+  };
+  const nPlural = {
+    type: 'text',
+    text: `## Plural
+The plural adds ${ka('-ებ-')} before the case ending: ${w('კაცი', "k'atsi", 'man')} → ${w('კაცები', "k'atsebi", 'men')}. After a numeral the noun stays **singular**: ${w('ორი კაცი', "ori k'atsi", 'two men')}, ${w('სამი ლარი', 'sami lari', 'three lari')}.
+
+## Who did it: the ergative
+The case of the subject depends on the [[verbs#Screeves and series|series of the verb]]. In the present the subject is nominative and the object dative; in the aorist (simple past) the subject of a transitive verb is **ergative** and the object nominative; in the perfect the subject moves to the dative.`,
+  };
+  const nErg = {
+    type: 'interlinear', title: 'One man, three cases', lang: 'ka', tiers: TIERS, style: 'stacked', numbered: true,
+    items: [
+      il('კაცი წერილს წერს.', "k'atsi ts'erils ts'ers.", 'kʼɑtsʰi tsʼɛrils tsʼɛrs', 'man-NOM letter-DAT write-3SG', 'The man is writing a letter.', 'Мужчина пишет письмо.'),
+      il('კაცმა წერილი დაწერა.', "k'atsma ts'erili dats'era.", 'kʼɑtsʰmɑ tsʼɛrili dɑtsʼɛrɑ', 'man-ERG letter-NOM PV-write-AOR.3SG', 'The man wrote a letter.', 'Мужчина написал письмо.'),
+      il('კაცს წერილი დაუწერია.', "k'atss ts'erili dauts'eria.", 'kʼɑtsʰs tsʼɛrili dɑutsʼɛriɑ', 'man-DAT letter-NOM PV-write-PERF.3SG', 'The man has (apparently) written a letter.', 'Мужчина, оказывается, написал письмо.'),
+    ],
+  };
+  const nTip = {
+    type: 'callout', kind: 'tip', title: 'Learn three forms',
+    text: `For each new noun, learn the nominative, the dative and the genitive: ${ka('მეგობარი, მეგობარს, მეგობრის')} (*megobari, megobars, megobris*, ‘friend’). The genitive shows whether the stem loses a vowel (see the *Full tables* version of this page), and most [[postpositions]] are built on the dative or the genitive.`,
+  };
+  const nFullExtra = [
+    {
+      type: 'text',
+      text: `## Vowel stems
+Nouns ending in a vowel keep it in most cases. After a vowel the ergative is just ${ka('-მ')}, and an ${ka('-ა')} stem loses its vowel before ${ka('-ის')} and ${ka('-ით')}. A classic Georgian description of all these forms is the grammar of Akaki Shanidze.{{ref|name=shanidze|${CITE.shanidze}}}`,
+    },
+    {
+      type: 'table', caption: 'ძმა ‘brother’', head: 'row', compact: true,
+      rows: [['Case', 'Singular', 'Plural'], ...[['Nominative', 'ძმა', 'dzma', 'ძმები', 'dzmebi'], ['Ergative', 'ძმამ', 'dzmam', 'ძმებმა', 'dzmebma'], ['Dative', 'ძმას', 'dzmas', 'ძმებს', 'dzmebs'], ['Genitive', 'ძმის', 'dzmis', 'ძმების', 'dzmebis'], ['Instrumental', 'ძმით', 'dzmit', 'ძმებით', 'dzmebit'], ['Adverbial', 'ძმად', 'dzmad', 'ძმებად', 'dzmebad'], ['Vocative', 'ძმაო', 'dzmao', 'ძმებო', 'dzmebo']].map(([c, a, at, b, bt]) => [c, kc(a, at), kc(b, bt)])],
+    },
+    {
+      type: 'text',
+      text: `## Stems that lose a vowel
+Many stems drop their last vowel before an ending that begins with a vowel (genitive, instrumental, adverbial) and in the plural: ${w('მეგობარი', 'megobari', 'friend')} → ${w('მეგობრის', 'megobris', 'of a friend')}, ${w('მეგობრები', 'megobrebi', 'friends')}; ${w('წყალი', "ts'q'ali", 'water')} → ${w('წყლის', "ts'q'lis", 'of water')}. The ergative and the dative keep the full stem: ${ka('მეგობარმა, მეგობარს')}.
+
+## Adjectives
+Adjectives come before the noun. A consonant-stem adjective takes a reduced set of endings, while vowel-stem adjectives such as ${w('პატარა', "p'at'ara", 'small')} do not change at all.`,
+    },
+    {
+      type: 'table', caption: 'კარგი კაცი ‘a good man’', head: 'row', compact: true,
+      rows: [['Case', 'Form'], ...[['Nominative', 'კარგი კაცი', "k'argi k'atsi"], ['Ergative', 'კარგმა კაცმა', "k'argma k'atsma"], ['Dative', 'კარგ კაცს', "k'arg k'atss"], ['Genitive', 'კარგი კაცის', "k'argi k'atsis"], ['Instrumental', 'კარგი კაცით', "k'argi k'atsit"], ['Adverbial', 'კარგ კაცად', "k'arg k'atsad"], ['Vocative', 'კარგო კაცო', "k'argo k'atso"]].map(([c, a, at]) => [c, kc(a, at)])],
+    },
+    {
+      type: 'text',
+      text: `## The older plural
+Besides ${ka('-ებ-')}, literary style and set phrases keep an older plural: ${ka('-ნი')} in the nominative and ${ka('-თ')} or ${ka('-თა')} in the other cases, as in ${w('ქართველთა', 'kartvelta', 'of the Georgians')}. You will meet it in titles, poetry and the names of institutions.`,
+    },
+  ];
+  const nouns = {
+    slug: 'nouns-and-cases', title: 'Nouns and cases', parent: 'grammar', cats: ['grammar'], order: 1,
+    summary: 'Georgian nouns have no gender and no articles; seven cases (nominative, ergative, dative, genitive, instrumental, adverbial, vocative) show their role.',
+    versions: [
+      { id: 'essentials', label: 'Essentials', blocks: [nIntro, nTable, nPlural, nErg, nTip, seeAlso(['postpositions', 'which case each postposition takes'], ['verbs#Screeves and series', 'why the subject changes case'], ['exercises', 'practise the ergative']), refs, NAVBOX] },
+      { id: 'full', label: 'Full tables', blocks: [nIntro, nTable, nPlural, nErg, ...nFullExtra, nTip, seeAlso(['postpositions'], ['pronouns', 'case forms of the pronouns'], ['grammar-terms', 'the Georgian names of the cases']), refs, NAVBOX] },
+    ],
+  };
+
+  const POST = [
+    ['-ში', 'in, into', 'dative', 'თბილისში', 'tbilisshi', 'in Tbilisi'],
+    ['-ზე', 'on; about', 'dative', 'მაგიდაზე', 'magidaze', 'on the table'],
+    ['-თან', 'at, by, with (a person)', 'dative', 'მეგობართან', 'megobartan', 'at a friend’s'],
+    ['-დან', 'from', 'instrumental', 'თბილისიდან', 'tbilisidan', 'from Tbilisi'],
+    ['-მდე', 'up to, until', 'adverbial', 'თბილისამდე', 'tbilisamde', 'as far as Tbilisi'],
+    ['-თვის', 'for', 'genitive', 'დედისთვის', 'dedistvis', 'for mother'],
+    ['-გან', 'from (a person); made of', 'genitive', 'მეგობრისგან', 'megobrisgan', 'from a friend'],
+    ['-კენ', 'towards', 'genitive', 'სახლისკენ', "sakhlisk'en", 'towards the house'],
+    ['შესახებ', 'about', 'genitive', 'საქართველოს შესახებ', 'sakartvelos shesakheb', 'about Georgia'],
+    ['გარეშე', 'without', 'genitive', 'შაქრის გარეშე', 'shakris gareshe', 'without sugar'],
+    ['შემდეგ', 'after', 'genitive', 'სადილის შემდეგ', 'sadilis shemdeg', 'after dinner'],
+    ['წინ', 'in front of, before', 'genitive', 'სახლის წინ', "sakhlis ts'in", 'in front of the house'],
+    ['გამო', 'because of', 'genitive', 'წვიმის გამო', "ts'vimis gamo", 'because of the rain'],
+  ];
+  const postpositions = {
+    slug: 'postpositions', title: 'Postpositions', parent: 'grammar', cats: ['grammar'], order: 2,
+    blocks: [
+      {
+        type: 'text',
+        text: `Georgian has no prepositions: meanings such as “in”, “on”, “from” and “for” are expressed by **postpositions**, endings or short words placed **after** the noun. Each one attaches to a particular [[nouns-and-cases|case]]: ${ka('-ში')} ‘in’ to the dative, ${ka('-თვის')} ‘for’ to the genitive, ${ka('-დან')} ‘from’ to the instrumental.
+
+When an ending is added, the case ending in front of it is often shortened: the dative ${ka('თბილისს')} + ${ka('-ში')} gives ${ka('თბილისში')}, the instrumental ${ka('თბილისით')} + ${ka('-დან')} gives ${ka('თბილისიდან')}.`,
+      },
+      {
+        type: 'table', caption: 'Common postpositions', head: 'row', striped: true, sortable: true,
+        rows: [['Postposition', 'Meaning', 'Case', 'Example'], ...POST.map(([p, m, c, ex, tr, en]) => [`**${ka(p)}**`, m, c, `${ka(ex)}{{layer|translit| *${tr}*}} ‘${en}’`])],
+      },
+      {
+        type: 'text',
+        text: `## Adjectives before postpositions
+An adjective in front of a noun with a postposition takes its short form: ${w('დიდ ქალაქში', 'did kalakshi', 'in a big city')}, ${w('ძველ თბილისში', 'dzvel tbilisshi', 'in Old Tbilisi')} (see [[in-tbilisi]]).
+
+## In sentences`,
+      },
+      {
+        type: 'interlinear', lang: 'ka', tiers: TIERS, style: 'stacked', numbered: true,
+        items: [
+          il('წიგნი მაგიდაზე დევს.', "ts'igni magidaze devs.", 'tsʼiɡni mɑɡidɑzɛ dɛvs', 'book-NOM table-on lie-3SG', 'The book is on the table.', 'Книга лежит на столе.'),
+          il('ხვალ თბილისიდან ბათუმში მივდივარ.', 'khval tbilisidan batumshi mivdivar.', 'xvɑl tʰbilisidɑn bɑtʰumʃi mivdivɑr', 'tomorrow Tbilisi-from Batumi-in PV.away-1SG-go', 'Tomorrow I am going from Tbilisi to Batumi.', 'Завтра я еду из Тбилиси в Батуми.'),
+          il('ყავა შაქრის გარეშე, თუ შეიძლება.', "q'ava shakris gareshe, tu sheidzleba.", 'qʼɑvɑ ʃɑkʰris ɡɑrɛʃɛ tʰu ʃɛidzlɛbɑ', 'coffee sugar-GEN without if be.possible', 'Coffee without sugar, please.', 'Кофе без сахара, пожалуйста.'),
+        ],
+      },
+      {
+        type: 'callout', kind: 'note', title: 'Note', layer: 'notes',
+        text: `${ka('-ში')} expresses both location and direction: ${ka('ბათუმში ვარ')} ‘I am in Batumi’, ${ka('ბათუმში მივდივარ')} ‘I am going to Batumi’. The direction is shown by the [[verbs#Preverbs|preverb]] of the verb.`,
+      },
+      seeAlso(['nouns-and-cases', 'the case endings'], ['at-the-market', 'postpositions in a dialogue'], ['grammar-terms']),
+      NAVBOX,
+    ],
+  };
+  return [grammar, nouns, postpositions, pronounsPage(), verbsPage(), grammarTermsPage()];
+}
+
+function pronounsPage() {
+  const P = [
+    ['I', 'მე', 'me', 'ვარ', 'var', 'ჩემი', 'chemi'],
+    ['you (singular)', 'შენ', 'shen', 'ხარ', 'khar', 'შენი', 'sheni'],
+    ['he, she, it', 'ის', 'is', 'არის', 'aris', 'მისი', 'misi'],
+    ['we', 'ჩვენ', 'chven', 'ვართ', 'vart', 'ჩვენი', 'chveni'],
+    ['you (plural, polite)', 'თქვენ', 'tkven', 'ხართ', 'khart', 'თქვენი', 'tkveni'],
+    ['they', 'ისინი', 'isini', 'არიან', 'arian', 'მათი', 'mati'],
+  ];
+  const vm = (geo, tr, en) => `${ka(geo)} *${tr}* ‘${en}’`;
+  return {
+    slug: 'pronouns', title: 'Pronouns', parent: 'grammar', cats: ['grammar'], order: 3,
+    blocks: [
+      {
+        type: 'text',
+        text: `Georgian personal pronouns make no difference between “he”, “she” and “it”: ${w('ის', 'is', 'he, she, it; that')} covers all three. Because the [[verbs|verb]] already shows the person, pronouns are usually dropped: ${w('ქართველი ვარ', 'kartveli var', 'I am Georgian')}.`,
+      },
+      {
+        type: 'table', caption: 'Personal pronouns, “to be” and possessives', head: 'row', striped: true,
+        rows: [['', 'Pronoun', '“to be” (present)', 'Possessive'], ...P.map(([en, p, pt, b, bt, s, st]) => [en, kc(p, pt), kc(b, bt), kc(s, st)])],
+      },
+      {
+        type: 'text',
+        text: `In speech ${ka('არის')} ‘is’ is usually shortened to an ending ${ka('-ა')} after a vowel: ${w('ეს ჩემი სახლია', 'es chemi sakhlia', 'this is my house')}.
+
+## Case forms
+${ka('მე')}, ${ka('შენ')}, ${ka('ჩვენ')} and ${ka('თქვენ')} do not change for case: ${ka('მე')} is the subject in ${ka('მე ვწერ')} ‘I write’, ${ka('მე დავწერე')} ‘I wrote’ and ${ka('მე მიყვარს')} ‘I love’. The third person pronouns and the demonstratives do change:`,
+      },
+      {
+        type: 'table', caption: 'Case forms of the third person', head: 'row', compact: true,
+        rows: [
+          ['Case', '“he, she, that”', '“this”', '“they”'],
+          ['Nominative', kc('ის', 'is'), kc('ეს', 'es'), kc('ისინი', 'isini')],
+          ['Ergative', kc('მან', 'man'), kc('ამან', 'aman'), kc('მათ', 'mat')],
+          ['Dative', kc('მას', 'mas'), kc('ამას', 'amas'), kc('მათ', 'mat')],
+          ['Genitive', kc('მისი', 'misi'), kc('ამის', 'amis'), kc('მათი', 'mati')],
+        ],
+      },
+      {
+        type: 'text',
+        text: `## This, that and that over there
+Georgian demonstratives have three degrees of distance: ${w('ეს', 'es', 'this, near me')}, ${w('ეგ', 'eg', 'that, near you')} and ${w('ის', 'is', 'that, over there')}.
+
+## Polite “you”
+As with French *vous* or Russian *вы*, ${ka('თქვენ')} with a plural verb is used to address one person politely: ${w('როგორ ხართ?', 'rogor khart?', 'how are you? (polite)')} versus ${w('როგორ ხარ?', 'rogor khar?', 'how are you? (familiar)')}. See [[greetings]].
+
+## Question words`,
+      },
+      {
+        type: 'glossary', lang: 'ka', layout: 'table', readingLayer: 'translit', meaningLayer: 'en',
+        items: [
+          { term: 'ვინ', reading: 'vin', meaning: 'who' }, { term: 'რა', reading: 'ra', meaning: 'what' }, { term: 'სად', reading: 'sad', meaning: 'where' },
+          { term: 'საიდან', reading: 'saidan', meaning: 'where from' }, { term: 'როდის', reading: 'rodis', meaning: 'when' }, { term: 'რატომ', reading: "rat'om", meaning: 'why' },
+          { term: 'როგორ', reading: 'rogor', meaning: 'how' }, { term: 'რამდენი', reading: 'ramdeni', meaning: 'how many, how much' }, { term: 'რომელი', reading: 'romeli', meaning: 'which' },
+        ],
+      },
+      {
+        type: 'text',
+        text: `## Person markers in the verb
+The real “pronouns” of Georgian are the prefixes and suffixes of the verb. One set marks the **subject** (the ${ka('ვ-')} set), another the **object** (the ${ka('მ-')} set). Watch how ${ka('ხედავს')} ‘sees’ changes:`,
+      },
+      {
+        type: 'table', caption: 'Subject and object markers with ხედავს ‘sees’', head: 'row', compact: true,
+        rows: [
+          ['Person', 'Subject marker', 'Example', 'Object marker', 'Example'],
+          ['1st singular', ka('ვ-'), vm('ვხედავ', 'vkhedav', 'I see'), ka('მ-'), vm('მხედავს', 'mkhedavs', 'he / she sees me')],
+          ['2nd singular', '—', vm('ხედავ', 'khedav', 'you see'), ka('გ-'), vm('გხედავს', 'gkhedavs', 'he / she sees you')],
+          ['3rd singular', ka('-ს'), vm('ხედავს', 'khedavs', 'he / she sees'), '—', vm('ხედავს', 'khedavs', 'he / she sees him / her')],
+          ['1st plural', `${ka('ვ-')} … ${ka('-თ')}`, vm('ვხედავთ', 'vkhedavt', 'we see'), ka('გვ-'), vm('გვხედავს', 'gvkhedavs', 'he / she sees us')],
+          ['2nd plural', `… ${ka('-თ')}`, vm('ხედავთ', 'khedavt', 'you see'), `${ka('გ-')} … ${ka('-თ')}`, vm('გხედავთ', 'gkhedavt', 'he / she sees you; we see you')],
+          ['3rd plural', ka('-ენ'), vm('ხედავენ', 'khedaven', 'they see'), '—', ''],
+        ],
+      },
+      {
+        type: 'callout', kind: 'note', title: 'Note', layer: 'notes',
+        text: `The third person subject ending is ${ka('-ს')} in the present but ${ka('-ა')} or ${ka('-ო')} in the aorist (${ka('დაწერა')} ‘wrote’). When both a first person subject and a second person object meet, the ${ka('ვ-')} disappears: ${ka('გხედავ')} ‘I see you’, not \*ვგხედავ. More in [[verbs#Polypersonal agreement]].`,
+      },
+      seeAlso(['verbs#Polypersonal agreement', 'verbs with two or three persons'], ['nouns-and-cases', 'noun cases'], ['greetings', 'polite and familiar phrases']),
+      NAVBOX,
+    ],
+  };
+}
+
+function verbsPage() {
+  const intro = {
+    type: 'text',
+    text: `The Georgian **verb** is the heart of the language. One word such as ${w('გავაკეთებთ', "gavak'etebt", 'we will do (it)', 'ɡɑvɑkʼɛtʰɛbtʰ')} carries the person and number of the subject, the tense and aspect, and often a direction, the object and the person something is done for. Pronouns are usually dropped, because the verb already says who is acting (see [[pronouns#Person markers in the verb]]).{{ref|name=hewittref|${CITE.hewittRef}}}`,
+  };
+  const anatomy = [
+    {
+      type: 'text',
+      text: `## Building blocks of a verb form
+A verb form is built from a fixed sequence of slots around the **root**. The diagram splits ${ka('გავაკეთებთ')} into its six parts; each part links to the page that explains it.`,
+    },
+    { type: 'diagram', media: 'morphemes', alt: 'The verb form გავაკეთებთ split into morphemes', labels: 'always', align: 'center', caption: '{{lang|ka|გა-ვ-ა-კეთ-ებ-თ}}: preverb, person prefix, version vowel, root, thematic suffix, plural suffix.', items: MORPH_ITEMS },
+    {
+      type: 'text',
+      text: `Remove the preverb and you get the present ${w('ვაკეთებთ', "vak'etebt", 'we are doing')}; keep the preverb but replace ${ka('-ებ-თ')} with the aorist ending ${ka('-ე-თ')} and you get the past ${w('გავაკეთეთ', "gavak'etet", 'we did')}.`,
+    },
+  ];
+  const screeves = [
+    {
+      type: 'text',
+      text: `## Screeves and series
+Georgian grammar groups verb forms into **screeves** (${w('მწკრივი', "mts'k'rivi", 'row')}), each a combination of tense, aspect and mood. The traditional count is eleven screeves in three **series**. The series also decides the [[nouns-and-cases|case]] of the subject and the object.`,
+    },
+    {
+      type: 'table', caption: 'The three series, with ‘write’', head: 'row', striped: true,
+      rows: [
+        ['Series', 'Screeves', 'Example', 'Subject case'],
+        ['I. Present / future', 'present, imperfect, present subjunctive; future, conditional, future subjunctive', `${ka('წერს')} *ts'ers* ‘writes’; ${ka('დაწერს')} *dats'ers* ‘will write’`, 'nominative'],
+        ['II. Aorist', 'aorist, optative', `${ka('დაწერა')} *dats'era* ‘wrote’; ${ka('დაწეროს')} *dats'eros* ‘let him / her write’`, 'ergative (transitive and activity verbs)'],
+        ['III. Perfect', 'perfect, pluperfect, perfect subjunctive', `${ka('დაუწერია')} *dauts'eria* ‘has (apparently) written’; ${ka('დაეწერა')} *daets'era* ‘had written’`, 'dative'],
+      ],
+    },
+  ];
+  const preverbs = [
+    {
+      type: 'text',
+      text: `## Preverbs
+**Preverbs** (${w('ზმნისწინი', "zmnists'ini", 'before the verb')}) are prefixes that add a direction. With verbs of motion the meaning is literal:`,
+    },
+    {
+      type: 'table', caption: 'Preverbs with ‘go’', head: 'row', compact: true,
+      rows: [
+        ['Preverb', 'Direction', 'Example'],
+        [ka('მი-'), 'away, there', `${ka('მივდივარ')} *mivdivar* ‘I am going (there)’`],
+        [ka('მო-'), 'here, towards the speaker', `${ka('მოვდივარ')} *movdivar* ‘I am coming’`],
+        [ka('ა-'), 'up', `${ka('ავდივარ')} *avdivar* ‘I am going up’`],
+        [ka('ჩა-'), 'down', `${ka('ჩავდივარ')} *chavdivar* ‘I am going down’`],
+        [ka('შე-'), 'in', `${ka('შევდივარ')} *shevdivar* ‘I am going in’`],
+        [ka('გა-'), 'out', `${ka('გავდივარ')} *gavdivar* ‘I am going out’`],
+        [ka('გადა-'), 'across, over', `${ka('გადავდივარ')} *gadavdivar* ‘I am crossing’`],
+        [ka('და-'), 'around; completion', `${ka('დავდივარ')} *davdivar* ‘I walk around; I attend regularly’`],
+      ],
+    },
+    {
+      type: 'text',
+      text: `Most preverbs combine with ${ka('მო-')} for movement towards the speaker: ${ka('ამო-')}, ${ka('ჩამო-')}, ${ka('შემო-')}, ${ka('გამო-')}, ${ka('გადმო-')}, as in ${w('შემოდი!', 'shemodi!', 'come in!')}
+
+With other verbs the preverb mostly marks **completion**, and that is how the future is formed: ${ka('წერს')} ‘writes’ → ${ka('დაწერს')} ‘will write’; ${ka('აკეთებს')} ‘does’ → ${ka('გააკეთებს')} ‘will do’. Which preverb a verb takes has to be learned with the verb.
+
+## Version
+The vowel just before the root, the **version** vowel (${w('ქცევა', 'ktseva')}), tells for whom or on what the action is done: ${ka('ვწერ')} ‘I write’, ${ka('ვიწერ')} ‘I write (it) down for myself’, ${ka('ვუწერ')} ‘I write (it) to him / her’. The *In depth* version of this page has the full table.
+
+## Polypersonal agreement
+A Georgian verb can agree with up to three persons: subject, direct object and indirect object.`,
+    },
+    {
+      type: 'interlinear', lang: 'ka', tiers: TIERS, style: 'stacked', numbered: true,
+      items: [
+        il('გხედავ.', 'gkhedav.', 'ɡxɛdɑv', '2.OBJ-see (1SG subject)', 'I see you.', 'Я тебя вижу.'),
+        il('მხედავ?', 'mkhedav?', 'mxɛdɑv', '1.OBJ-see (2SG subject)', 'Do you see me?', 'Ты меня видишь?'),
+        il('გვხედავს.', 'gvkhedavs.', 'ɡvxɛdɑvs', '1PL.OBJ-see-3SG', 'He / she sees us.', 'Он / она нас видит.'),
+        il('დედას წერილს ვუწერ.', "dedas ts'erils vuts'er.", 'dɛdɑs tsʼɛrils vutsʼɛr', 'mother-DAT letter-DAT 1-OV-write', 'I am writing a letter to my mother.', 'Я пишу письмо маме.'),
+        il('მიყვარხარ.', "miq'varkhar.", 'miqʼvɑrxɑr', '1.OBJ-love-be.2SG', 'I love you.', 'Я тебя люблю.'),
+      ],
+    },
+    {
+      type: 'callout', kind: 'note', title: 'Note', layer: 'notes',
+      text: `${ka('მიყვარხარ')} is literally ‘you are loved to me’: the person who loves is marked with the object prefix ${ka('მ-')}, the person loved is the grammatical subject. Verbs of feeling and having work this way; see *Verb classes* in the *In depth* version.`,
+    },
+  ];
+  const conj = {
+    type: 'table', caption: 'აკეთებს ‘does, makes’ in three screeves', head: 'row', compact: true,
+    rows: [
+      ['Person', 'Present', 'Future', 'Aorist'],
+      ['მე', kc('ვაკეთებ', "vak'eteb"), kc('გავაკეთებ', "gavak'eteb"), kc('გავაკეთე', "gavak'ete")],
+      ['შენ', kc('აკეთებ', "ak'eteb"), kc('გააკეთებ', "gaak'eteb"), kc('გააკეთე', "gaak'ete")],
+      ['ის (aorist: მან)', kc('აკეთებს', "ak'etebs"), kc('გააკეთებს', "gaak'etebs"), kc('გააკეთა', "gaak'eta")],
+      ['ჩვენ', kc('ვაკეთებთ', "vak'etebt"), kc('გავაკეთებთ', "gavak'etebt"), kc('გავაკეთეთ', "gavak'etet")],
+      ['თქვენ', kc('აკეთებთ', "ak'etebt"), kc('გააკეთებთ', "gaak'etebt"), kc('გააკეთეთ', "gaak'etet")],
+      ['ისინი (aorist: მათ)', kc('აკეთებენ', "ak'eteben"), kc('გააკეთებენ', "gaak'eteben"), kc('გააკეთეს', "gaak'etes")],
+    ],
+  };
+  const tip = {
+    type: 'callout', kind: 'tip', title: 'Learn verbs in pairs',
+    text: `Learn every verb with its present and its future: ${ka('წერს / დაწერს')} ‘writes / will write’, ${ka('აკეთებს / გააკეთებს')} ‘does / will do’, ${ka('ხედავს / დაინახავს')} ‘sees / will see’. The future gives you the preverb and, with it, the aorist.`,
+  };
+  const deep = [
+    { type: 'heading', text: 'Version in detail', level: '2', anchor: 'version-in-detail' },
+    {
+      type: 'table', caption: 'Version (ქცევა) with ‘write’', head: 'row', compact: true,
+      rows: [
+        ['Version', 'Vowel', 'Example', 'Meaning'],
+        [`Neutral (${ka('საარვისო')})`, '—', kc('ვწერ', "vts'er"), 'I write'],
+        [`Subjective (${ka('სათავისო')})`, ka('ი-'), kc('ვიწერ', "vits'er"), 'I write (it) down for myself'],
+        [`Objective (${ka('სასხვისო')})`, `${ka('უ-')}, ${ka('ი-')}`, `${kc('ვუწერ', "vuts'er")}; ${kc('გიწერ', "gits'er")}`, 'I write (it) to him / her; I write (it) to you'],
+        [`Locative (${ka('საზედაო')})`, ka('ა-'), kc('ვაწერ', "vats'er"), 'I write (it) on (something)'],
+      ],
+    },
+    {
+      type: 'text',
+      text: `## Verb classes
+Georgian verbs fall into four classes, which differ in how they mark the subject.{{ref|name=aronson|${CITE.aronson}}}
+1. **Transitive** verbs: ${ka('წერს')} ‘writes’, ${ka('აკეთებს')} ‘does’. Ergative subject in the aorist.
+2. **Intransitive** verbs: ${ka('იწერება')} ‘is being written’, ${ka('ჯდება')} ‘sits down’. The subject is always nominative.
+3. **Activity** (medial) verbs: ${ka('მუშაობს')} ‘works’, ${ka('თამაშობს')} ‘plays’, ${ka('ტირის')} ‘cries’. Ergative subject in the aorist even without an object: ${w('ბავშვმა იტირა', "bavshvma it'ira", 'the child cried')}.
+4. **Indirect** (inverted) verbs of feeling and having: ${ka('უყვარს')} ‘loves’, ${ka('აქვს')} ‘has (a thing)’, ${ka('ჰყავს')} ‘has (a person or animal)’. The experiencer is in the dative: ${w('მე მიყვარს ქართული', "me miq'vars kartuli", 'I love Georgian')}, ${w('ნინოს ძაღლი ჰყავს', 'ninos dzaghli hq\'avs', 'Nino has a dog')}.
+
+## The evidential perfect
+The perfect series often reports what the speaker did not witness but infers or has heard: ${w('ღამით უწვიმია', "ghamit uts'vimia", 'it must have rained in the night')} (said when you see the wet streets in the morning). Add ${w('თურმე', 'turme', 'apparently')} to make the hearsay explicit.
+
+## Irregular verbs
+The most common verbs change their stem between screeves:`,
+    },
+    {
+      type: 'table', caption: 'Some irregular verbs (3rd person singular)', head: 'row', compact: true,
+      rows: [
+        ['Meaning', 'Present', 'Future', 'Aorist'],
+        ['be', kc('არის', 'aris'), kc('იქნება', 'ikneba'), kc('იყო', "iq'o")],
+        ['come', kc('მოდის', 'modis'), kc('მოვა', 'mova'), kc('მოვიდა', 'movida')],
+        ['say', kc('ამბობს', 'ambobs'), kc('იტყვის', "it'q'vis"), kc('თქვა', 'tkva')],
+        ['give', kc('აძლევს', 'adzlevs'), kc('მისცემს', 'mistsems'), kc('მისცა', 'mistsa')],
+        ['see', kc('ხედავს', 'khedavs'), kc('დაინახავს', 'dainakhavs'), kc('დაინახა', 'dainakha')],
+      ],
+    },
+  ];
+  const tail = [seeAlso(['nouns-and-cases', 'cases of subject and object'], ['pronouns#Person markers in the verb', 'person markers'], ['grammar-terms', 'Georgian names of the grammatical terms'], ['version-disambiguation', 'other meanings of “version”']), refs, NAVBOX];
+  const hat = { type: 'hatnote', kind: 'about', text: 'This page is about Georgian verbs. For other meanings of “version”, see [[version-disambiguation]].' };
+  return {
+    slug: 'verbs', title: 'Verbs', parent: 'grammar', cats: ['grammar'], order: 4,
+    summary: 'The Georgian verb marks subject and object, tense, aspect and direction in one word: screeves and series, preverbs, version and polypersonal agreement.',
+    versions: [
+      { id: 'overview', label: 'Overview', blocks: [hat, intro, ...anatomy, ...screeves, ...preverbs, conj, tip, ...tail] },
+      { id: 'in-depth', label: 'In depth', blocks: [hat, intro, ...anatomy, ...screeves, ...preverbs, conj, ...deep, tip, ...tail] },
+    ],
+  };
+}
+
+function grammarTermsPage() {
+  const T = [
+    ['ანბანი', 'anbani', 'alphabet', 'from the letter names ან and ბან', 'alphabet'],
+    ['ასო', 'aso', 'letter', '', 'alphabet'],
+    ['ხმოვანი', 'khmovani', 'vowel', 'from ხმა ‘voice’', 'pronunciation#Vowels'],
+    ['თანხმოვანი', 'tankhmovani', 'consonant', '‘sounding with’', 'pronunciation'],
+    ['მახვილი', 'makhvili', 'stress', 'literally ‘sharp’', 'pronunciation#Stress and intonation'],
+    ['არსებითი სახელი', 'arsebiti sakheli', 'noun', '', 'nouns-and-cases'],
+    ['ზედსართავი სახელი', 'zedsartavi sakheli', 'adjective', '', 'nouns-and-cases'],
+    ['ნაცვალსახელი', 'natsvalsakheli', 'pronoun', '‘instead of a name’', 'pronouns'],
+    ['რიცხვითი სახელი', 'ritskhviti sakheli', 'numeral', 'from რიცხვი ‘number’', 'numbers'],
+    ['ბრუნვა', 'brunva', 'case', '', 'nouns-and-cases'],
+    ['სახელობითი', 'sakhelobiti', 'nominative', 'from სახელი ‘name’', 'nouns-and-cases'],
+    ['მოთხრობითი', 'motkhrobiti', 'ergative', 'from მოთხრობა ‘narration’', 'nouns-and-cases'],
+    ['მიცემითი', 'mitsemiti', 'dative', 'from მიცემა ‘giving’', 'nouns-and-cases'],
+    ['ნათესაობითი', 'natesaobiti', 'genitive', 'from ნათესაობა ‘kinship’', 'nouns-and-cases'],
+    ['მოქმედებითი', 'mokmedebiti', 'instrumental', 'from მოქმედება ‘action’', 'nouns-and-cases'],
+    ['ვითარებითი', 'vitarebiti', 'adverbial', 'from ვითარება ‘circumstance’', 'nouns-and-cases'],
+    ['წოდებითი', "ts'odebiti", 'vocative', 'from წოდება ‘calling’', 'nouns-and-cases'],
+    ['თანდებული', 'tandebuli', 'postposition', '', 'postpositions'],
+    ['ზმნა', 'zmna', 'verb', '', 'verbs'],
+    ['ძირი', 'dziri', 'root', 'also ‘bottom, base’', 'verbs#Building blocks of a verb form'],
+    ['ზმნისწინი', "zmnists'ini", 'preverb', '‘before the verb’', 'verbs#Preverbs'],
+    ['თემის ნიშანი', 'temis nishani', 'thematic suffix', '‘sign of the stem’, such as -ებ', 'verbs#Building blocks of a verb form'],
+    ['მწკრივი', "mts'k'rivi", 'screeve', 'literally ‘row’', 'verbs#Screeves and series'],
+    ['სერია', 'seria', 'series (of screeves)', '', 'verbs#Screeves and series'],
+    ['ქცევა', 'ktseva', 'version', '', 'verbs#Version'],
+    ['პირი', "p'iri", 'person', 'also ‘face, mouth’', 'pronouns#Person markers in the verb'],
+    ['რიცხვი', 'ritskhvi', 'number (singular, plural)', '', 'nouns-and-cases#Plural'],
+  ];
+  return {
+    slug: 'grammar-terms', title: 'Grammar terms', parent: 'grammar', cats: ['grammar', 'study-aids'], order: 6,
+    blocks: [
+      {
+        type: 'text',
+        text: 'Georgian textbooks and teachers use Georgian grammatical terms. This glossary gives each term with its romanization, the English equivalent and, in the **Notes** layer, its literal meaning. Click a term to open the page where it is explained.',
+      },
+      { type: 'glossary', title: 'Grammar terms', lang: 'ka', layout: 'table', readingLayer: 'translit', noteLayer: 'notes', items: T.map(([term, reading, meaning, note, link]) => ({ term, reading, meaning, note, link })) },
+      seeAlso(['grammar', 'grammar overview'], ['vocabulary', 'everyday words']),
+      NAVBOX,
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Words and phrases
+
+const cards = (title, list) => ({
+  type: 'glossary', title, lang: 'ka', layout: 'cards', readingLayer: 'translit', meaningLayer: 'en', noteLayer: 'notes',
+  items: list.map(([term, reading, meaning, note = '', link = '']) => ({ term, reading, meaning, note, link })),
+});
+
+function wordPages() {
+  const vocabulary = {
+    slug: 'vocabulary', title: 'Vocabulary', cats: ['words-and-phrases'], order: 30,
+    summary: 'Core Georgian words as cards with transliteration and meaning layers, plus flashcards to test yourself.',
+    blocks: [
+      {
+        type: 'text',
+        text: `Core words for the first months of study, as cards. Each card shows the Georgian word, its romanization (**Transliteration** layer), its meaning (**English** layer) and sometimes a remark (**Notes** layer). To test yourself, switch off *English* in the *Show* bar, read the cards and guess the meanings, then switch it back on. For phrases see [[greetings]], for counting see [[numbers]].`,
+      },
+      cards('Food and drink', [
+        ['წყალი', "ts'q'ali", 'water', 'წყ is a harmonic cluster: see [[pronunciation#Consonant clusters]]'],
+        ['პური', "p'uri", 'bread', 'compare ფური *puri* ‘cow’: see [[pronunciation#Ejectives]]'],
+        ['ღვინო', 'ghvino', 'wine', 'traditionally made in ქვევრი *kvevri*, large clay jars'],
+        ['ყველი', "q'veli", 'cheese'],
+        ['ყავა', "q'ava", 'coffee'],
+        ['ჩაი', 'chai', 'tea'],
+        ['ხაჭაპური', "khach'ap'uri", 'cheese bread'],
+        ['ხინკალი', "khink'ali", 'dumplings with broth inside', 'eaten by hand, holding the top knot'],
+        ['ლობიო', 'lobio', 'beans; a bean stew'],
+        ['მწვადი', "mts'vadi", 'grilled meat on skewers'],
+        ['ჩურჩხელა', 'churchkhela', 'walnuts in thickened grape juice', 'see the picture in [[at-the-market]]'],
+        ['ფხალი', 'pkhali', 'vegetable and walnut paste'],
+      ]),
+      cards('People', [
+        ['დედა', 'deda', 'mother', 'sounds like English *dad*, but means ‘mother’'],
+        ['მამა', 'mama', 'father', 'sounds like *mama*, but means ‘father’'],
+        ['ბებია', 'bebia', 'grandmother'],
+        ['ბაბუა', 'babua', 'grandfather'],
+        ['ძმა', 'dzma', 'brother'],
+        ['და', 'da', 'sister', 'the same word means ‘and’'],
+        ['შვილი', 'shvili', 'son or daughter', 'also the ending of many surnames'],
+        ['მეგობარი', 'megobari', 'friend'],
+        ['კაცი', "k'atsi", 'man', '', 'nouns-and-cases'],
+        ['ქალი', 'kali', 'woman'],
+        ['ბავშვი', 'bavshvi', 'child'],
+        ['სტუმარი', "st'umari", 'guest', 'proverb: სტუმარი ღვთისაა ‘a guest is from God’'],
+      ]),
+      cards('Places and nature', [
+        ['სახლი', 'sakhli', 'house, home'],
+        ['ქალაქი', 'kalaki', 'city', '', 'in-tbilisi'],
+        ['სოფელი', 'sopeli', 'village; also ‘world’'],
+        ['ქუჩა', 'kucha', 'street'],
+        ['ბაზარი', 'bazari', 'market', '', 'at-the-market'],
+        ['მთა', 'mta', 'mountain'],
+        ['ზღვა', 'zghva', 'sea'],
+        ['მდინარე', 'mdinare', 'river'],
+        ['ტყე', "t'q'e", 'forest'],
+        ['ცა', 'tsa', 'sky'],
+        ['მზე', 'mze', 'sun'],
+        ['მთვარე', 'mtvare', 'moon'],
+      ]),
+      cards('Describing things', [
+        ['კარგი', "k'argi", 'good'], ['ცუდი', 'tsudi', 'bad'], ['დიდი', 'didi', 'big'], ['პატარა', "p'at'ara", 'small'],
+        ['ლამაზი', 'lamazi', 'beautiful'], ['გემრიელი', 'gemrieli', 'tasty'], ['ცხელი', 'tskheli', 'hot'], ['ცივი', 'tsivi', 'cold'],
+        ['თბილი', 'tbili', 'warm', 'linked by tradition with the name თბილისი'], ['ახალი', 'akhali', 'new'], ['ძველი', 'dzveli', 'old'], ['ძვირი', 'dzviri', 'expensive'],
+      ]),
+      cards('Time', [
+        ['დღე', 'dghe', 'day'], ['ღამე', 'ghame', 'night'], ['დილა', 'dila', 'morning'], ['საღამო', 'saghamo', 'evening'],
+        ['დღეს', 'dghes', 'today'], ['ხვალ', 'khval', 'tomorrow'], ['გუშინ', 'gushin', 'yesterday'], ['ახლა', 'akhla', 'now'],
+        ['კვირა', "k'vira", 'week; Sunday'], ['თვე', 'tve', 'month'], ['წელი', "ts'eli", 'year'], ['საათი', 'saati', 'hour; clock, watch'],
+      ]),
+      {
+        type: 'flashcards', title: 'Test yourself', lang: 'ka',
+        items: [
+          ['წყალი', "ts'q'ali", 'water'], ['მამა', 'mama', 'father'], ['დედა', 'deda', 'mother'], ['ღვინო', 'ghvino', 'wine'], ['მეგობარი', 'megobari', 'friend'], ['ქალაქი', 'kalaki', 'city'],
+          ['ლამაზი', 'lamazi', 'beautiful'], ['გემრიელი', 'gemrieli', 'tasty'], ['ხვალ', 'khval', 'tomorrow'], ['მთა', 'mta', 'mountain'], ['ყველი', "q'veli", 'cheese'], ['სტუმარი', "st'umari", 'guest'],
+        ].map(([front, tr, en]) => ({ front, back: `*${tr}*\n**${en}**` })),
+      },
+      { type: 'pagelist', title: 'More words', source: 'children', style: 'cards', summary: true, sort: 'order' },
+      seeAlso(['grammar-terms', 'words for talking about grammar'], ['parallel-texts', 'the words in context'], ['exercises']),
+      NAVBOX,
+    ],
+  };
+
+  const greetings = {
+    slug: 'greetings', title: 'Greetings and phrases', parent: 'vocabulary', cats: ['words-and-phrases'], order: 1,
+    blocks: [
+      {
+        type: 'text',
+        text: `The everyday Georgian greeting is ${w('გამარჯობა', 'gamarjoba', 'hello', 'ɡɑmɑrdʒɔbɑ')}, related to ${ka('გამარჯვება')} ‘victory’: you wish the other person success. The answer is ${w('გაგიმარჯოს', 'gagimarjos')} to one friend, or ${w('გაგიმარჯოთ', 'gagimarjot')} to several people or politely.
+
+With the **Transliteration** layer on, the short exchange below shows the romanization above each word (as ruby text):
+
+**{გამარჯობა|gamarjoba}! {როგორ|rogor} {ხარ|khar}?** — **{კარგად|k'argad}, {მადლობა|madloba}. {შენ|shen}?**
+‘Hello! How are you?’ — ‘Fine, thanks. And you?’`,
+      },
+      {
+        type: 'glossary', title: 'Essential phrases', lang: 'ka', layout: 'table', readingLayer: 'translit', meaningLayer: 'en', noteLayer: 'notes',
+        items: [
+          ['გამარჯობა', 'gamarjoba', 'hello', 'at any time of day'],
+          ['გაგიმარჯოს / გაგიმარჯოთ', 'gagimarjos / gagimarjot', 'hello (reply)', '-თ: polite or to several people'],
+          ['დილა მშვიდობისა', 'dila mshvidobisa', 'good morning', 'literally ‘morning of peace’'],
+          ['საღამო მშვიდობისა', 'saghamo mshvidobisa', 'good evening'],
+          ['ღამე მშვიდობისა', 'ghame mshvidobisa', 'good night'],
+          ['როგორ ხარ?', 'rogor khar?', 'how are you?', 'familiar'],
+          ['როგორ ბრძანდებით?', 'rogor brdzandebit?', 'how are you?', 'very polite'],
+          ['კარგად, მადლობა.', "k'argad, madloba.", 'fine, thank you.'],
+          ['რა გქვია?', 'ra gkvia?', 'what is your name?', 'familiar; polite: რა გქვიათ?'],
+          ['მე ნინო მქვია.', 'me nino mkvia.', 'my name is Nino.'],
+          ['ძალიან სასიამოვნოა.', 'dzalian sasiamovnoa.', 'very nice to meet you.', 'literally ‘it is very pleasant’'],
+          ['მადლობა / დიდი მადლობა', 'madloba / didi madloba', 'thank you / thank you very much'],
+          ['გმადლობთ', 'gmadlobt', 'thank you', 'formal'],
+          ['არაფრის', 'arapris', 'you are welcome', 'literally ‘of nothing’'],
+          ['ბოდიში', 'bodishi', 'sorry; excuse me'],
+          ['თუ შეიძლება', 'tu sheidzleba', 'please (in requests)', 'literally ‘if it is possible’'],
+          ['კი / დიახ / ჰო', "k'i / diakh / ho", 'yes', 'დიახ is polite, ჰო colloquial'],
+          ['არა', 'ara', 'no'],
+          ['ვერ გავიგე.', 'ver gavige.', 'I didn’t catch that.'],
+          ['ნელა, თუ შეიძლება.', 'nela, tu sheidzleba.', 'slowly, please.'],
+          ['ინგლისური იცით?', 'inglisuri itsit?', 'do you speak English?', 'literally ‘do you know English?’'],
+          ['ნახვამდის', 'nakhvamdis', 'goodbye'],
+          ['კარგად!', "k'argad!", 'bye, take care!', 'literally ‘well’'],
+          ['კეთილი იყოს თქვენი მობრძანება', "k'etili iq'os tkveni mobrdzaneba", 'welcome'],
+          ['გაუმარჯოს!', 'gaumarjos!', 'cheers!', 'the toast word; see [[supra-toast]]'],
+          ['გენაცვალე', 'genatsvale', 'my dear', 'affectionate; literally ‘may I take your place’'],
+        ].map(([term, reading, meaning, note = '']) => ({ term, reading, meaning, note })),
+      },
+      {
+        type: 'text',
+        text: `## Meeting someone
+A short conversation between Nino and John, a learner from England. Switch on **Gloss** to see how each word is built and **Russian** for a Russian translation.`,
+      },
+      {
+        type: 'interlinear', title: 'Nice to meet you', lang: 'ka', tiers: TIERS, style: 'stacked', numbered: true,
+        items: [
+          il('— გამარჯობა! მე ნინო მქვია. შენ რა გქვია?', '— gamarjoba! me nino mkvia. shen ra gkvia?', 'ɡɑmɑrdʒɔbɑ | mɛ ninɔ mkʰviɑ | ʃɛn rɑ ɡkʰviɑ', 'hello I Nino 1.OBJ-be.called you what 2.OBJ-be.called', '— Hello! My name is Nino. What’s your name?', '— Привет! Меня зовут Нино. А тебя как зовут?'),
+          il('— გაგიმარჯოს! მე ჯონი ვარ, ინგლისიდან.', '— gagimarjos! me joni var, inglisidan.', 'ɡɑɡimɑrdʒɔs | mɛ dʒɔni vɑr inɡlisidɑn', 'hello.reply I John be.1SG England-from', '— Hi! I’m John, from England.', '— Привет! Я Джон, из Англии.'),
+          il('— ძალიან სასიამოვნოა! ქართულს სწავლობ?', "— dzalian sasiamovnoa! kartuls sts'avlob?", 'dzɑliɑn sɑsiɑmɔvnɔɑ | kʰɑrtʰuls stsʼɑvlɔb', 'very pleasant=be.3SG Georgian-DAT learn.2SG', '— Very nice to meet you! Are you learning Georgian?', '— Очень приятно! Ты учишь грузинский?'),
+          il('— კი, ცოტა ვლაპარაკობ.', "— k'i, tsot'a vlap'arak'ob.", 'kʼi tsʰɔtʼɑ vlɑpʼɑrɑkʼɔb', 'yes a.little 1SG-speak', '— Yes, I speak a little.', '— Да, немного говорю.'),
+          il('— ყოჩაღ!', "— q'ochagh!", 'qʼɔtʃʰɑɣ', 'well.done', '— Well done!', '— Молодец!'),
+        ],
+      },
+      {
+        type: 'callout', kind: 'note', title: 'Note', layer: 'notes',
+        text: `${ka('მქვია')} ‘I am called’ uses the object prefix ${ka('მ-')}, like ${ka('მიყვარს')} ‘I love’: literally ‘(the name) is called to me’. With ${ka('შენ')} it becomes ${ka('გქვია')}. See [[verbs#Polypersonal agreement]].`,
+      },
+      seeAlso(['numbers', 'prices and counting'], ['at-the-market', 'phrases in a dialogue'], ['pronouns#Polite “you”', 'polite and familiar address']),
+      NAVBOX,
+    ],
+  };
+
+  const ONES = [
+    [1, 'ერთი', 'erti'], [2, 'ორი', 'ori'], [3, 'სამი', 'sami'], [4, 'ოთხი', 'otkhi'], [5, 'ხუთი', 'khuti'], [6, 'ექვსი', 'ekvsi'], [7, 'შვიდი', 'shvidi'],
+    [8, 'რვა', 'rva'], [9, 'ცხრა', 'tskhra'], [10, 'ათი', 'ati'], [11, 'თერთმეტი', "tertmet'i"], [12, 'თორმეტი', "tormet'i"], [13, 'ცამეტი', "tsamet'i"],
+    [14, 'თოთხმეტი', "totkhmet'i"], [15, 'თხუთმეტი', "tkhutmet'i"], [16, 'თექვსმეტი', "tekvsmet'i"], [17, 'ჩვიდმეტი', "chvidmet'i"], [18, 'თვრამეტი', "tvramet'i"],
+    [19, 'ცხრამეტი', "tskhramet'i"], [20, 'ოცი', 'otsi'],
+  ];
+  const TENS = [
+    [20, 'ოცი', 'otsi', 'twenty'], [30, 'ოცდაათი', 'otsdaati', 'twenty and ten'], [40, 'ორმოცი', 'ormotsi', 'two twenties'], [50, 'ორმოცდაათი', 'ormotsdaati', 'two twenties and ten'],
+    [60, 'სამოცი', 'samotsi', 'three twenties'], [70, 'სამოცდაათი', 'samotsdaati', 'three twenties and ten'], [80, 'ოთხმოცი', 'otkhmotsi', 'four twenties'],
+    [90, 'ოთხმოცდაათი', 'otkhmotsdaati', 'four twenties and ten'], [100, 'ასი', 'asi', 'hundred'],
+  ];
+  const numbers = {
+    slug: 'numbers', title: 'Numbers', parent: 'vocabulary', cats: ['words-and-phrases'], order: 2,
+    blocks: [
+      {
+        type: 'text',
+        text: `Georgian counts in **twenties** up to one hundred (a *vigesimal* system): 40 is “two twenties”, 60 “three twenties” and 80 “four twenties”, and the numbers in between are joined with ${w('და', 'da', 'and')}. So ${w('ოთხმოცდაათი', 'otkhmotsdaati', 'ninety')} is literally “four-twenty-and-ten”.`,
+      },
+      { type: 'media', media: 'vigesimal', caption: '{{lang|ka|ოთხმოცი}} = 4 × 20; {{lang|ka|ოთხმოცდაათი}} = 4 × 20 + 10.', align: 'center', frame: 'plain' },
+      {
+        type: 'columns', ratio: '1:1',
+        cols: [
+          { blocks: [{ type: 'table', caption: '1 to 20', head: 'row', compact: true, rows: [['Number', 'Georgian'], ...ONES.map(([n, g, t]) => [String(n), kc(g, t)])] }] },
+          {
+            blocks: [
+              { type: 'table', caption: 'Tens', head: 'row', compact: true, rows: [['Number', 'Georgian', 'Literally'], ...TENS.map(([n, g, t, lit]) => [String(n), kc(g, t), lit])] },
+              {
+                type: 'text',
+                text: `The teens are built from a shortened ${ka('ათი')} ‘ten’, the unit and ${ka('მეტი')} ‘more’: ${ka('თერთმეტი')} ‘eleven’ is roughly “ten-one-more”.`,
+              },
+            ],
+          },
+        ],
+      },
+      {
+        type: 'text',
+        text: `## Building numbers
+Take the twenties, add ${ka('და')} ‘and’ and then any number from 1 to 19:
+- 21 ${w('ოცდაერთი', 'otsdaerti', '20 + 1')}
+- 35 ${w('ოცდათხუთმეტი', 'otsdatkhutmet\'i', '20 + 15')}
+- 47 ${w('ორმოცდაშვიდი', 'ormotsdashvidi', '2 × 20 + 7')}
+- 58 ${w('ორმოცდათვრამეტი', 'ormotsdatvramet\'i', '2 × 20 + 18')}
+- 99 ${w('ოთხმოცდაცხრამეტი', 'otkhmotsdatskhramet\'i', '4 × 20 + 19')}
+
+## Hundreds and thousands
+${w('ასი', 'asi', '100')}, ${w('ორასი', 'orasi', '200')}, ${w('სამასი', 'samasi', '300')}, ${w('ათასი', 'atasi', '1000')}. Before another number the final ${ka('-ი')} drops: ${w('ას ოცი', 'as otsi', '120')}, ${w('ორი ათას ოცდაექვსი', 'ori atas otsdaekvsi', '2026')}.
+
+## Counting things
+After a numeral the noun stays **singular**: ${w('ორი ლარი', 'ori lari', 'two lari')}, ${w('სამი ბავშვი', 'sami bavshvi', 'three children')}. Prices: ${w('რა ღირს?', 'ra ghirs?', 'how much is it?')} — ${w('ხუთი ლარი', 'khuti lari', 'five lari')}.
+
+## Ordinals
+Ordinals are formed with ${ka('მე-…-ე')}: ${w('მეორე', 'meore', 'second')}, ${w('მესამე', 'mesame', 'third')}, ${w('მეოცე', 'meotse', 'twentieth')}; only ‘first’ is irregular: ${w('პირველი', "p'irveli", 'first')}.`,
+      },
+      {
+        type: 'flashcards', title: 'Read the number', lang: 'ka',
+        items: [['ოცდაათი', 30], ['ორმოცი', 40], ['ორმოცდაათი', 50], ['სამოცი', 60], ['სამოცდაათი', 70], ['ოთხმოცი', 80], ['ოთხმოცდაათი', 90], ['ოცდაცამეტი', 33]].map(([front, n]) => ({ front, back: `**${n}**` })),
+      },
+      seeAlso(['at-the-market', 'prices in a dialogue'], ['exercises', 'write numbers in words'], ['grammar-terms']),
+      NAVBOX,
+    ],
+  };
+  return [vocabulary, greetings, numbers];
+}
+
+// ---------------------------------------------------------------------------------------------
+// Parallel texts (written for this template)
+
+function textPages() {
+  const hub = {
+    slug: 'parallel-texts', title: 'Parallel texts', cats: ['texts'], order: 40,
+    summary: 'Short Georgian texts line by line with transliteration, IPA, glosses, English and Russian, each a toggleable layer.',
+    blocks: [
+      {
+        type: 'text',
+        text: `Short texts written for this base, line by line. Under each Georgian line you can show five **tiers**: transliteration, IPA, a morpheme-by-morpheme gloss, an English and a Russian translation. Each tier is a layer: switch them in the *Show* bar at the top of the page, for example hide the English to test yourself, or turn on Russian if it is your first language.
+
+The texts get harder in order: a description ([[in-tbilisi]]), a dialogue ([[at-the-market]]) and a short speech ([[supra-toast]]).`,
+      },
+      {
+        type: 'gallery', title: 'The texts', style: 'grid', size: 'm',
+        items: [
+          { media: 'banner', caption: 'In Tbilisi', link: 'in-tbilisi' },
+          { media: 'market', caption: 'At the market', link: 'at-the-market' },
+          { media: 'supra', caption: 'A supra toast', link: 'supra-toast' },
+        ],
+      },
+      {
+        type: 'callout', kind: 'tip', title: 'How to study a parallel text',
+        text: `1. Read the Georgian line with only **Transliteration** on, aloud.
+2. Turn on **Gloss** and find each ending you know from [[nouns-and-cases]] and [[verbs]].
+3. Hide everything but the Georgian and read the text again.
+4. Copy the text by hand, then write your own version with other words from [[vocabulary]].`,
+      },
+      { type: 'pagelist', title: 'All texts', source: 'children', style: 'cards', summary: true, sort: 'order' },
+      {
+        type: 'text',
+        text: `## Classical lines
+Two famous lines from Shota Rustaveli’s epic poem *The Knight in the Panther’s Skin* (${w('ვეფხისტყაოსანი', "vepkhist'q'aosani")}), written in the 12th century. The language is classical, so some forms differ from modern Georgian: ${ka('სიცოცხლესა ნაზრახსა')} has an old ending ${ka('-სა')}.`,
+      },
+      {
+        type: 'verse', title: 'Shota Rustaveli', lang: 'ka', trLayer: 'en', numbers: 'none',
+        text: 'რასაცა გასცემ, შენია,\nრაც არა, დაკარგულია!\n\nსჯობს სიცოცხლესა ნაზრახსა\nსიკვდილი სახელოვანი.',
+        translation: 'What you give away is yours;\nwhat you keep back is lost!\n\nBetter than a life of shame\nis a glorious death.',
+        source: '*The Knight in the Panther’s Skin*; English rendering written for this base.',
+      },
+      {
+        type: 'verse', title: 'Transliteration and Russian', layer: 'translit', trLayer: 'ru', numbers: 'none',
+        text: "*rasatsa gastsem, shenia,*\n*rats ara, dak'argulia!*\n\n*sjobs sitsotskhlesa nazrakhsa*\n*sik'vdili sakhelovani.*",
+        translation: 'Что отдашь — то твоё,\nчто не отдашь — потеряно!\n\nЛучше позорной жизни\nславная смерть.',
+      },
+      seeAlso(['vocabulary', 'the words of the texts'], ['exercises', 'questions about the texts']),
+      NAVBOX,
+    ],
+  };
+
+  const tbilisi = {
+    slug: 'in-tbilisi', title: 'In Tbilisi', display: 'In Tbilisi · {{lang|ka|თბილისში}}', parent: 'parallel-texts', cats: ['texts'], order: 1,
+    summary: 'Five sentences about Tbilisi: the capital, the river, Old Tbilisi, Mtatsminda and Tbilisi hospitality.',
+    blocks: [
+      {
+        type: 'media', media: 'banner', align: 'right', width: 360, frame: 'thumb', caption: 'Old Tbilisi: balconies, churches and the fortress above the river.',
+        text: `Five simple sentences about the capital of Georgia. They use the copula ${ka('-ა')} ‘is’, the postpositions ${ka('-ზე')} and ${ka('-ში')}, and two verbs with person markers. Level: after the first weeks of [[study-plan|study]].`,
+        layout: 'float',
+      },
+      {
+        type: 'interlinear', title: '{{lang|ka|თბილისში}} · In Tbilisi', lang: 'ka', tiers: TIERS, style: 'stacked', numbered: true,
+        items: [
+          il('თბილისი საქართველოს დედაქალაქია.', 'tbilisi sakartvelos dedakalakia.', 'tʰbilisi sɑkʰɑrtʰvɛlɔs dɛdɑkʰɑlɑkʰiɑ', 'Tbilisi.NOM Georgia-GEN capital=be.3SG', 'Tbilisi is the capital of Georgia.', 'Тбилиси — столица Грузии.'),
+          il('ქალაქი მტკვარზე დგას.', "kalaki mt'k'varze dgas.", 'kʰɑlɑkʰi mtʼkʼvɑrzɛ dɡɑs', 'city-NOM Mtkvari-on stand-3SG', 'The city stands on the Mtkvari river.', 'Город стоит на реке Мтквари (Куре).'),
+          il('ძველ თბილისში ვიწრო ქუჩები და ხის აივნებია.', "dzvel tbilisshi vits'ro kuchebi da khis aivnebia.", 'dzvɛl tʰbilisʃi vitsʼrɔ kʰutʃʰɛbi dɑ xis ɑivnɛbiɑ', 'old Tbilisi-in narrow street-PL.NOM and wood-GEN balcony-PL.NOM=be.3SG', 'In Old Tbilisi there are narrow streets and wooden balconies.', 'В Старом Тбилиси узкие улочки и деревянные балконы.'),
+          il('საღამოს მთაწმინდაზე ავდივართ და ქალაქს ვუყურებთ.', "saghamos mtats'mindaze avdivart da kalaks vuq'urebt.", 'sɑɣɑmɔs mtʰɑtsʼmindɑzɛ ɑvdivɑrtʰ dɑ kʰɑlɑkʰs vuqʼurɛbtʰ', 'evening-DAT Mtatsminda-on PV.up-1-go-PL and city-DAT 1-OV-watch-TS-PL', 'In the evening we go up Mtatsminda and look at the city.', 'Вечером мы поднимаемся на Мтацминду и смотрим на город.'),
+          il('თბილისელები სტუმრებს ძალიან თბილად ხვდებიან.', "tbiliselebi st'umrebs dzalian tbilad khvdebian.", 'tʰbilisɛlɛbi stʼumrɛbs dzɑliɑn tʰbilɑd xvdɛbiɑn', 'Tbilisian-PL.NOM guest-PL-DAT very warm-ADV meet-3PL', 'The people of Tbilisi welcome guests very warmly.', 'Тбилисцы очень тепло встречают гостей.'),
+        ],
+      },
+      {
+        type: 'callout', kind: 'note', title: 'Notes on the text', layer: 'notes',
+        text: `- ${ka('დედაქალაქი')} ‘capital’ is literally ‘mother-city’ (${ka('დედა')} + ${ka('ქალაქი')}).
+- ${ka('მტკვარი')} is the river known in Russian as Кура (Kura).
+- ${ka('ძველ თბილისში')}: the adjective ${ka('ძველი')} ‘old’ takes its short form before a noun with a postposition (see [[postpositions]]).
+- ${ka('საღამოს')} ‘in the evening’ is the dative of ${ka('საღამო')}, used for time.
+- ${ka('ავდივართ')}: the preverb ${ka('ა-')} means ‘up’ (see [[verbs#Preverbs]]).
+- ${ka('თბილად')} ‘warmly’ is the adverbial case of ${ka('თბილი')} ‘warm’, the word the city’s name is traditionally linked with, after its warm sulphur springs.`,
+      },
+      cards('Words from the text', [
+        ['დედაქალაქი', 'dedakalaki', 'capital city'], ['მტკვარი', "mt'k'vari", 'the Mtkvari (Kura) river'], ['ვიწრო', "vits'ro", 'narrow'], ['ქუჩა', 'kucha', 'street'],
+        ['აივანი', 'aivani', 'balcony', 'plural აივნები: the stem loses a vowel'], ['ხის', 'khis', 'wooden, of wood', 'genitive of ხე ‘tree’'], ['მთაწმინდა', "mtats'minda", 'Mtatsminda', 'literally ‘holy mountain’'],
+        ['უყურებს', "uq'urebs", 'watches, looks at'], ['ხვდება', 'khvdeba', 'meets'], ['თბილისელი', 'tbiliseli', 'person from Tbilisi'],
+      ]),
+      seeAlso(['at-the-market', 'the next text'], ['postpositions'], ['transliteration']),
+      NAVBOX,
+    ],
+  };
+
+  const market = {
+    slug: 'at-the-market', title: 'At the market', display: 'At the market · {{lang|ka|ბაზარში}}', parent: 'parallel-texts', cats: ['texts'], order: 2,
+    summary: 'A dialogue at a market stall: asking for tomatoes and cheese, prices in lari, polite phrases.',
+    blocks: [
+      {
+        type: 'media', media: 'market', align: 'right', width: 340, frame: 'thumb', caption: 'A market stall with tomatoes, cheese and churchkhela.', layout: 'float',
+        text: `A dialogue between a **seller** (${w('გამყიდველი', "gamq'idveli")}) and a **buyer** (${w('მყიდველი', "mq'idveli")}). It practises polite forms with ${ka('-თ')}, [[numbers]] and prices in **lari** (${ka('ლარი')}), the currency of Georgia. For the greetings see [[greetings]].`,
+      },
+      {
+        type: 'interlinear', title: '{{lang|ka|ბაზარში}} · At the market', lang: 'ka', tiers: TIERS, style: 'stacked', numbered: true,
+        items: [
+          il('**გამყიდველი:** გამარჯობა! რა გნებავთ?', "gamq'idveli: gamarjoba! ra gnebavt?", 'ɡɑmɑrdʒɔbɑ | rɑ ɡnɛbɑvtʰ', 'hello what 2-wish-PL', 'Seller: Hello! What would you like?', 'Продавец: Здравствуйте! Что желаете?'),
+          il('**მყიდველი:** გაგიმარჯოთ! ერთი კილო პომიდორი, თუ შეიძლება.', "mq'idveli: gagimarjot! erti k'ilo p'omidori, tu sheidzleba.", 'ɡɑɡimɑrdʒɔtʰ | ɛrtʰi kʼilɔ pʼɔmidɔri tʰu ʃɛidzlɛbɑ', 'hello.reply-PL one kilo tomato if be.possible', 'Buyer: Hello! A kilo of tomatoes, please.', 'Покупатель: Здравствуйте! Килограмм помидоров, пожалуйста.'),
+          il('**გამყიდველი:** აი, ინებეთ. კიდევ რამე?', "gamq'idveli: ai, inebet. k'idev rame?", 'ɑi inɛbɛtʰ | kʼidɛv rɑmɛ', 'here please.take-PL more something', 'Seller: Here you are. Anything else?', 'Продавец: Вот, пожалуйста. Что-нибудь ещё?'),
+          il('**მყიდველი:** ეს ყველი რა ღირს?', "mq'idveli: es q'veli ra ghirs?", 'ɛs qʼvɛli rɑ ɣirs', 'this cheese.NOM what cost-3SG', 'Buyer: How much is this cheese?', 'Покупатель: Сколько стоит этот сыр?'),
+          il('**გამყიდველი:** თორმეტი ლარი კილო. იმერული ყველია, ძალიან გემრიელი.', "gamq'idveli: tormet'i lari k'ilo. imeruli q'velia, dzalian gemrieli.", 'tʰɔrmɛtʼi lɑri kʼilɔ | imɛruli qʼvɛliɑ dzɑliɑn ɡɛmriɛli', 'twelve lari kilo Imeretian cheese=be.3SG very tasty', 'Seller: Twelve lari a kilo. It’s Imeretian cheese, very tasty.', 'Продавец: Двенадцать лари за кило. Это имеретинский сыр, очень вкусный.'),
+          il('**მყიდველი:** ნახევარ კილოს ავიღებ.', "mq'idveli: nakhevar k'ilos avigheb.", 'nɑxɛvɑr kʼilɔs ɑviɣɛb', 'half kilo-DAT PV-1SG-take', 'Buyer: I’ll take half a kilo.', 'Покупатель: Возьму полкило.'),
+          il('**გამყიდველი:** სულ ცხრა ლარი.', "gamq'idveli: sul tskhra lari.", 'sul tsʰxrɑ lɑri', 'in.all nine lari', 'Seller: That’s nine lari altogether.', 'Продавец: Всего девять лари.'),
+          il('**მყიდველი:** ინებეთ. დიდი მადლობა!', "mq'idveli: inebet. didi madloba!", 'inɛbɛtʰ | didi mɑdlɔbɑ', 'please.take-PL big thanks', 'Buyer: Here you are. Thank you very much!', 'Покупатель: Вот, пожалуйста. Большое спасибо!'),
+          il('**გამყიდველი:** არაფრის. კარგად ბრძანდებოდეთ!', "gamq'idveli: arapris. k'argad brdzandebodet!", 'ɑrɑpʰris | kʼɑrɡɑd brdzɑndɛbɔdɛtʰ', 'nothing-GEN well be.POL-OPT-PL', 'Seller: You’re welcome. All the best!', 'Продавец: Не за что. Всего доброго!'),
+        ],
+      },
+      {
+        type: 'callout', kind: 'note', title: 'Notes on the dialogue', layer: 'notes',
+        text: `- ${ka('ერთი კილო პომიდორი')}: after a numeral the noun stays singular (see [[numbers#Counting things]]).
+- ${ka('ინებეთ')} is a polite ‘here you are, please take it’; between friends you will also hear ${ka('აჰა')}.
+- ${ka('იმერული ყველი')}, cheese from Imereti in western Georgia, is a fresh, mild white cheese, the classic filling of ${ka('ხაჭაპური')}.
+- ${ka('ავიღებ')} ‘I will take’ is a future: the preverb ${ka('ა-')} plus the person prefix ${ka('ვ-')}.
+- ${ka('კარგად ბრძანდებოდეთ')} is a polite farewell; to a friend simply ${ka('კარგად!')}`,
+      },
+      cards('Words from the dialogue', [
+        ['გამყიდველი', "gamq'idveli", 'seller'], ['მყიდველი', "mq'idveli", 'buyer'], ['კილო', "k'ilo", 'kilo'], ['პომიდორი', "p'omidori", 'tomato'],
+        ['ნახევარი', 'nakhevari', 'half'], ['სულ', 'sul', 'altogether, in all'], ['ფასი', 'pasi', 'price'], ['იაფი', 'iapi', 'cheap'], ['ძვირი', 'dzviri', 'expensive'], ['კიდევ', "k'idev", 'more, again'],
+      ]),
+      { type: 'callout', kind: 'tip', title: 'Question', text: 'How much did the tomatoes cost? Work it out from the dialogue, then check your answer on the [[exercises]] page.' },
+      seeAlso(['in-tbilisi', 'the previous text'], ['supra-toast', 'the next text'], ['numbers']),
+      NAVBOX,
+    ],
+  };
+
+  const supra = {
+    slug: 'supra-toast', title: 'A supra toast', display: 'A supra toast · {{lang|ka|სადღეგრძელო}}', parent: 'parallel-texts', cats: ['texts'], order: 3,
+    summary: 'A toast to friendship as a tamada might give it at a Georgian feast, with the words of the supra.',
+    blocks: [
+      { type: 'quote', style: 'epigraph', text: `${ka('სტუმარი ღვთისაა.')}{{layer|translit| *st'umari ghvtisaa.*}}`, author: 'Georgian proverb', source: '‘A guest is from God.’' },
+      {
+        type: 'infobox', title: 'Supra', subtitle: ka('სუფრა'), image: 'supra', caption: 'A festive table',
+        rows: [
+          { label: 'Feast', value: kc('სუფრა', 'supra') + ' (also ‘tablecloth’)' },
+          { label: 'Toastmaster', value: kc('თამადა', 'tamada') },
+          { label: 'Toast', value: kc('სადღეგრძელო', 'sadghegrdzelo') },
+          { label: 'Passing the toast', value: kc('ალავერდი', 'alaverdi') },
+          { label: 'Drinking horn', value: kc('ყანწი', "q'ants'i") },
+          { label: 'Clay jug', value: kc('დოქი', 'doki') },
+        ],
+      },
+      {
+        type: 'text',
+        text: `A **supra** (${w('სუფრა', 'supra')}) is a traditional Georgian feast. It is led by the **tamada** (${w('თამადა', 'tamada', 'toastmaster')}), who proposes a series of **toasts** (${w('სადღეგრძელო', 'sadghegrdzelo')}, from ${ka('დღეგრძელი')} ‘long-lived’): to peace, to the hosts, to parents, to friendship, to those no longer with us. After each toast the guests answer ${w('გაუმარჯოს!', 'gaumarjos!', 'may it prosper!')}, the same root as ${ka('გამარჯობა')}. When the tamada hands the word to someone else, he says ${w('ალავერდი', 'alaverdi')}.
+
+The toast below is the kind of speech a tamada might give for friendship. It practises the vocative, the optative of wishes and the dative after ${ka('გაუმარჯოს')}.`,
+      },
+      {
+        type: 'interlinear', title: 'A toast to friendship', lang: 'ka', tiers: TIERS, style: 'stacked', numbered: true,
+        items: [
+          il('ჩემო ძვირფასო მეგობრებო!', 'chemo dzvirpaso megobrebo!', 'tʃʰɛmɔ dzvirpʰɑsɔ mɛɡɔbrɛbɔ', 'my-VOC dear-VOC friend-PL-VOC', 'My dear friends!', 'Мои дорогие друзья!'),
+          il('მინდა დავლიო ჩვენი მეგობრობის სადღეგრძელო.', 'minda davlio chveni megobrobis sadghegrdzelo.', 'mindɑ dɑvliɔ tʃʰvɛni mɛɡɔbrɔbis sɑdɣɛɡrdzɛlɔ', '1.OBJ-want PV-1-drink-OPT our friendship-GEN toast.NOM', 'I want to drink to our friendship.', 'Хочу выпить за нашу дружбу.'),
+          il('მეგობარი ის არის, ვინც გაჭირვებაში გვერდით გიდგას.', "megobari is aris, vints gach'irvebashi gverdit gidgas.", 'mɛɡɔbɑri is ɑris vintsʰ ɡɑtʃʼirvɛbɑʃi ɡvɛrditʰ ɡidɡɑs', 'friend.NOM that be.3SG who hardship-in beside 2.OBJ-stand-3SG', 'A friend is the one who stands by you in hard times.', 'Друг — это тот, кто в беде стоит рядом с тобой.'),
+          il('ღმერთმა ნუ მოგვაკლოს ერთმანეთი!', "ghmertma nu mogvak'los ertmaneti!", 'ɣmɛrtʰmɑ nu mɔɡvɑkʼlɔs ɛrtʰmɑnɛtʰi', 'God-ERG not PV-1PL.OBJ-lack-OPT.3SG each.other.NOM', 'May God never take us from each other!', 'Пусть Бог не лишит нас друг друга!'),
+          il('გაუმარჯოს ჩვენს მეგობრობას!', 'gaumarjos chvens megobrobas!', 'ɡɑumɑrdʒɔs tʃʰvɛns mɛɡɔbrɔbɑs', 'prosper-OPT.3SG our.DAT friendship-DAT', 'To our friendship!', 'За нашу дружбу!'),
+          il('ალავერდი გიორგის!', 'alaverdi giorgis!', 'ɑlɑvɛrdi ɡiɔrɡis', 'alaverdi Giorgi-DAT', 'Alaverdi to Giorgi!', 'Алаверды Гиорги!'),
+        ],
+      },
+      {
+        type: 'callout', kind: 'note', title: 'Notes on the toast', layer: 'notes',
+        text: `- ${ka('ჩემო ძვირფასო მეგობრებო')}: the vocative ending ${ka('-ო')} on every word.
+- ${ka('მინდა დავლიო')}: ‘I want’ is followed by the optative, not an infinitive.
+- ${ka('ნუ')} is the ‘not’ of wishes and prohibitions; ${ka('არ')} is the ordinary ‘not’.
+- ${ka('ალავერდი გიორგის')}: Giorgi now continues the toast in his own words.`,
+      },
+      {
+        type: 'text',
+        text: `## The toast as verse
+The same wishes as four short lines, the way a toast is sometimes rounded off. With **Transliteration** and **Russian** on, a second block shows the romanization and a Russian version.`,
+      },
+      {
+        type: 'verse', title: '{{lang|ka|გაუმარჯოს!}}', lang: 'ka', trLayer: 'en', numbers: 'none',
+        text: 'გაუმარჯოს მშვიდობას,\nგაუმარჯოს სიყვარულს,\nგაუმარჯოს ჩვენს მეგობრობას\nდა ჩვენს მშობლიურ მიწას!',
+        translation: 'Here’s to peace,\nhere’s to love,\nhere’s to our friendship\nand to our native land!',
+      },
+      {
+        type: 'verse', title: 'Transliteration and Russian', layer: 'translit', trLayer: 'ru', numbers: 'none',
+        text: "*gaumarjos mshvidobas,*\n*gaumarjos siq'varuls,*\n*gaumarjos chvens megobrobas*\n*da chvens mshobliur mits'as!*",
+        translation: 'За мир,\nза любовь,\nза нашу дружбу\nи за нашу родную землю!',
+      },
+      seeAlso(['at-the-market', 'the previous text'], ['greetings', 'გაუმარჯოს and other phrases'], ['verbs#Polypersonal agreement', 'how გიდგას marks ‘you’']),
+      NAVBOX,
+    ],
+  };
+  return [hub, tbilisi, market, supra];
+}
+
+// ---------------------------------------------------------------------------------------------
+// Study aids, help and the main page
+
+const EXERCISES = [
+  {
+    title: '1. Transliterate',
+    q: `Write these words in Latin letters with the national system ([[transliteration]]): ${ka('თბილისი')}, ${ka('ხაჭაპური')}, ${ka('წყალი')}, ${ka('ყველი')}, ${ka('მწვრთნელი')}.`,
+    a: `*tbilisi*, *khach'ap'uri*, *ts'q'ali*, *q'veli*, *mts'vrtneli*. Check the apostrophes: every ejective (${ka('ჭ პ წ ყ')}) has one.`,
+  },
+  {
+    title: '2. The ergative',
+    q: `Complete the sentence ${ka('… წერილი დაწერა')} ‘… wrote a letter’ with each subject in the right case: ${ka('კაცი')} ‘man’, ${ka('მეგობარი')} ‘friend’, ${ka('ძმა')} ‘brother’. See [[nouns-and-cases]].`,
+    a: `${ka('კაცმა წერილი დაწერა')}, ${ka('მეგობარმა წერილი დაწერა')}, ${ka('ძმამ წერილი დაწერა')}: the ergative is ${ka('-მა')} after a consonant and ${ka('-მ')} after a vowel; ${ka('მეგობარი')} keeps its full stem in the ergative.`,
+  },
+  {
+    title: '3. Numbers in words',
+    q: 'Write in Georgian: 25, 40, 57, 99. See [[numbers]].',
+    a: `25 ${ka('ოცდახუთი')} *otsdakhuti*; 40 ${ka('ორმოცი')} *ormotsi*; 57 ${ka('ორმოცდაჩვიდმეტი')} *ormotsdachvidmet'i* (2 × 20 + 17); 99 ${ka('ოთხმოცდაცხრამეტი')} *otkhmotsdatskhramet'i* (4 × 20 + 19).`,
+  },
+  {
+    title: '4. Translate into Georgian',
+    q: '“Thank you very much.” “Goodbye.” “How much is it?” “I am learning Georgian.” See [[greetings]].',
+    a: `${ka('დიდი მადლობა.')} ${ka('ნახვამდის.')} ${ka('რა ღირს?')} ${ka('ქართულს ვსწავლობ.')} (*didi madloba. nakhvamdis. ra ghirs? kartuls vsts'avlob.*)`,
+  },
+  {
+    title: '5. At the market',
+    q: 'Read [[at-the-market]]. How much did the kilo of tomatoes cost?',
+    a: `Three lari (${ka('სამი ლარი')}): half a kilo of cheese at twelve lari a kilo costs six lari, the total was nine, so the tomatoes cost 9 − 6 = 3.`,
+  },
+  {
+    title: '6. Morphemes',
+    q: `Split ${ka('ვაკეთებთ')} into its parts and name each part. What does it mean, and how is it different from ${ka('გავაკეთებთ')}? See [[verbs#Building blocks of a verb form]].`,
+    a: `${ka('ვ-ა-კეთ-ებ-თ')}: ${ka('ვ-')} first person subject, ${ka('ა-')} version vowel, ${ka('კეთ')} root ‘do’, ${ka('-ებ')} thematic suffix, ${ka('-თ')} plural: ‘we are doing (it)’. ${ka('გავაკეთებთ')} adds the preverb ${ka('გა-')} and means ‘we will do (it)’.`,
+  },
+  {
+    title: '7. Preverbs',
+    q: `Add the preverb: ‘I am going up’ ${ka('…ვდივარ')}, ‘I am going in’ ${ka('…ვდივარ')}, ‘I am coming’ ${ka('…ვდივარ')}. See [[verbs#Preverbs]].`,
+    a: `${ka('ავდივარ')} *avdivar*, ${ka('შევდივარ')} *shevdivar*, ${ka('მოვდივარ')} *movdivar*.`,
+  },
+];
+
+function studyPages() {
+  const exIntro = {
+    type: 'text',
+    text: `Seven short exercises on the material of this base. Write your answers down first, then compare them with the **answer key**. The answer key is a secret (451) variant of this page: it opens only with a password, which a teacher can share with the class. How it works is explained in [[about#Secret answer key]].`,
+  };
+  const exercises = {
+    slug: 'exercises', title: 'Exercises', cats: ['study-aids'], order: 50,
+    summary: 'Seven exercises on transliteration, cases, numbers, phrases, a dialogue, morphemes and preverbs; the answer key is a password-protected variant.',
+    blocks: [
+      exIntro,
+      ...EXERCISES.map((e) => ({ type: 'text', text: `## ${e.title}\n${e.q}` })),
+      { type: 'callout', kind: 'info', title: 'Answer key', text: 'The answers are in the locked variant of this page. Without the password you see only the questions.' },
+      seeAlso(['study-plan', 'when to do which exercise'], ['vocabulary', 'review the words']),
+      NAVBOX,
+    ],
+    variants: [{
+      password: 'pasukhi451', label: 'Answer key', note: 'Exercises with answers (password pasukhi451; პასუხი = answer)',
+      blocks: [
+        { type: 'callout', kind: 'important', title: 'Answer key', text: `You are reading the answer key (${w('პასუხი', "p'asukhi", 'answer')}). Try each exercise yourself before you open its answer.` },
+        ...EXERCISES.flatMap((e) => [
+          { type: 'text', text: `## ${e.title}\n${e.q}` },
+          { type: 'details', summary: 'Show the answer', text: e.a },
+        ]),
+        seeAlso(['study-plan', 'what to study next']),
+        NAVBOX,
+      ],
+    }],
+  };
+
+  const WEEKS = [
+    ['Week 1', 'The letters', 'alphabet', 'Learn the [[alphabet]]: five vowels and five to ten consonants a day. Copy words by hand.'],
+    ['Week 2', 'The sounds', 'pronunciation', 'Practise the ejectives and the clusters in [[pronunciation]]; read the [[alphabet#The alphabet by sound|alphabet by sound]] aloud.'],
+    ['Week 3', 'First phrases', 'greetings', 'Learn the [[greetings]] and the [[numbers]] from 1 to 20. Start the [[vocabulary]] cards.'],
+    ['Week 4', 'Nouns', 'nouns-and-cases', `Nominative, dative and genitive in [[nouns-and-cases]]; the postpositions ${ka('-ში')} and ${ka('-ზე')} in [[postpositions]].`],
+    ['Week 5', 'The present tense', 'verbs', 'Person markers in [[pronouns]] and the present in [[verbs]]. Read [[in-tbilisi]].'],
+    ['Week 6', 'Shopping', 'at-the-market', 'Numbers up to 100 and the dialogue [[at-the-market]].'],
+    ['Week 7', 'Past and future', 'verbs', 'Preverbs, the future and the aorist with the ergative (switch [[verbs]] to *In depth*).'],
+    ['Week 8', 'Review', 'exercises', 'Read [[supra-toast]], do the [[exercises]] and look up any term in [[grammar-terms]].'],
+  ];
+  const plan = {
+    slug: 'study-plan', title: 'Study plan', cats: ['study-aids'], order: 51,
+    summary: 'An eight-week plan from the first letters to reading short texts, with a checklist.',
+    blocks: [
+      {
+        type: 'text',
+        text: 'An eight-week plan for a beginner with about half an hour a day. Each step links to the pages of this base; adapt the pace to yourself. Learning with a teacher or a language partner in Georgia? Use the [[parallel-texts]] as conversation starters.',
+      },
+      { type: 'timeline', title: 'Eight weeks', style: 'line', items: WEEKS.map(([date, title, link, text]) => ({ date, title, link, text })) },
+      {
+        type: 'text',
+        text: `## Checklist
+- [ ] I can read all 33 letters aloud.
+- [ ] I can hear the difference between ${ka('ქარი')} and ${ka('კარი')}.
+- [ ] I can greet, thank and say goodbye.
+- [ ] I can count to 100 in twenties.
+- [ ] I know the seven cases of ${ka('კაცი')}.
+- [ ] I can say what I am doing now and what I will do tomorrow.
+- [ ] I can read [[at-the-market]] with the English layer switched off.`,
+      },
+      seeAlso(['exercises'], ['about', 'how to use the layers']),
+      NAVBOX,
+    ],
+  };
+
+  const about = {
+    slug: 'about', title: 'About this base', cats: ['help'], order: 60,
+    summary: 'How this Georgian study base works: layers, page versions, the secret answer key, conventions and sources.',
+    blocks: [
+      {
+        type: 'text',
+        text: `This is a study base for the Georgian language, written in English. It covers the [[script]], the sounds, the core [[grammar]], everyday [[vocabulary]] and three short [[parallel-texts|parallel texts]]. The example sentences and texts were written for this base; if you are not sure about a form, ask a teacher or a native speaker.
+
+## Layers
+Most pages carry **layers**, extra information you can switch on and off in the *Show* bar under the page title:`,
+      },
+      {
+        type: 'table', caption: 'The layers of this base', head: 'row',
+        rows: [
+          ['Layer', 'Shows', 'Default'],
+          ['Transliteration', 'Latin letters (national system of 2002) for every Georgian word; ruby text on [[greetings]]', 'on'],
+          ['IPA', 'phonetic transcription in square brackets', 'on'],
+          ['Gloss', 'a morpheme-by-morpheme gloss under each line of a text', 'on'],
+          ['English', 'translations and the meanings on vocabulary cards', 'on'],
+          ['Russian', 'Russian translations of the texts', 'off'],
+          ['Notes', 'remarks on grammar and culture', 'on'],
+        ],
+      },
+      {
+        type: 'text',
+        text: `## Page versions
+Some pages exist in two versions; the *Version* bar switches between them. [[verbs]] has *Overview* and *In depth*, [[nouns-and-cases]] has *Essentials* and *Full tables*. (For the grammatical term, see [[version-disambiguation]].)
+
+## Secret answer key
+The [[exercises]] page has a hidden **451 variant** with the answers. Readers without the password see only the questions. To open it, add \`#?451=pasukhi451\` to the address of the page, or choose *Unlock* in the tools menu and enter the password \`pasukhi451\` (${ka('პასუხი')} *p'asukhi* means ‘answer’). A teacher can change the password in the editor before publishing.
+
+## Gloss abbreviations
+The glosses follow the usual conventions of linguistics: a hyphen separates morphemes, a full stop joins several meanings expressed by one form.`,
+      },
+      {
+        type: 'table', caption: 'Abbreviations', head: 'row', compact: true, sortable: true,
+        rows: [
+          ['Abbreviation', 'Meaning'], ['1, 2, 3', 'first, second, third person'], ['SG, PL', 'singular, plural'], ['NOM', 'nominative'], ['ERG', 'ergative'], ['DAT', 'dative'],
+          ['GEN', 'genitive'], ['ADV', 'adverbial case'], ['VOC', 'vocative'], ['OBJ', 'object marker'], ['PV', 'preverb'], ['OV', 'objective version'],
+          ['TS', 'thematic suffix'], ['AOR', 'aorist'], ['PERF', 'perfect'], ['OPT', 'optative'], ['POL', 'polite'],
+        ],
+      },
+      {
+        type: 'text',
+        text: `## Sources
+The grammar pages follow standard descriptions of Georgian.{{ref|name=aronson|${CITE.aronson}}}{{ref|name=hewittref|${CITE.hewittRef}}}{{ref|name=hewittlearn|${CITE.hewittLearn}}}{{ref|name=shanidze|${CITE.shanidze}}} The phonetic notes follow the IPA illustration of Standard Georgian.{{ref|name=shosted|${CITE.shosted}}}
+
+## Make it yours
+- Add your own texts: copy a page such as [[in-tbilisi]] and replace the lines of its interlinear block.
+- Record audio and attach it to the interlinear blocks and vocabulary cards.
+- Add a layer for your own first language, for example Ukrainian or German, next to English and Russian.`,
+      },
+      refs,
+      NAVBOX,
+    ],
+  };
+
+  const disambig = {
+    slug: 'version-disambiguation', title: 'Version (disambiguation)', cats: ['help'], order: 61,
+    blocks: [
+      {
+        type: 'disambig', intro: '**Version** may refer to:',
+        items: [
+          { link: 'verbs#Version', label: 'Version (grammar)', desc: `${ka('ქცევა')}, the vowel before a verb root that shows for whom or on what an action is done` },
+          { link: 'about#Page versions', label: 'Page versions', desc: 'the switch between *Overview* and *In depth* on some pages of this base' },
+          { link: 'nouns-and-cases', label: 'Nouns and cases', desc: 'a page with *Essentials* and *Full tables* versions' },
+        ],
+      },
+    ],
+  };
+  return [exercises, plan, about, disambig];
+}
+
+function mainPage() {
+  return {
+    slug: 'main-page', title: 'Learn Georgian', toc: 'off', order: 0,
+    blocks: [
+      {
+        type: 'banner', title: '{{lang|ka|ქართული ენა}} · The Georgian language', media: 'banner', style: 'overlay', link: 'alphabet', button: 'Start with the alphabet',
+        text: 'The script, the sounds, the grammar, everyday phrases and short parallel texts, with transliteration, IPA, glosses and translations you can switch on and off.',
+      },
+      {
+        type: 'text',
+        text: `**Georgian** (${w('ქართული ენა', 'kartuli ena', '', 'kʰɑrtʰuli ɛnɑ')}) is the official language of Georgia and the largest of the Kartvelian languages. It has its own [[script]] of [[alphabet|33 letters]] without capitals, [[pronunciation|sounds]] such as ejectives and long consonant clusters, seven [[nouns-and-cases|cases]] and [[verbs]] that agree with both subject and object.
+
+Explanations here are in English. Every Georgian example has **layers**: use the *Show* bar at the top of a page to switch transliteration, IPA, glosses, English and Russian on and off ([[about#Layers|how it works]]).`,
+      },
+      { type: 'pagelist', title: 'Start here', source: 'links', style: 'cards', summary: true, links: [{ link: 'alphabet' }, { link: 'pronunciation' }, { link: 'greetings' }, { link: 'numbers' }] },
+      {
+        type: 'columns', ratio: '2:1',
+        cols: [
+          {
+            blocks: [
+              { type: 'pagelist', title: 'Featured text', source: 'links', style: 'hero', summary: true, links: [{ link: 'at-the-market' }, { link: 'in-tbilisi' }, { link: 'supra-toast' }] },
+              {
+                type: 'interlinear', title: 'Your first exchange', lang: 'ka', tiers: TIERS, style: 'stacked',
+                items: [
+                  il('— გამარჯობა!', '— gamarjoba!', 'ɡɑmɑrdʒɔbɑ', 'hello', '— Hello!', '— Здравствуйте!'),
+                  il('— გაგიმარჯოს!', '— gagimarjos!', 'ɡɑɡimɑrdʒɔs', 'hello.reply', '— Hello! (the reply)', '— Здравствуйте! (ответ)'),
+                ],
+              },
+            ],
+          },
+          {
+            blocks: [
+              {
+                type: 'callout', kind: 'tip', title: 'Word of the day',
+                text: `${w('გენაცვალე', 'genatsvale', '', 'ɡɛnɑtsʰvɑlɛ')}: an affectionate ‘my dear’, literally ‘may I take your place’. You will hear it from friends, hosts and market sellers. More in [[greetings]].`,
+              },
+              {
+                type: 'callout', kind: 'info', title: 'Grammar in one line',
+                text: 'No articles, no gender, seven cases, and a verb that says who does what to whom: [[grammar]].',
+              },
+              { type: 'pagelist', title: 'Study aids', source: 'category', category: 'study-aids', style: 'list', summary: false },
+            ],
+          },
+        ],
+      },
+      { type: 'pagelist', title: 'Grammar', source: 'category', category: 'grammar', style: 'compact', sort: 'order' },
+      NAVBOX,
+    ],
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
+// The template
+
+const UI_LANGS = ['en', 'ru', 'uk', 'de', 'fr', 'es', 'ka'];
+
+export default {
+  id: 'georgian',
+  icon: 'languages',
+  name: {
+    en: 'Georgian language study', ru: 'Изучение грузинского', uk: 'Вивчення грузинської', de: 'Georgisch lernen',
+    fr: 'Apprendre le géorgien', es: 'Aprender georgiano', ka: 'ქართული ენის შესწავლა',
+  },
+  desc: {
+    en: 'A study base for Georgian: alphabet, grammar, phrases and parallel texts with layers.',
+    ru: 'База для изучения грузинского: алфавит, грамматика, фразы и параллельные тексты со слоями.',
+    uk: 'База для вивчення грузинської: абетка, граматика, фрази й паралельні тексти з шарами.',
+    de: 'Lernbasis für Georgisch: Alphabet, Grammatik, Redewendungen und Paralleltexte mit Ebenen.',
+    fr: 'Base d’étude du géorgien : alphabet, grammaire, expressions et textes parallèles à calques.',
+    es: 'Base de estudio del georgiano: alfabeto, gramática, frases y textos paralelos con capas.',
+    ka: 'ქართული ენის შესასწავლი ბაზა: ანბანი, გრამატიკა, ფრაზები და პარალელური ტექსტები შრეებით.',
+  },
+  spec({ lang = 'en' } = {}) {
+    return {
+      title: 'Learn Georgian',
+      tagline: 'ქართული ენა: script, grammar and parallel texts',
+      lang: 'en',
+      uiLang: UI_LANGS.includes(lang) ? lang : 'en',
+      theme: 'encyclopedia',
+      accent: '#b91c1c',
+      logo: 'logo',
+      home: 'main-page',
+      nav: [
+        { label: 'Script', link: 'script' }, { label: 'Grammar', link: 'grammar' }, { label: 'Vocabulary', link: 'vocabulary' },
+        { label: 'Texts', link: 'parallel-texts' }, { label: 'Exercises', link: 'exercises' }, { label: 'About', link: 'about' },
+      ],
+      footer: 'A study base for Georgian ({{lang|ka|ქართული}}) built with knowledge-processor. The example sentences and texts were written for this base; see [[about]] for the layers, the conventions and the sources.',
+      license: 'Texts and illustrations of this template may be reused and adapted freely.',
+      layers: [
+        { id: 'translit', label: 'Transliteration', on: true },
+        { id: 'ipa', label: 'IPA', on: true },
+        { id: 'gloss', label: 'Gloss', on: true },
+        { id: 'en', label: 'English', on: true },
+        { id: 'ru', label: 'Russian', on: false },
+        { id: 'notes', label: 'Notes', on: true },
+      ],
+      ruby: 'translit',
+      cats: [
+        { slug: 'script-and-sounds', name: 'Script and sounds', desc: 'The Georgian alphabet, its history, its romanization and its pronunciation.' },
+        { slug: 'grammar', name: 'Grammar', desc: 'Nouns and cases, postpositions, pronouns and verbs.' },
+        { slug: 'words-and-phrases', name: 'Words and phrases', desc: 'Vocabulary cards, greetings and numbers.' },
+        { slug: 'texts', name: 'Parallel texts', desc: 'Short Georgian texts with transliteration, IPA, glosses and translations as layers.' },
+        { slug: 'study-aids', name: 'Study aids', desc: 'Exercises with a secret answer key, a study plan and a glossary of grammar terms.' },
+        { slug: 'help', name: 'Help', desc: 'How this base works.' },
+      ],
+      media: MEDIA,
+      pages: [mainPage(), ...scriptPages(), pronunciationPage(), ...grammarPages(), ...wordPages(), ...textPages(), ...studyPages()],
+    };
+  },
+};

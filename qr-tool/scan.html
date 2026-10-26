@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- qr-tool/scan.html — scan page: decode QR codes from images or the camera. A shell, not a document: the page script builds all UI into <main>.
+     Why an empty shell: one render path (JS) for content, i18n and state; static markup would duplicate it and drift.
+     Both pages (index = create, scan) share this head and anchor registry; only the script differs.
+     The build (singlefile.js) strips every comment of this file from the artifacts. -->
+<html lang="en">
+<!-- lang="en" is the static default; ui/i18n.js rewrites it on language switch (screen readers, hyphenation). -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: it must be inside the first 1024 bytes, before any non-ASCII text, or the parser re-decodes.
+     Without the viewport meta mobile browsers lay out at ~980px and no max-width media query in app.css fires. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QR Studio — Scan</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Cpath fill='%23fff' d='M6 6h8v8H6zm2 2v4h4V8zm10-2h8v8h-8zm2 2v4h4V8zM6 18h8v8H6zm2 2v4h4v-4zm10-2h3v3h-3zm5 0h3v3h-3zm-5 5h3v3h-3zm5 2h3v3h-3zM9 9h2v2H9zm12 0h2v2h-2zM9 21h2v2H9z'/%3E%3C/svg%3E">
+<!-- Icon as a data: URI: zero requests, works from file:// and in offline builds. '#' is written %23, otherwise it
+     would start a URL fragment and truncate the SVG. -->
+<!-- Cascade order is a contract (equal specificity: later file wins): ui/base.css tokens and primitives (.ed-*),
+     ui/app.css shell (.ap-*), then ./app.css of this app (.qr-*), which may override the first two. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- Page registry as hidden anchors, read by common.js pageHref(id). Anchors, not JS constants: the build rewrites
+     href attributes when it renames or inlines pages, and it cannot see URLs inside JS strings. -->
+<a id="pg-create" href="index.html" hidden></a>
+<a id="pg-scan" href="scan.html" hidden></a>
+<!-- The single mount point; id="main" is what the page script queries. -->
+<main class="ap-main" id="main"></main>
+<script type="module" src="./scan.js"></script>
+<!-- type=module: deferred by default (runs after parsing, so #main exists), strict mode, ES imports of ../ libraries. -->
+</body>
+</html>

@@ -1,0 +1,1 @@
+import{addDicts}from"./ui/i18n.js";import{PT_EDITOR}from"./portal/strings-editor.js";addDicts(PT_EDITOR);

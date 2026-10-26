@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- batumi-map/streets.html — street list: filter, letter index, gazetteer table, exports. A shell, not a document: the page script builds all UI into <main>.
+     Why an empty shell: one render path (JS) for content, i18n and state; static markup would duplicate it and drift.
+     Both pages (index = map, streets = gazetteer list) share this head and anchor registry; only the script differs.
+     The build (singlefile.js) strips every comment of this file from the artifacts. -->
+<html lang="en">
+<!-- lang="en" is the static default; ui/i18n.js rewrites it on language switch (screen readers, hyphenation). -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: it must be inside the first 1024 bytes, before any non-ASCII text, or the parser re-decodes.
+     Without the viewport meta mobile browsers lay out at ~980px and the 860px breakpoint in app.css never fires. -->
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Batumi Map</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230e7490'/%3E%3Cpath fill='none' stroke='%23fff' stroke-width='2.4' stroke-linejoin='round' d='M12 6 5 9v17l7-3 8 3 7-3V6l-7 3zM12 6v17M20 9v17'/%3E%3C/svg%3E">
+<!-- Icon as a data: URI: zero requests, works from file:// and in offline builds. '#' is written %23, otherwise it
+     would start a URL fragment and truncate the SVG. -->
+<!-- Cascade order is a contract (equal specificity: later file wins): ui/base.css tokens and primitives (.ed-*),
+     ui/app.css shell (.ap-*), then ./app.css of this app (.bm-*), which may override the first two. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap">
+<!-- Page registry as hidden anchors, read by common.js pageHref(id). Anchors, not JS constants: the build rewrites
+     href attributes when it renames or inlines pages, and it cannot see URLs inside JS strings. -->
+<a id="pg-map" href="index.html" hidden></a>
+<a id="pg-streets" href="streets.html" hidden></a>
+<!-- The single mount point; id="main" is what the page script queries. -->
+<main class="ap-main" id="main"></main>
+<script type="module" src="./streets.js"></script>
+<!-- type=module: deferred by default (runs after parsing, so #main exists), strict mode, ES imports of ../ libraries. -->
+</body>
+</html>

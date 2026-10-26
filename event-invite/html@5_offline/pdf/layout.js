@@ -1,0 +1,14 @@
+import{measureText,lineMetrics}from"./font.js";function wrapText(text,fonts,size,width,{charSpacing=0,breakWords=true}={}){const m=(s)=>measureText(s,fonts,size,{charSpacing});const space=m(' ');const out=[];for(const para of String(text??'').split(/\r\n|\r|\n/)){const words=para.split(/[ \t ]+/).filter((w)=>w.length);if(!words.length){out.push({text:'',width:0,end:true});continue;}
+let line='',lw=0;const push=()=>{out.push({text:line,width:lw,end:false});line='';lw=0;};for(let word of words){let ww=m(word);if(line&&lw+space+ww<=width+1e-6){line+=' '+word;lw+=space+ww;continue;}
+if(line)push();if(ww>width+1e-6&&breakWords){while(ww>width+1e-6){const cps=[...word];let k=1;while(k<cps.length&&m(cps.slice(0,k+1).join(''))<=width)k++;for(let j=k-2;j>0;j--)if(cps[j]==='-'||cps[j]==='/'){k=j+1;break;}
+line=cps.slice(0,k).join('');lw=m(line);push();word=cps.slice(k).join('');ww=m(word);if(!word)break;}
+if(!word)continue;}
+line=word;lw=ww;}
+if(line)push();out[out.length-1].end=true;}
+return out;}
+function clipText(text,fonts,size,width,ellipsis='…'){const s=String(text??'');if(measureText(s,fonts,size)<=width)return s;const cps=[...s];let lo=0,hi=cps.length;while(lo<hi){const mid=(lo+hi+1)>>1;if(measureText(cps.slice(0,mid).join('').trimEnd()+ellipsis,fonts,size)<=width)lo=mid;else hi=mid-1;}
+return lo?cps.slice(0,lo).join('').trimEnd()+ellipsis:'';}
+function textBox(page,text,o={}){const fonts=page.doc._fonts(o.font);const size=o.size??12,width=o.width??page.width-(o.x||0);const lm=lineMetrics(fonts,size);const leading=size*(o.lineHeight??1.25);let lines=wrapText(text,fonts,size,width,o);let maxLines=o.maxLines??Infinity;if(o.height>0)maxLines=Math.min(maxLines,Math.max(1,Math.floor((o.height-(lm.ascent-lm.descent))/leading)+1));let overflow=false;if(lines.length>maxLines){overflow=true;lines=lines.slice(0,maxLines);const last=lines[lines.length-1];if(o.ellipsis!==false){last.text=clipText(last.text+'…',fonts,size,width,o.ellipsis||'…');last.width=measureText(last.text,fonts,size);}
+last.end=true;}
+const height=lines.length?lm.ascent-lm.descent+(lines.length-1)*leading:0;let y0=o.y||0;if(o.height>0&&o.valign==='middle')y0+=(o.height-height)/2;else if(o.height>0&&o.valign==='bottom')y0+=o.height-height;const x=o.x||0,align=o.align||'left';const style={font:fonts,size,color:o.color,charSpacing:o.charSpacing,opacity:o.opacity,underline:o.underline};lines.forEach((l,i)=>{const by=y0+lm.ascent+i*leading;if(align==='justify'&&!l.end){const gaps=(l.text.match(/ /g)||[]).length;page.text(l.text,x,by,{...style,wordSpacing:gaps?(width-l.width)/gaps:0});}else{const ax=align==='right'?x+width:align==='center'?x+width/2:x;page.text(l.text,ax,by,{...style,align:align==='justify'?'left':align});}});return{lines:lines.map((l)=>l.text),height,overflow};}
+export{textBox};

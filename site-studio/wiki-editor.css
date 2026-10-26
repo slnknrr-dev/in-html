@@ -1,0 +1,342 @@
+/* site-studio/wiki-editor.css — the knowledge-base editor (wiki.html): full-height shell (header tools, three
+   columns: pages / media / base settings, page editor, live preview; one column at a time with a tab bar on phones),
+   page tree, block cards and forms, markup fields, media library, diagram editor, export and base dialogs.
+   Loaded third, after ui/base.css + ui/app.css.
+
+   CONTRACT
+   - Namespace: every class starts with `kp-`. Shared primitives are `ed-` (ui/base.css), the shell is `ap-`
+     (ui/app.css). This file restyles ap-/ed- only inside the editor (.ap-top tweaks, .ed-label in .kp-f).
+   - Specificity budget: one class (0,1,0); two for state/context (.kp-tr.kp-on, .kp-f .ed-label). Pane switching
+     uses attribute + class (.kp-ed[data-pane="edit"] .kp-ed-center, 0,3,0) so it beats the plain display:none.
+   - Colours via tokens (--ed-*). Exceptions, all deliberate: the 451/secret red (#b91c1c / #991b1b) is a fixed
+     signal colour that must read the same in every theme; template icon swatches use each template's brand
+     colour; diagram editor defaults (--c: #2563eb) are per-item colours the author can override.
+   - !important: one use (.kp-ins:hover), commented in place.
+   - State class: .kp-on (selected / active) everywhere; meaning comes from the compound selector.
+
+   LAYOUT PRIMITIVES
+   - The page never scrolls: body is a 100%-height flex column (overflow hidden) and every column scrolls itself.
+     min-height: 0 on flex/grid children is what lets them shrink below content height so overflow:auto engages
+     (the default min-height:auto = content height would push the page taller instead).
+   - Three-column grid with minmax(0, 1fr) for the editor: 1fr alone is minmax(auto, 1fr) and a long unbreakable
+     line (a URL in a field) would widen the column and squeeze the preview.
+   - Breakpoints: 1180px narrows the side columns, 900px switches to one pane + bottom tab bar (must match the
+     matchMedia('(max-width: 900px)') checks in wiki-main.js), 640px compacts the header.
+   - (pointer: coarse) raises hit targets (tree rows, insert buttons) to ~40px for touch, independent of width. */
+
+body.kp-body { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+/* Thin scrollbars: four independently scrolling panes would otherwise spend ~60px of width on scrollbars (Firefox property; WebKit keeps its own). */
+body.kp-body * { scrollbar-width: thin; }
+/* Header tuned for a dense tool row: nowrap keeps tools on one line on desktop; 640px below re-enables wrapping. */
+.ap-top { min-height: 52px; padding: 6px 12px; flex-wrap: nowrap; gap: 8px; }
+.ap-top .ap-name { font-size: 15px; }
+.kp-tools { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.kp-base-btn { max-width: 260px; min-width: 0; }
+.kp-base-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kp-status { color: var(--ed-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* Raw red: the "lock all 451 content" button shares the secret signal colour (see CONTRACT). */
+.kp-lock-btn { color: #b91c1c; }
+.kp-pv-btn[aria-pressed="true"] { color: var(--ed-accent); background: var(--ed-accent-weak); }
+
+.kp-ed { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* Columns: page list 230-280px (fits titles without wrapping), editor fluid, preview at least 360px (a phone-width reader) and up to 44%. */
+.kp-ed-main { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(230px, 280px) minmax(0, 1fr) minmax(360px, 44%); }
+.kp-ed.kp-no-preview .kp-ed-main { grid-template-columns: minmax(230px, 280px) minmax(0, 1fr); }
+.kp-ed.kp-no-preview .kp-ed-right { display: none; }
+.kp-ed-left { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--ed-border); background: var(--ed-panel); }
+.kp-ed-ltabs { display: flex; gap: 2px; padding: 6px 6px 0; border-bottom: 1px solid var(--ed-border); }
+.kp-ltab { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 7px 4px; border: 0; border-bottom: 2px solid transparent; background: none; color: var(--ed-muted); font-weight: 550; font-size: 12.5px; }
+.kp-ltab.kp-on { color: var(--ed-accent); border-bottom-color: var(--ed-accent); }
+.kp-ltab .ed-ic, .kp-ltab svg { width: 16px; height: 16px; }
+.kp-ed-lpanel { flex: 1; overflow: auto; padding: 10px; }
+.kp-ed-center { min-height: 0; overflow: auto; padding: 16px 22px 80px; background: var(--ed-bg); }
+/* Cap the form width at 860px and centre it: very long input lines are hard to scan on wide screens. */
+.kp-ed-center > * { max-width: 860px; margin-left: auto; margin-right: auto; }
+.kp-ed-right { min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--ed-border); background: var(--ed-stage); }
+/* Bottom tab bar exists in the DOM always; shown only under 900px. */
+.kp-ed-tabs { display: none; }
+.kp-pad { padding: 16px; }
+.kp-panel-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 2px 2px 10px; }
+.kp-panel-h h2 { font-size: 15px; }
+.kp-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.kp-tiny { font-size: 12px; color: var(--ed-muted); gap: 6px; }
+
+@media (max-width: 1180px) { .kp-ed-main { grid-template-columns: minmax(210px, 240px) minmax(0, 1fr) minmax(320px, 40%); } }
+@media (max-width: 900px) {
+  .kp-ed-main, .kp-ed.kp-no-preview .kp-ed-main { grid-template-columns: minmax(0, 1fr); }
+  /* Phones: hide all panes, then show the one named by data-pane (wiki-main.js showPane). */
+  .kp-ed-left, .kp-ed-center, .kp-ed-right { display: none; }
+  .kp-ed[data-pane="pages"] .kp-ed-left, .kp-ed[data-pane="edit"] .kp-ed-center, .kp-ed[data-pane="preview"] .kp-ed-right { display: flex; }
+  .kp-ed[data-pane="edit"] .kp-ed-center { display: block; padding: 12px 12px 90px; }
+  /* KNOWN DEFECT: dead rule. .kp-ed is the root element and never nested in itself, so this selector matches
+     nothing. Harmless: the preceding .kp-ed[data-pane="preview"] .kp-ed-right (0,3,0, later in source than
+     .kp-ed.kp-no-preview .kp-ed-right) already shows the preview pane on phones. Fix: delete it, or write
+     .kp-ed.kp-no-preview[data-pane="preview"] .kp-ed-right if a separate override was intended. */
+  .kp-ed.kp-no-preview .kp-ed[data-pane="preview"] .kp-ed-right { display: flex; }
+  /* env(safe-area-inset-bottom): keeps the tab bar above the iPhone home indicator (needs viewport-fit=cover in wiki.html). */
+  .kp-ed-tabs { display: flex; border-top: 1px solid var(--ed-border); background: var(--ed-panel); padding-bottom: env(safe-area-inset-bottom); }
+  .kp-ptab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 7px 4px 8px; border: 0; background: none; color: var(--ed-muted); font-size: 11.5px; font-weight: 550; }
+  .kp-ptab.kp-on { color: var(--ed-accent); }
+  /* The preview toggle is meaningless when panes are tabs: the Preview tab is the toggle. */
+  .kp-pv-btn { display: none; }
+  .kp-ed-right { border-left: 0; }
+}
+@media (max-width: 640px) {
+  .ap-top { flex-wrap: wrap; }
+  .ap-top .ap-brand { flex: 0 1 auto; }
+  .ap-top .ap-name { display: none; }
+  /* Tools drop to their own full-width row under the brand; the label of Export and the save status hide to fit. */
+  .kp-tools { order: 9; flex: 1 0 100%; }
+  .kp-status { display: none; }
+  .kp-export-btn span:last-child { display: none; }
+  .kp-base-btn { max-width: 52vw; }
+}
+
+/* page tree */
+.kp-pages-act { margin-bottom: 8px; }
+.kp-pages-act .ed-btn { flex: 1; }
+.kp-tree, .kp-tree ul { list-style: none; margin: 8px 0 0; padding: 0; }
+.kp-tree ul { margin: 0; }
+.kp-tr { display: flex; align-items: center; gap: 2px; border-radius: var(--ed-radius-sm); padding-right: 4px; min-height: 30px; }
+.kp-tr:hover { background: var(--ed-hover); }
+.kp-tr.kp-on { background: var(--ed-accent-weak); }
+.kp-tr.kp-on .kp-tl { color: var(--ed-accent); font-weight: 600; }
+.kp-tw { width: 20px; height: 20px; flex: none; display: inline-flex; align-items: center; justify-content: center; border: 0; background: none; color: var(--ed-faint); padding: 0; }
+.kp-tw .ed-ic, .kp-tw svg { width: 14px; height: 14px; }
+/* Tree label: a <button> (keyboard-selectable), min-width:0 lets the ellipsis on .kp-tl-t engage inside the flex row. */
+.kp-tl { flex: 1; min-width: 0; text-align: left; border: 0; background: none; padding: 5px 2px; color: var(--ed-text); font-size: 13px; }
+.kp-tl-t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kp-tl-secret { font-style: italic; color: #b91c1c; }
+.kp-tb { flex: none; display: inline-flex; align-items: center; gap: 2px; padding: 0 4px; height: 18px; border-radius: 4px; font-size: 10.5px; font-weight: 600; color: var(--ed-muted); background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.kp-tb .ed-ic, .kp-tb svg { width: 12px; height: 12px; }
+.kp-tb-s { color: #b91c1c; border-color: color-mix(in srgb, #b91c1c 40%, var(--ed-border)); }
+@media (pointer: coarse) { .kp-tr { min-height: 40px; } .kp-tl { padding: 9px 2px; font-size: 14px; } }
+
+/* page editor */
+.kp-pe-head { margin-bottom: 10px; }
+.kp-pe-tr { flex-wrap: nowrap; }
+/* The page title is an input styled as a heading: borderless until hover/focus, so the page reads like the result while remaining editable in place. */
+.kp-pe-title { flex: 1; min-width: 0; font: 650 24px/1.25 var(--ed-font); border: 1px solid transparent; border-radius: var(--ed-radius-sm); background: transparent; padding: 4px 8px; margin-left: -8px; color: var(--ed-text); }
+.kp-pe-title:hover { border-color: var(--ed-border); }
+.kp-pe-title:focus { outline: none; border-color: var(--ed-accent); background: var(--ed-panel); box-shadow: var(--ed-focus); }
+.kp-pe-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
+.kp-pe-route { font: 12px var(--ed-mono); color: var(--ed-muted); background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: 4px; padding: 1px 6px; }
+.kp-badge { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600; color: var(--ed-muted); background: var(--ed-panel); border: 1px solid var(--ed-border); }
+.kp-badge .ed-ic, .kp-badge svg { width: 13px; height: 13px; }
+.kp-badge-s { color: #fff; background: #991b1b; border-color: #991b1b; }
+.kp-badge-off { color: var(--ed-warn); }
+.kp-secret-hint { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid color-mix(in srgb, #b91c1c 35%, var(--ed-border)); background: color-mix(in srgb, #b91c1c 6%, var(--ed-panel)); border-radius: var(--ed-radius-sm); color: var(--ed-text); }
+.kp-secret-hint .ed-ic { color: #b91c1c; }
+.kp-pset { margin: 10px 0 14px; background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: var(--ed-radius); }
+/* list-style:none removes the disclosure triangle (standard); the ::-webkit-details-marker rule below does the same for Safari. */
+.kp-pset > summary { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; font-weight: 600; list-style: none; }
+.kp-pset > summary::-webkit-details-marker { display: none; }
+.kp-pset-g { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; padding: 4px 14px 14px; }
+.kp-pset-g > .kp-f-wide, .kp-pset-g > .kp-pset-row { grid-column: 1 / -1; }
+.kp-pset-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+@media (max-width: 640px) { .kp-pset-g, .kp-pset-row { grid-template-columns: 1fr; } }
+.kp-f { margin: 4px 0; min-width: 0; }
+.kp-f .ed-label { display: block; margin-bottom: 3px; font-weight: 600; font-size: 12px; color: var(--ed-muted); }
+.kp-f.ed-field-check { display: flex; align-items: center; gap: 8px; }
+.kp-f.ed-field-check .ed-label { margin: 0; }
+.kp-f .ed-hint { margin: 3px 0 0; font-size: 11.5px; }
+.kp-varbar, .kp-verbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 10px 0 8px; }
+.kp-varbar { padding-bottom: 8px; border-bottom: 1px dashed var(--ed-border); }
+.kp-vtab { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 12px; border: 1px solid var(--ed-border); border-radius: 999px; background: var(--ed-panel); color: var(--ed-text); font-weight: 550; }
+.kp-vtab:hover { border-color: var(--ed-border-strong); }
+.kp-vtab.kp-on { background: var(--ed-accent); border-color: var(--ed-accent); color: var(--ed-accent-text); }
+.kp-vtab-s { border-color: color-mix(in srgb, #b91c1c 40%, var(--ed-border)); }
+.kp-vtab-s.kp-on { background: #991b1b; border-color: #991b1b; color: #fff; }
+.kp-vtab .ed-ic, .kp-vtab svg { width: 14px; height: 14px; }
+.kp-vadd { border-style: dashed; border-radius: 999px; }
+.kp-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.kp-chip-x { border: 0; background: none; color: inherit; padding: 0 0 0 4px; font-size: 14px; line-height: 1; }
+.kp-layers-ed .kp-row { margin-bottom: 4px; flex-wrap: nowrap; }
+.kp-layers-ed .ed-input { flex: 1; min-width: 0; }
+.kp-code-id { font: 11px var(--ed-mono); color: var(--ed-muted); }
+.kp-backlinks { margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--ed-border); }
+.kp-backlinks h3 { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 6px; }
+.kp-locked { text-align: center; padding: 40px 16px; background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: var(--ed-radius); margin-top: 14px; }
+.kp-locked .kp-row { justify-content: center; margin-top: 14px; }
+.kp-locked-i { display: inline-grid; place-items: center; width: 56px; height: 56px; border-radius: 50%; background: #991b1b; color: #fff; margin-bottom: 10px; }
+.kp-locked-i .ed-ic, .kp-locked-i svg { width: 26px; height: 26px; }
+.kp-locked h2 { font-size: 17px; margin-bottom: 6px; }
+.kp-locked-note { font-style: italic; color: var(--ed-muted); }
+.kp-progress { width: 100%; height: 8px; }
+
+/* blocks */
+.kp-blocks { display: flex; flex-direction: column; }
+.kp-blocks-nested { padding: 4px; border: 1px dashed var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel-2); }
+.kp-bc { background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: var(--ed-radius); box-shadow: var(--ed-shadow-sm); }
+/* Selected block: accent border plus a soft 2px ring via box-shadow (no layout shift, unlike a thicker border). */
+.kp-bc.kp-sel { border-color: var(--ed-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ed-accent) 25%, transparent), var(--ed-shadow-sm); }
+.kp-bc.kp-off { opacity: .6; }
+.kp-bh { display: flex; align-items: center; gap: 7px; padding: 6px 6px 6px 10px; cursor: pointer; min-height: 40px; border-radius: var(--ed-radius); }
+.kp-bh:hover { background: var(--ed-hover); }
+.kp-bh > .ed-ic { color: var(--ed-accent); }
+.kp-bh-t { font-weight: 600; white-space: nowrap; }
+.kp-bh-s { flex: 1; min-width: 0; color: var(--ed-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kp-bh-a { margin-left: auto; display: flex; gap: 2px; flex: none; }
+.kp-sel .kp-bh { border-bottom: 1px solid var(--ed-border); border-radius: var(--ed-radius) var(--ed-radius) 0 0; }
+.kp-bf { padding: 8px 12px 12px; }
+.kp-bf-compact { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 4px 12px; margin-top: 6px; padding-top: 8px; border-top: 1px dashed var(--ed-border); }
+/* Insert-between buttons are invisible (color: transparent) until the block list is hovered or the button is focused: always present for keyboard users, quiet for mouse users. Coarse pointers (no hover) always show them. */
+.kp-ins { align-self: center; width: 26px; height: 14px; border: 0; background: none; color: transparent; display: flex; align-items: center; justify-content: center; padding: 0; margin: 1px 0; border-radius: 999px; }
+.kp-ins .ed-ic, .kp-ins svg { width: 13px; height: 13px; }
+.kp-blocks:hover > .kp-ins, .kp-ins:focus-visible { color: var(--ed-faint); }
+/* !important: .kp-blocks:hover > .kp-ins (0,3,0) out-weighs .kp-ins:hover (0,2,0) and is always true while hovering the button; without !important the hover colour could never apply. */
+.kp-ins:hover { color: var(--ed-accent) !important; background: var(--ed-accent-weak); }
+@media (pointer: coarse) { .kp-ins { color: var(--ed-faint); height: 22px; } }
+.kp-add-block { align-self: flex-start; margin-top: 10px; border-style: dashed; }
+.kp-list { display: flex; flex-direction: column; gap: 4px; }
+.kp-li { border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel-2); }
+.kp-li-h { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 8px; cursor: pointer; list-style: none; }
+.kp-li-h::-webkit-details-marker { display: none; }
+.kp-li-n { flex: none; display: inline-grid; place-items: center; min-width: 20px; height: 20px; border-radius: 999px; background: var(--ed-border); font-size: 11px; font-weight: 700; }
+.kp-li-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kp-li-a { display: flex; gap: 1px; }
+.kp-li-f { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 2px 10px; padding: 4px 10px 10px; }
+.kp-li-f > .kp-f-wide { grid-column: 1 / -1; }
+.kp-add-item { align-self: flex-start; }
+.kp-tiers { display: flex; flex-direction: column; gap: 2px; }
+.kp-cols-ed { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.kp-col-h { font-size: 11.5px; font-weight: 700; color: var(--ed-muted); margin: 2px 0 4px; text-transform: uppercase; letter-spacing: .04em; }
+.kp-palette { display: flex; flex-direction: column; gap: 14px; }
+.kp-pal-h { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-muted); margin-bottom: 6px; }
+.kp-pal-g { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px; }
+.kp-pal-b { display: flex; align-items: flex-start; gap: 8px; text-align: left; padding: 8px 10px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel); }
+.kp-pal-b:hover { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.kp-pal-b > .ed-ic { color: var(--ed-accent); margin-top: 1px; }
+.kp-pal-b span { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.kp-pal-b small { color: var(--ed-muted); font-size: 11.5px; line-height: 1.3; }
+
+/* fields */
+.kp-mk { position: relative; }
+.kp-mk-tb { display: flex; flex-wrap: wrap; gap: 1px; padding: 2px; border: 1px solid var(--ed-border); border-bottom: 0; border-radius: var(--ed-radius-sm) var(--ed-radius-sm) 0 0; background: var(--ed-panel-2); }
+.kp-mk-tb + .ed-textarea { border-top-left-radius: 0; border-top-right-radius: 0; }
+.kp-mk-b { min-width: 26px; height: 24px; padding: 0 5px; border: 0; border-radius: 4px; background: none; color: var(--ed-muted); font: 12px var(--ed-mono); }
+.kp-mk-b:hover { background: var(--ed-hover); color: var(--ed-text); }
+.kp-markup { width: 100%; min-height: 64px; resize: vertical; line-height: 1.5; font-size: 13px; }
+/* Link autocomplete dropdown: absolute inside the relatively positioned .kp-mk wrapper; z-index 20 lifts it above following block cards. */
+.kp-ac { position: absolute; left: 0; right: 0; z-index: 20; margin: 2px 0 0; padding: 3px; list-style: none; background: var(--ed-panel); border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); box-shadow: var(--ed-shadow); max-height: 240px; overflow: auto; }
+.kp-ac li { display: flex; justify-content: space-between; gap: 10px; padding: 4px 8px; border-radius: 4px; cursor: pointer; }
+.kp-ac li small { color: var(--ed-muted); font-family: var(--ed-mono); }
+.kp-ac li.kp-on, .kp-ac li:hover { background: var(--ed-accent-weak); }
+.kp-num { max-width: 120px; }
+.kp-color { display: inline-flex; align-items: center; gap: 4px; }
+.kp-color-in { width: 40px; height: 30px; padding: 2px; border: 1px solid var(--ed-border-strong); border-radius: var(--ed-radius-sm); background: var(--ed-panel); }
+.kp-color.kp-empty .kp-color-in { opacity: .35; }
+/* Table editor: horizontal scroll inside the card instead of widening the whole editor column. */
+.kp-grid-wrap { overflow-x: auto; }
+.kp-grid-t { border-collapse: collapse; }
+.kp-grid-t td { padding: 1px; }
+.kp-grid-t .ed-input { min-width: 110px; height: 28px; }
+.kp-grid-ctl { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.kp-rows { display: flex; flex-direction: column; gap: 4px; }
+.kp-rowitem { display: grid; grid-template-columns: 1fr 1fr auto; gap: 4px; align-items: start; }
+.kp-rowitem .kp-mk { grid-column: 1 / -2; }
+.kp-row-a { display: flex; }
+
+/* media */
+.kp-drop { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 14px; border: 2px dashed var(--ed-border-strong); border-radius: var(--ed-radius); background: var(--ed-panel-2); color: var(--ed-muted); font-weight: 550; margin-bottom: 10px; }
+.kp-drop:hover, .kp-drop.kp-over { border-color: var(--ed-accent); color: var(--ed-accent); background: var(--ed-accent-weak); }
+.kp-media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.kp-media-pick { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); max-height: 60vh; overflow: auto; }
+.kp-media-it { display: flex; flex-direction: column; gap: 3px; padding: 4px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel); text-align: left; min-width: 0; }
+.kp-media-it:hover { border-color: var(--ed-accent); }
+/* Checkerboard (repeating-conic-gradient, no image) behind thumbnails reveals transparency in PNG/SVG; object-fit: contain never crops. */
+.kp-thumb { width: 100%; aspect-ratio: 4 / 3; object-fit: contain; background: repeating-conic-gradient(var(--ed-panel-2) 0 25%, var(--ed-bg) 0 50%) 0 0 / 14px 14px; border-radius: 4px; display: block; }
+.kp-thumb-i { display: grid; place-items: center; color: var(--ed-muted); }
+.kp-media-n { display: flex; align-items: center; gap: 3px; font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--ed-muted); }
+/* Red icon marks secret media (sealed inside 451 envelopes). */
+.kp-media-n .ed-ic, .kp-media-n svg { width: 12px; height: 12px; color: #b91c1c; }
+.kp-media-edit .kp-media-big { display: grid; place-items: center; background: var(--ed-panel-2); border-radius: var(--ed-radius); padding: 8px; margin-bottom: 8px; }
+.kp-media-big img, .kp-media-big video { max-width: 100%; max-height: 40vh; }
+.kp-mpick { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.kp-mpick-t { width: 48px; height: 36px; flex: none; object-fit: contain; border-radius: 4px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); }
+.kp-mpick-n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ed-muted); font-size: 12px; }
+
+/* base settings */
+.kp-themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 6px; margin-bottom: 8px; }
+.kp-theme { display: flex; flex-direction: column; gap: 4px; align-items: center; padding: 6px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); background: var(--ed-panel); font-size: 11.5px; }
+.kp-theme.kp-on { border-color: var(--ed-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ed-accent) 30%, transparent); }
+.kp-theme-sw { position: relative; width: 100%; height: 38px; border-radius: 4px; border: 2px solid; display: flex; align-items: center; justify-content: center; font: 700 15px Georgia, serif; overflow: hidden; }
+.kp-theme-sw i { position: absolute; left: 0; top: 0; bottom: 0; width: 8px; }
+.kp-feats { display: grid; grid-template-columns: 1fr; gap: 4px; margin-bottom: 8px; }
+
+/* preview */
+.kp-pv-bar { display: flex; align-items: center; gap: 4px; padding: 6px 8px; background: var(--ed-panel); border-bottom: 1px solid var(--ed-border); }
+.kp-pv-addr { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11.5px var(--ed-mono); color: var(--ed-muted); padding: 5px 8px; background: var(--ed-panel-2); border: 1px solid var(--ed-border); border-radius: 999px; }
+.kp-pv-mode { width: auto; height: 28px; font-size: 12px; }
+.kp-pv-dev .ed-seg-btn { padding: 0 6px; }
+.kp-pv-stage { flex: 1; min-height: 0; position: relative; overflow: hidden; display: flex; justify-content: center; }
+/* White frame background: the preview document paints its own theme; white matches the reader's default light canvas while the srcdoc loads. transform-origin top left: device-size emulation scales the frame from its corner. */
+.kp-pv-frame { border: 0; width: 100%; height: 100%; background: #fff; transform-origin: top left; }
+.kp-pv-dev-on { padding: 0; }
+.kp-pv-dev-on .kp-pv-frame { box-shadow: var(--ed-shadow); }
+@media (max-width: 640px) { .kp-pv-mode, .kp-pv-dev { display: none; } }
+
+/* diagram editor */
+.kp-dg-dlg { width: min(1180px, 96vw); max-width: none; }
+.kp-dg-dlg .ed-dlg-body { max-height: calc(100vh - 160px); overflow: auto; }
+.kp-dg-tools { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-bottom: 8px; }
+.kp-dg-help { margin: 0 0 0 6px; }
+.kp-dg-main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; align-items: start; }
+@media (max-width: 860px) { .kp-dg-main { grid-template-columns: 1fr; } }
+.kp-dg-wrap { padding: 18px 40px; background: var(--ed-stage); border-radius: var(--ed-radius); }
+/* touch-action:none: the diagram editor handles pointer drags itself; without it the browser would scroll or zoom the page on touch. user-select:none stops text selection during drags. */
+.kp-dg-stage { position: relative; width: 100%; touch-action: none; user-select: none; -webkit-user-select: none; }
+/* object-fit: fill, not contain: the stage already has the picture's aspect ratio, and region coordinates are percentages of the stage, so the image must cover it exactly or regions would drift. */
+.kp-dg-img, .kp-dg-bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; border-radius: 6px; pointer-events: none; }
+.kp-dg-bg { background: #f1f5f9; border: 1px solid var(--ed-border); }
+.kp-dg-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.kp-dg-it { --c: #2563eb; cursor: move; }
+/* vector-effect: non-scaling-stroke keeps strokes 2px at any zoom: the SVG uses a 0..100 viewBox stretched to the stage. */
+.kp-dg-it rect:not(.kp-dg-handle), .kp-dg-it circle, .kp-dg-it polygon { fill: color-mix(in srgb, var(--c) 18%, transparent); stroke: var(--c); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.kp-dg-it .kp-dg-dot { fill: var(--c); stroke: #fff; }
+.kp-dg-it.kp-on rect:not(.kp-dg-handle), .kp-dg-it.kp-on circle, .kp-dg-it.kp-on polygon { stroke-width: 3; fill: color-mix(in srgb, var(--c) 32%, transparent); stroke-dasharray: 6 3; }
+.kp-dg-lead { stroke: var(--c); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.kp-dg-handle { fill: #fff; stroke: var(--c); stroke-width: 1.5; vector-effect: non-scaling-stroke; cursor: nwse-resize; }
+.kp-dg-draft { fill: none; stroke: #dc2626; stroke-width: 2; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.kp-dg-edge { stroke: #64748b; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+/* Labels are HTML positioned by percent and centred on their anchor with translate(-50%, -50%), mirroring the reader's rendering. */
+.kp-dg-lbl { --c: #2563eb; position: absolute; transform: translate(-50%, -50%); display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px 2px 3px; border-radius: 999px; background: #fff; color: #111; border: 1.5px solid var(--c); font-size: 12px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; cursor: grab; box-shadow: 0 1px 4px rgba(0,0,0,.2); }
+.kp-dg-lbl.kp-on { background: var(--c); color: #fff; }
+.kp-dg-lbl.kp-node { border-radius: 6px; padding: 4px 10px; font-weight: 600; }
+.kp-dg-n { display: inline-grid; place-items: center; min-width: 18px; height: 18px; border-radius: 999px; background: var(--c); color: #fff; font-size: 10.5px; font-weight: 700; }
+.kp-dg-lbl.kp-on .kp-dg-n { background: #fff; color: var(--c); }
+.kp-dg-side { display: flex; flex-direction: column; gap: 8px; }
+.kp-dg-sec { border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); padding: 6px 8px; }
+.kp-dg-sec summary { cursor: pointer; font-weight: 600; }
+.kp-dg-list { margin: 0; padding-left: 24px; max-height: 180px; overflow: auto; }
+.kp-dg-list button { border: 0; background: none; padding: 2px 0; text-align: left; color: var(--ed-text); }
+.kp-dg-list li.kp-on button { color: var(--ed-accent); font-weight: 600; }
+.kp-dg-props h3 { font-size: 13px; margin-bottom: 4px; }
+.kp-dg-edge-row { display: grid; grid-template-columns: 1fr auto 1fr; gap: 4px; align-items: center; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px dashed var(--ed-border); }
+.kp-dg-edge-row > :nth-child(n+4) { grid-column: span 1; }
+
+/* dialogs: export, bases, templates */
+.kp-ex-dlg { width: min(1000px, 96vw); max-width: none; }
+.kp-ex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.kp-ex-card { border: 1px solid var(--ed-border); border-radius: var(--ed-radius); padding: 12px; background: var(--ed-panel-2); display: flex; flex-direction: column; gap: 6px; }
+/* margin-top:auto pushes each card's action to the bottom, so buttons align across cards of different text length. */
+.kp-ex-card > .ed-btn, .kp-ex-card > .kp-row { margin-top: auto; align-self: flex-start; }
+.kp-ex-h { display: flex; align-items: center; gap: 6px; }
+.kp-ex-h h3 { font-size: 14px; }
+.kp-ex-h .ed-ic { color: var(--ed-accent); }
+.kp-ex-card .ed-hint { margin: 0; }
+.kp-bases-dlg { display: flex; flex-direction: column; gap: 16px; }
+.kp-bases-dlg h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--ed-muted); margin-bottom: 6px; }
+.kp-bases { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.kp-bases li { display: flex; align-items: center; gap: 6px; border: 1px solid var(--ed-border); border-radius: var(--ed-radius-sm); padding: 2px 6px 2px 2px; background: var(--ed-panel); }
+.kp-bases li.kp-on { border-color: var(--ed-accent); }
+.kp-base-open { flex: 1; min-width: 0; display: flex; flex-direction: column; text-align: left; border: 0; background: none; padding: 6px 8px; color: var(--ed-text); }
+.kp-base-open small { color: var(--ed-muted); }
+.kp-tpl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+.kp-tpl { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px; text-align: left; border: 1px solid var(--ed-border); border-radius: var(--ed-radius); background: var(--ed-panel); }
+.kp-tpl:hover { border-color: var(--ed-accent); background: var(--ed-accent-weak); }
+.kp-tpl small { color: var(--ed-muted); font-size: 11.5px; line-height: 1.35; }
+/* Template badge colours: brand colours of each template (not tokens), kept identical in light and dark for recognisability. */
+.kp-tpl-i { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 9px; color: #fff; background: #3366cc; }
+.kp-tpl-fandom { background: #b45309; } .kp-tpl-news { background: #be123c; } .kp-tpl-songs { background: #7c3aed; } .kp-tpl-gaudiya { background: #c2410c; }
+.kp-tpl-japanese { background: #be123c; } .kp-tpl-georgian { background: #b91c1c; } .kp-tpl-blank { background: #64748b; }

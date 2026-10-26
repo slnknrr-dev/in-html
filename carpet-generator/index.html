@@ -1,0 +1,42 @@
+<!doctype html>
+<!-- carpet-generator/index.html - Carpet Generator page. A shell, not a document: main.js builds the whole UI into
+     <main> (side tabs, stage, outputs). One render path for content, i18n and state; static markup would duplicate
+     it and drift. Cost accepted: nothing but the noscript notice without JS. The build (singlefile.js) inlines the
+     stylesheets and modules and strips these comments from the html@5 artifacts. -->
+<html lang="en">
+<!-- lang="en" is the static default; ui/i18n.js rewrites it on a language switch (screen readers, hyphenation). -->
+<head>
+<meta charset="utf-8">
+<!-- charset first: it must sit in the first 1024 bytes, before any non-ASCII byte, or the parser re-decodes. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- viewport-fit=cover: the page may draw under phone notches; without the viewport meta at all, mobile browsers lay
+     out at about 980px and no @media (max-width) rule of app.css would ever fire. -->
+<meta name="color-scheme" content="light dark">
+<!-- color-scheme: native controls (scrollbars, the colour and select inputs of the palette tab) follow the theme. -->
+<meta name="theme-color" content="#7e1d1f">
+<!-- theme-color: madder red browser chrome on mobile, the brand dye (same as the favicon field). -->
+<title>Carpet Generator</title>
+<meta name="description" content="Rug and carpet designs on a knot grid: Persian medallions, Anatolian and Caucasian geometry, Turkmen guls, Nordic rya and modern abstracts; symmetry and wallpaper groups, borders with guard stripes, natural dye palettes, seeded designs with share codes, knotting charts, cross-stitch versions, yarn estimates, a motif editor and a realistic pile preview with fringe.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='5' y='3' width='22' height='26' rx='2' fill='%237e1d1f'/%3E%3Crect x='8' y='6' width='16' height='20' fill='none' stroke='%23efe5cf' stroke-width='1.6'/%3E%3Cpath d='M16 9l5 7-5 7-5-7z' fill='%231e2b4d' stroke='%23d9b34a' stroke-width='1.4'/%3E%3Cpath d='M5 3V1M9 3V1M13 3V1M17 3V1M21 3V1M25 3V1M5 31v-2M9 31v-2M13 31v-2M17 31v-2M21 31v-2M25 31v-2' stroke='%23c9bea4' stroke-width='1.2'/%3E%3C/svg%3E">
+<!-- Favicon as an inline SVG data: URI: zero requests, works from file:// and offline builds. URL-encoded, not base64
+     (shorter for SVG); the hash sign must be written %23, or it would start a fragment and cut the URI short.
+     Drawn as a rug: madder field, cream inner border, indigo medallion with a gold outline, fringe strokes. -->
+<!-- Cascade order is a contract: equal specificity, later file wins. base.css (tokens, .ed-*), app.css shell (.ap-*),
+     then ./app.css (.cg-*), which may override the first two without !important. Reordering breaks it silently. -->
+<link rel="stylesheet" href="../ui/base.css">
+<link rel="stylesheet" href="../ui/app.css">
+<link rel="stylesheet" href="./app.css">
+</head>
+<body class="ap cg">
+<!-- .ap: shell hook of ui/app.css; .cg: this app's theme root (app.css overrides the tokens on body.cg). -->
+<!-- id="main": the mount point main.js looks up. .ap-wide (ui/app.css: .ap-main.ap-wide, max-width: none) lifts the
+     shell's max-width: the three-column workspace needs the full screen. -->
+<main class="ap-main ap-wide" id="main"></main>
+<!-- noscript: .ed-noscript (ui/base.css) is a fixed full-screen overlay on top of everything; the text also states the
+     privacy fact (runs locally, nothing sent). -->
+<!-- type="module": deferred by default (runs after parsing, so #main exists), strict mode, and ES imports without a
+     bundler during development. -->
+<noscript><div class="ed-noscript">Carpet Generator needs JavaScript. It runs in your browser; nothing is sent anywhere.</div></noscript>
+<script type="module" src="./main.js"></script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+function distance(a,b,max,swaps){const s=Array.from(String(a)),t=Array.from(String(b));if(Math.abs(s.length-t.length)>max)return max+1;if(!s.length||!t.length)return Math.max(s.length,t.length)>max?max+1:Math.max(s.length,t.length);let prev2=new Array(t.length+1).fill(0),prev=Array.from({length:t.length+1},(_,j)=>j),cur=new Array(t.length+1);for(let i=1;i<=s.length;i++){cur[0]=i;let rowMin=i;for(let j=1;j<=t.length;j++){const cost=s[i-1]===t[j-1]?0:1;let d=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+cost);if(swaps&&i>1&&j>1&&s[i-1]===t[j-2]&&s[i-2]===t[j-1])d=Math.min(d,prev2[j-2]+1);cur[j]=d;if(d<rowMin)rowMin=d;}
+if(rowMin>max)return max+1;[prev2,prev,cur]=[prev,cur,prev2];}
+return prev[t.length]>max?max+1:prev[t.length];}
+const damerau=(a,b,max=Infinity)=>distance(a,b,max,true);function similarity(a,b){const n=Math.max(Array.from(String(a)).length,Array.from(String(b)).length);return n?1-damerau(a,b)/n:1;}
+export{similarity};

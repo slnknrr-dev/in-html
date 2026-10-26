@@ -1,0 +1,3 @@
+import{RADIX,radixEncode,radixDecode}from"../codec/radix.js";import{sha256}from"./sha2.js";import{equalBytes}from"./encoding.js";const checksum=(payload)=>sha256(sha256(payload)).subarray(0,4);function base58checkEncode(payload,alphabet=RADIX.base58){const out=new Uint8Array(payload.length+4);out.set(payload);out.set(checksum(payload),payload.length);return radixEncode(out,alphabet);}
+function base58checkDecode(text,alphabet=RADIX.base58){const all=radixDecode(text,alphabet);if(all.length<4)throw new Error('too short for a checksum');const payload=all.subarray(0,all.length-4);if(!equalBytes(checksum(payload),all.subarray(all.length-4)))throw new Error('checksum mismatch');return payload.slice();}
+export{base58checkDecode,base58checkEncode};

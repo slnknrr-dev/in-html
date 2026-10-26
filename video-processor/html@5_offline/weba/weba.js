@@ -1,0 +1,5 @@
+import"../webm/demux.js";import{WebmMuxer}from"../webm/mux.js";import{opusPacketSamples}from"../ogg/opus.js";const asBytes=(b)=>(b instanceof Uint8Array?b:ArrayBuffer.isView(b)?new Uint8Array(b.buffer,b.byteOffset,b.byteLength):new Uint8Array(b));function packetOf(pk){if(pk instanceof Uint8Array||ArrayBuffer.isView(pk)||pk instanceof ArrayBuffer)return{data:asBytes(pk)};if(typeof pk.copyTo==='function'&&!pk.data){const d=new Uint8Array(pk.byteLength);pk.copyTo(d);return{data:d,timestamp:pk.timestamp,duration:pk.duration};}
+return{data:asBytes(pk.data),timestamp:pk.timestamp,duration:pk.duration};}
+function muxOpus(packets,opts={}){const mux=new WebmMuxer({audio:{codec:'opus',sampleRate:opts.sampleRate||48000,channels:opts.channels||2,preSkip:opts.preSkip??312,codecPrivate:opts.head||null},title:opts.title||'',});let t=0;for(const raw of packets){const pk=packetOf(raw);const samples=opusPacketSamples(pk.data);const ts=pk.timestamp!=null?pk.timestamp:Math.round((t*1e6)/48000);mux.addAudioChunk({data:pk.data,timestamp:ts,duration:pk.duration??Math.round((samples*1e6)/48000),type:'key'});t+=samples;}
+return mux.finalize();}
+export{muxOpus};

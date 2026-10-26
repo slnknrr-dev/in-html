@@ -1,0 +1,124 @@
+// site-studio/i18n-wiki.js - editor strings of the knowledge base blocks in the site editor (7 languages): the names,
+// descriptions, field and option labels of the knowledge base editor's dictionaries (wiki-strings-<lang>.js) under the
+// site editor's keys (b.wk-<type>, bd.wk-<type>, wf.<field>, wo.<option>), plus the strings of versions, layer
+// toggles, 451 sections and Site → Knowledge base.
+//
+// Contract: addDicts({ <lang>: { key: text } }) merges into ED_I18N with Object.assign, so a dictionary imported later
+// overrides keys of earlier ones (the import order in editor.js is the precedence order). t(key) resolves UI language,
+// then its primary subtag, then English, then humanize(key) (recorded in window.__edMissingKeys): English is the
+// completeness reference, other languages may be partial. {name} placeholders are filled by t(key, vars).
+// Data file: keys are grouped by the prefix before the first dot (the UI area or registry family they label); there
+// is no logic here, so comments only mark groups.
+import { addDicts } from '../ui/i18n.js';
+import en from './wiki-strings-en.js';
+import ru from './wiki-strings-ru.js';
+import uk from './wiki-strings-uk.js';
+import de from './wiki-strings-de.js';
+import fr from './wiki-strings-fr.js';
+import es from './wiki-strings-es.js';
+import ka from './wiki-strings-ka.js';
+
+const OWN = {
+  en: {
+    'c.wiki': 'Knowledge base', 'c.language': 'Language study',
+    'b.wk-versions': 'Versions', 'bd.wk-versions': 'Several versions of the same content (“full”, “simple”…); readers switch them with buttons.',
+    'b.wk-layers': 'Layer toggles', 'bd.wk-layers': 'Buttons that show and hide the site’s layers: translations, transcription, furigana.',
+    'b.wk-secret': 'Protected section (451)', 'bd.wk-secret': 'Blocks encrypted with a password: the published page carries only the ciphertext.',
+    'wf.layer': 'Layer', 'wfh.layer': 'Shown only while this layer is on (Site → Knowledge base).', 'wfh.markup': 'Wiki markup: [[Page]], [[page#section|text]], {{ref|note}}, \'\'italic\'\', **bold**, {{layer|id|text}}, {漢字|かんじ}.',
+    'wfh.link': '[[Page title]], a page address or https://…', 'wfh.grid': 'One row per line, cells separated by |.', 'wfh.layers': 'Layer ids separated by commas.', 'wfh.tiers': 'One line per layer: id: text.',
+    'wf.versions': 'Versions', 'wfh.versions': 'One name per line; each name gets its own list of blocks.', 'wf.secretLabel': 'Title', 'wf.password': 'Password',
+    'wfh.password': 'Kept in the project; exports carry only the encrypted content (and leave out the editable source).', 'wf.hint': 'Hint for readers',
+    'ds.wiki': 'Knowledge base', 'kb.intro': 'Layers are toggles readers switch on and off: translations, transcription, glosses. Mark blocks with a layer, or inline text with {{layer|id|…}}.',
+    'kb.layers': 'Layers', 'kb.id': 'Id', 'kb.label': 'Name', 'kb.on': 'On at first', 'kb.add': 'Add a layer', 'kb.ruby': 'Ruby / furigana layer', 'kb.none': 'Always shown',
+    'kb.secretOut': 'Protected sections are encrypted; the editable source is not embedded in this export.',
+  },
+  ru: {
+    'c.wiki': 'База знаний', 'c.language': 'Изучение языков',
+    'b.wk-versions': 'Версии', 'bd.wk-versions': 'Несколько версий одного содержимого («подробно», «просто»…); читатель переключает их кнопками.',
+    'b.wk-layers': 'Переключатели слоёв', 'bd.wk-layers': 'Кнопки, которые показывают и прячут слои сайта: переводы, транскрипцию, фуригану.',
+    'b.wk-secret': 'Закрытый раздел (451)', 'bd.wk-secret': 'Блоки, зашифрованные паролем: в опубликованной странице — только шифротекст.',
+    'wf.layer': 'Слой', 'wfh.layer': 'Показывается, только пока включён этот слой (Сайт → База знаний).', 'wfh.markup': 'Вики-разметка: [[Страница]], [[страница#раздел|текст]], {{ref|сноска}}, \'\'курсив\'\', **жирный**, {{layer|id|текст}}, {漢字|かんじ}.',
+    'wfh.link': '[[Название страницы]], адрес страницы или https://…', 'wfh.grid': 'Строка таблицы на строке, ячейки через |.', 'wfh.layers': 'Коды слоёв через запятую.', 'wfh.tiers': 'По строке на слой: код: текст.',
+    'wf.versions': 'Версии', 'wfh.versions': 'По названию в строке; у каждого свой список блоков.', 'wf.secretLabel': 'Заголовок', 'wf.password': 'Пароль',
+    'wfh.password': 'Хранится в проекте; в экспорт попадает только зашифрованное содержимое (и без редактируемого исходника).', 'wf.hint': 'Подсказка читателям',
+    'ds.wiki': 'База знаний', 'kb.intro': 'Слои — переключатели, которые читатели включают и выключают: переводы, транскрипция, глоссы. Отметьте блоки слоем или текст разметкой {{layer|id|…}}.',
+    'kb.layers': 'Слои', 'kb.id': 'Код', 'kb.label': 'Название', 'kb.on': 'Включён сразу', 'kb.add': 'Добавить слой', 'kb.ruby': 'Слой фуриганы (ruby)', 'kb.none': 'Всегда виден',
+    'kb.secretOut': 'Закрытые разделы зашифрованы; редактируемый исходник в этот экспорт не встраивается.',
+  },
+  uk: {
+    'c.wiki': 'База знань', 'c.language': 'Вивчення мов',
+    'b.wk-versions': 'Версії', 'bd.wk-versions': 'Кілька версій одного вмісту («докладно», «просто»…); читач перемикає їх кнопками.',
+    'b.wk-layers': 'Перемикачі шарів', 'bd.wk-layers': 'Кнопки, що показують і ховають шари сайту: переклади, транскрипцію, фуриґану.',
+    'b.wk-secret': 'Закритий розділ (451)', 'bd.wk-secret': 'Блоки, зашифровані паролем: в опублікованій сторінці — лише шифротекст.',
+    'wf.layer': 'Шар', 'wfh.layer': 'Показується, лише поки ввімкнено цей шар (Сайт → База знань).', 'wfh.markup': 'Вікі-розмітка: [[Сторінка]], [[сторінка#розділ|текст]], {{ref|виноска}}, \'\'курсив\'\', **жирний**, {{layer|id|текст}}, {漢字|かんじ}.',
+    'wfh.link': '[[Назва сторінки]], адреса сторінки або https://…', 'wfh.grid': 'Рядок таблиці на рядку, клітинки через |.', 'wfh.layers': 'Коди шарів через кому.', 'wfh.tiers': 'По рядку на шар: код: текст.',
+    'wf.versions': 'Версії', 'wfh.versions': 'По назві в рядку; кожна має свій список блоків.', 'wf.secretLabel': 'Заголовок', 'wf.password': 'Пароль',
+    'wfh.password': 'Зберігається в проєкті; в експорт потрапляє лише зашифрований вміст (і без редагованого вихідного коду).', 'wf.hint': 'Підказка читачам',
+    'ds.wiki': 'База знань', 'kb.intro': 'Шари — перемикачі, які читачі вмикають і вимикають: переклади, транскрипція, глоси. Позначте блоки шаром або текст розміткою {{layer|id|…}}.',
+    'kb.layers': 'Шари', 'kb.id': 'Код', 'kb.label': 'Назва', 'kb.on': 'Увімкнений одразу', 'kb.add': 'Додати шар', 'kb.ruby': 'Шар фуриґани (ruby)', 'kb.none': 'Завжди видно',
+    'kb.secretOut': 'Закриті розділи зашифровано; редагований вихідний код у цей експорт не вбудовується.',
+  },
+  de: {
+    'c.wiki': 'Wissensbasis', 'c.language': 'Sprachenlernen',
+    'b.wk-versions': 'Fassungen', 'bd.wk-versions': 'Mehrere Fassungen desselben Inhalts („ausführlich“, „einfach“…); Leser wechseln per Schaltfläche.',
+    'b.wk-layers': 'Ebenen-Schalter', 'bd.wk-layers': 'Schaltflächen, die Ebenen der Website zeigen und verbergen: Übersetzungen, Umschrift, Furigana.',
+    'b.wk-secret': 'Geschützter Abschnitt (451)', 'bd.wk-secret': 'Mit Passwort verschlüsselte Blöcke: die veröffentlichte Seite enthält nur den Geheimtext.',
+    'wf.layer': 'Ebene', 'wfh.layer': 'Nur sichtbar, solange diese Ebene an ist (Website → Wissensbasis).', 'wfh.markup': 'Wiki-Markup: [[Seite]], [[seite#abschnitt|Text]], {{ref|Fußnote}}, \'\'kursiv\'\', **fett**, {{layer|id|Text}}, {漢字|かんじ}.',
+    'wfh.link': '[[Seitentitel]], eine Seitenadresse oder https://…', 'wfh.grid': 'Eine Tabellenzeile pro Zeile, Zellen durch | getrennt.', 'wfh.layers': 'Ebenen-Kennungen durch Kommas getrennt.', 'wfh.tiers': 'Eine Zeile pro Ebene: id: Text.',
+    'wf.versions': 'Fassungen', 'wfh.versions': 'Ein Name pro Zeile; jeder bekommt eine eigene Blockliste.', 'wf.secretLabel': 'Titel', 'wf.password': 'Passwort',
+    'wfh.password': 'Bleibt im Projekt; Exporte enthalten nur den verschlüsselten Inhalt (ohne bearbeitbare Quelle).', 'wf.hint': 'Hinweis für Leser',
+    'ds.wiki': 'Wissensbasis', 'kb.intro': 'Ebenen sind Schalter für Leser: Übersetzungen, Umschrift, Glossen. Markieren Sie Blöcke mit einer Ebene oder Text mit {{layer|id|…}}.',
+    'kb.layers': 'Ebenen', 'kb.id': 'Kennung', 'kb.label': 'Name', 'kb.on': 'Anfangs an', 'kb.add': 'Ebene hinzufügen', 'kb.ruby': 'Ruby-/Furigana-Ebene', 'kb.none': 'Immer sichtbar',
+    'kb.secretOut': 'Geschützte Abschnitte sind verschlüsselt; die bearbeitbare Quelle wird nicht eingebettet.',
+  },
+  fr: {
+    'c.wiki': 'Base de connaissances', 'c.language': 'Apprentissage des langues',
+    'b.wk-versions': 'Versions', 'bd.wk-versions': 'Plusieurs versions d’un même contenu (« complète », « simple »…) ; les lecteurs passent de l’une à l’autre.',
+    'b.wk-layers': 'Interrupteurs de calques', 'bd.wk-layers': 'Boutons qui affichent et masquent les calques du site : traductions, transcription, furigana.',
+    'b.wk-secret': 'Section protégée (451)', 'bd.wk-secret': 'Blocs chiffrés par mot de passe : la page publiée ne contient que le texte chiffré.',
+    'wf.layer': 'Calque', 'wfh.layer': 'Visible seulement quand ce calque est actif (Site → Base de connaissances).', 'wfh.markup': 'Balisage wiki : [[Page]], [[page#section|texte]], {{ref|note}}, \'\'italique\'\', **gras**, {{layer|id|texte}}, {漢字|かんじ}.',
+    'wfh.link': '[[Titre de page]], une adresse de page ou https://…', 'wfh.grid': 'Une ligne du tableau par ligne, cellules séparées par |.', 'wfh.layers': 'Identifiants de calques séparés par des virgules.', 'wfh.tiers': 'Une ligne par calque : id : texte.',
+    'wf.versions': 'Versions', 'wfh.versions': 'Un nom par ligne ; chacun a sa liste de blocs.', 'wf.secretLabel': 'Titre', 'wf.password': 'Mot de passe',
+    'wfh.password': 'Gardé dans le projet ; les exports ne portent que le contenu chiffré (sans la source modifiable).', 'wf.hint': 'Indice pour les lecteurs',
+    'ds.wiki': 'Base de connaissances', 'kb.intro': 'Les calques sont des interrupteurs pour les lecteurs : traductions, transcription, gloses. Marquez des blocs d’un calque ou du texte avec {{layer|id|…}}.',
+    'kb.layers': 'Calques', 'kb.id': 'Identifiant', 'kb.label': 'Nom', 'kb.on': 'Actif au départ', 'kb.add': 'Ajouter un calque', 'kb.ruby': 'Calque ruby / furigana', 'kb.none': 'Toujours visible',
+    'kb.secretOut': 'Les sections protégées sont chiffrées ; la source modifiable n’est pas intégrée à cet export.',
+  },
+  es: {
+    'c.wiki': 'Base de conocimiento', 'c.language': 'Estudio de idiomas',
+    'b.wk-versions': 'Versiones', 'bd.wk-versions': 'Varias versiones del mismo contenido («completa», «sencilla»…); el lector cambia con botones.',
+    'b.wk-layers': 'Interruptores de capas', 'bd.wk-layers': 'Botones que muestran y ocultan las capas del sitio: traducciones, transcripción, furigana.',
+    'b.wk-secret': 'Sección protegida (451)', 'bd.wk-secret': 'Bloques cifrados con contraseña: la página publicada solo lleva el texto cifrado.',
+    'wf.layer': 'Capa', 'wfh.layer': 'Solo visible mientras esta capa está activa (Sitio → Base de conocimiento).', 'wfh.markup': 'Marcado wiki: [[Página]], [[página#sección|texto]], {{ref|nota}}, \'\'cursiva\'\', **negrita**, {{layer|id|texto}}, {漢字|かんじ}.',
+    'wfh.link': '[[Título de página]], una dirección de página o https://…', 'wfh.grid': 'Una fila de la tabla por línea, celdas separadas por |.', 'wfh.layers': 'Ids de capas separados por comas.', 'wfh.tiers': 'Una línea por capa: id: texto.',
+    'wf.versions': 'Versiones', 'wfh.versions': 'Un nombre por línea; cada uno tiene su lista de bloques.', 'wf.secretLabel': 'Título', 'wf.password': 'Contraseña',
+    'wfh.password': 'Se guarda en el proyecto; las exportaciones solo llevan el contenido cifrado (sin la fuente editable).', 'wf.hint': 'Pista para lectores',
+    'ds.wiki': 'Base de conocimiento', 'kb.intro': 'Las capas son interruptores para los lectores: traducciones, transcripción, glosas. Marque bloques con una capa o texto con {{layer|id|…}}.',
+    'kb.layers': 'Capas', 'kb.id': 'Id', 'kb.label': 'Nombre', 'kb.on': 'Activa al inicio', 'kb.add': 'Añadir una capa', 'kb.ruby': 'Capa ruby / furigana', 'kb.none': 'Siempre visible',
+    'kb.secretOut': 'Las secciones protegidas están cifradas; la fuente editable no se incrusta en esta exportación.',
+  },
+  ka: {
+    'c.wiki': 'ცოდნის ბაზა', 'c.language': 'ენების შესწავლა',
+    'b.wk-versions': 'ვერსიები', 'bd.wk-versions': 'ერთი შიგთავსის რამდენიმე ვერსია („სრული“, „მარტივი“…); მკითხველი ღილაკებით ცვლის.',
+    'b.wk-layers': 'ფენების გადამრთველები', 'bd.wk-layers': 'ღილაკები, რომლებიც აჩენენ და მალავენ საიტის ფენებს: თარგმანებს, ტრანსკრიფციას, ფურიგანას.',
+    'b.wk-secret': 'დაცული განყოფილება (451)', 'bd.wk-secret': 'პაროლით დაშიფრული ბლოკები: გამოქვეყნებულ გვერდზე მხოლოდ დაშიფრული ტექსტია.',
+    'wf.layer': 'ფენა', 'wfh.layer': 'ჩანს მხოლოდ ამ ფენის ჩართვისას (საიტი → ცოდნის ბაზა).', 'wfh.markup': 'ვიკი-მარკაპი: [[გვერდი]], [[გვერდი#განყოფილება|ტექსტი]], {{ref|შენიშვნა}}, \'\'დახრილი\'\', **მუქი**, {{layer|id|ტექსტი}}, {漢字|かんじ}.',
+    'wfh.link': '[[გვერდის სათაური]], გვერდის მისამართი ან https://…', 'wfh.grid': 'ცხრილის სტრიქონი თითო ხაზზე, უჯრები | ნიშნით.', 'wfh.layers': 'ფენების კოდები მძიმით.', 'wfh.tiers': 'თითო ხაზი ფენაზე: კოდი: ტექსტი.',
+    'wf.versions': 'ვერსიები', 'wfh.versions': 'თითო სახელი ხაზზე; თითოეულს თავისი ბლოკების სია აქვს.', 'wf.secretLabel': 'სათაური', 'wf.password': 'პაროლი',
+    'wfh.password': 'ინახება პროექტში; ექსპორტში მხოლოდ დაშიფრული შიგთავსია (რედაქტირებადი წყაროს გარეშე).', 'wf.hint': 'მინიშნება მკითხველებს',
+    'ds.wiki': 'ცოდნის ბაზა', 'kb.intro': 'ფენები მკითხველის გადამრთველებია: თარგმანები, ტრანსკრიფცია, გლოსები. მონიშნეთ ბლოკები ფენით ან ტექსტი {{layer|id|…}}-ით.',
+    'kb.layers': 'ფენები', 'kb.id': 'კოდი', 'kb.label': 'სახელი', 'kb.on': 'თავიდანვე ჩართული', 'kb.add': 'ფენის დამატება', 'kb.ruby': 'ruby / ფურიგანას ფენა', 'kb.none': 'ყოველთვის ჩანს',
+    'kb.secretOut': 'დაცული განყოფილებები დაშიფრულია; რედაქტირებადი წყარო ამ ექსპორტში არ ჩაიდება.',
+  },
+};
+
+const MAP = [[/^b\.(.+)$/, 'b.wk-$1'], [/^bd\.(.+)$/, 'bd.wk-$1'], [/^f\.(.+)$/, 'wf.$1'], [/^o\.(.+)$/, 'wo.$1']];
+function remap(dict) {
+  const out = {};
+  for (const [k, v] of Object.entries(dict)) {
+    for (const [re, to] of MAP) if (re.test(k)) { out[k.replace(re, to)] = v; break; }
+  }
+  return out;
+}
+
+addDicts(Object.fromEntries(Object.entries({ en, ru, uk, de, fr, es, ka }).map(([l, d]) => [l, { ...remap(d), ...OWN[l] }])));

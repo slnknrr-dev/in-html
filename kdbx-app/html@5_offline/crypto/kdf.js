@@ -1,0 +1,4 @@
+import"./encoding.js";import"./hmac.js";function nextTick(){if(typeof MessageChannel!=='function')return new Promise((res)=>setTimeout(res,0));return new Promise((res)=>{const ch=new MessageChannel();ch.port1.onmessage=()=>{ch.port1.close();res();};ch.port2.postMessage(0);});}
+async function runAsync(gen,{onProgress,signal}={}){let last=Date.now();for(;;){const r=gen.next();if(r.done){if(onProgress)onProgress(1);return r.value;}
+if(Date.now()-last>25){if(onProgress)onProgress(r.value);await nextTick();if(signal&&signal.aborted)throw new Error('aborted');last=Date.now();}}}
+export{runAsync,nextTick};

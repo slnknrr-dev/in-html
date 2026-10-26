@@ -1,0 +1,491 @@
+// archive/rar5.js - RAR 5 archives (RAR 5.0 - 7.x; extraction only): listing, extraction and testing.
+//
+//   openRar5(sources, { password, charset, offset }) -> Archive (contract in README.md; offset: SFX hint)
+//   scanRarSignature(src, hint?) -> { offset, version: 5 | 4 | 1.4 } | null   (also finds the archive in the first 8 MiB
+//                                     of an SFX executable or another file it was appended to; a valid header must follow)
+//   dictLabel(bytes) -> '4M', '128K', '1.5G' ...
+//
+// Container: signature, then headers { CRC32, size (vint), type, flags, [extra size], [data size], fields, extra
+// records } followed by their data. Types: 1 main, 2 file, 3 service (CMT comment, QO quick open, RR recovery...), 4
+// archive encryption (every later header is preceded by a 16-byte IV and AES-256-CBC encrypted), 5 end of archive.
+// Files split over volumes continue in the next source; their data is one stream (also one AES-CBC stream). File
+// checksums are CRC32 or BLAKE2sp, turned into HMAC-SHA256 values with the hash key when an encryption record asks.
+
+import { ArchiveError, EMPTY, Reader, bytesStream, concatStreams, fail, fileTime, hashStream, readAll, readAt, sourceStream, unixTime, utf8 } from './io.js';
+import { crc32 } from '../codec/crc32.js';
+import { blake2sp } from '../crypto/blake2.js';
+import { AesCbc } from '../crypto/aes.js';
+import { windowSize } from './rarbits.js';
+import { UNPACK50_FILTER_MAX, Unpack50 } from './unpack50.js';
+import { cbcStream, rar5CheckSum, rar5Keys, rar5MacCrc, rar5MacDigest } from './rarcrypt.js';
+
+const SIG5 = [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x01, 0x00];
+const SIG4 = [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00];
+const SIG14 = [0x52, 0x45, 0x7e, 0x5e];
+const SFX_SCAN = 0x800000;
+
+const match = (b, o, sig) => { for (let i = 0; i < sig.length; i++) if (b[o + i] !== sig[i]) return false; return true; };
+
+// A signature inside an SFX stub counts only when a valid header follows it.
+function plausible(src, off, version) {
+  try {
+    if (version === 5) {
+      const h = src.read(off + 8, 16);
+      if (h.length < 6) return false;
+      const c = new Cursor(h, 4, h.length);
+      const size = c.vint();
+      if (size < 2 || size > 0x200000) return false;
+      const raw = readAt(src, off + 12, c.p - 4 + size);
+      return crc32(raw) === (h[0] | (h[1] << 8) | (h[2] << 16) | (h[3] << 24)) >>> 0;
+    }
+    if (version === 4) {
+      const h = src.read(off + 7, 7);
+      if (h.length < 7 || h[2] !== 0x73) return false;
+      const size = h[5] | (h[6] << 8);
+      if (size < 13) return false;
+      const raw = readAt(src, off + 7, size);
+      const crc = crc32(raw, 2, size) & 0xffff, crc13 = crc32(raw, 2, 13) & 0xffff, want = h[0] | (h[1] << 8);
+      return crc === want || crc13 === want;
+    }
+    const h = src.read(off + 4, 3);
+    return h.length === 3 && (h[0] | (h[1] << 8)) >= 7;
+  } catch { return false; }
+}
+
+export function scanRarSignature(src, hint) {
+  if (hint > 0) { // offset found by the caller's own detection
+    const b = src.read(hint, 8);
+    const v = match(b, 0, SIG5) ? 5 : match(b, 0, SIG4) ? 4 : match(b, 0, SIG14) ? 1.4 : 0;
+    if (v && plausible(src, hint, v)) return { offset: hint, version: v };
+  }
+  const head = src.read(0, 8);
+  if (match(head, 0, SIG5)) return { offset: 0, version: 5 };
+  if (match(head, 0, SIG4)) return { offset: 0, version: 4 };
+  if (match(head, 0, SIG14)) return { offset: 0, version: 1.4 };
+  // SFX executables, but also archives appended to other files (a JPEG + RAR): unrar and 7-Zip find those too.
+  const CH = 0x10000;
+  for (let off = 0; off < Math.min(src.size, SFX_SCAN); off += CH) {
+    const b = src.read(off, CH + 8);
+    for (let i = 0; i < Math.min(CH, b.length); i++) {
+      if (b[i] !== 0x52) continue;
+      const v = match(b, i, SIG5) ? 5 : match(b, i, SIG4) ? 4 : match(b, i, SIG14) ? 1.4 : 0;
+      if (v && off + i > 0 && plausible(src, off + i, v)) return { offset: off + i, version: v };
+    }
+  }
+  return null;
+}
+
+class Cursor {
+  constructor(b, p, end) { this.b = b; this.p = p; this.end = end; }
+  need(n) { if (this.p + n > this.end) fail('corrupt', 'corrupt RAR 5 header'); }
+  u8() { this.need(1); return this.b[this.p++]; }
+  u32() { this.need(4); const b = this.b, p = this.p; this.p += 4; return (b[p] | (b[p + 1] << 8) | (b[p + 2] << 16) | (b[p + 3] << 24)) >>> 0; }
+  u64() { const lo = this.u32(); return lo + this.u32() * 4294967296; }
+  bytes(n) { this.need(n); const r = this.b.slice(this.p, this.p + n); this.p += n; return r; }
+  // RAR 5 vint: little-endian base-128 (LEB128), bit 7 = continuation. Capped at 10 bytes (enough for 64 bits): a
+  // stream of 0x80 bytes would otherwise loop to the end of the header. Accumulated with multiplication so results
+  // above 2^32 stay exact (to 2^53).
+  vint() {
+    let v = 0, mul = 1;
+    for (let i = 0; ; i++) {
+      if (i >= 10) fail('corrupt', 'corrupt RAR 5 header (vint)');
+      const c = this.u8();
+      v += (c & 0x7f) * mul;
+      mul *= 128;
+      if (!(c & 0x80)) return v;
+    }
+  }
+}
+
+
+export function dictLabel(n) {
+  const units = [[2 ** 40, 'T'], [2 ** 30, 'G'], [2 ** 20, 'M'], [2 ** 10, 'K']];
+  for (const [u, s] of units) if (n >= u && n % u === 0) return n / u + s;
+  for (const [u, s] of units) if (n >= u) return Math.round(n / u * 10) / 10 + s;
+  return String(n);
+}
+const dictProp = (n) => dictLabel(n).replace(/([KMGT])$/, ' $1B');
+
+export function openRar5(sources, opts = {}) {
+  if (!Array.isArray(sources)) sources = [sources];
+  const sig = scanRarSignature(sources[0], opts.offset);
+  if (!sig || sig.version !== 5) fail('format', sig ? 'not a RAR 5 archive (RAR 1.5-4.x format)' : 'not a RAR archive');
+  const arc = {
+    format: 'rar5', label: 'RAR 5', entries: [], password: opts.password ?? null,
+    info: { solid: false, encrypted: false, headersEncrypted: false, volumes: 0, methods: [], warnings: [], props: [] },
+  };
+  const internal = new WeakMap(), files = [];
+  let recovery = false, locked = false, v7 = false, maxDict = 0, more = false, comment = null, commentHeader = null;
+
+  // --- headers -----------------------------------------------------------------------------------------------
+  for (let vi = 0; vi < sources.length; vi++) {
+    const src = sources[vi];
+    let pos;
+    if (vi === 0) pos = sig.offset + 8;
+    else {
+      if (!match(src.read(0, 8), 0, SIG5)) { arc.info.warnings.push(`volume ${vi + 1} is not a RAR 5 volume`); break; }
+      pos = 8;
+    }
+    arc.info.volumes = vi + 1;
+    let hcrypt = null; // { key } of encrypted headers in this volume
+    more = false;
+    let ended = false;
+    while (pos < src.size) {
+      const h = readHeader(src, pos, hcrypt);
+      if (h.type === 4) {
+        const c = new Cursor(h.raw, h.body, h.extraStart);
+        if (c.vint() !== 0) fail('unsupported', 'not supported: RAR 5 archive encryption version');
+        const flags = c.vint(), lg2 = c.u8(), salt = c.bytes(16);
+        const check = flags & 1 ? c.bytes(12) : null;
+        if (lg2 > 24) fail('unsupported', 'not supported: RAR 5 key derivation count 2^' + lg2);
+        arc.info.headersEncrypted = arc.info.encrypted = true;
+        if (arc.password == null) fail('password', 'the archive headers are encrypted: a password is needed');
+        const keys = rar5Keys(arc.password, salt, lg2);
+        if (check && eq(rar5CheckSum(check.subarray(0, 8)), check.subarray(8, 12)) && !eq(keys.check, check.subarray(0, 8))) {
+          fail('badPassword', 'wrong password');
+        }
+        hcrypt = { key: keys.key, checked: !!check };
+      } else if (h.type === 1) {
+        const c = new Cursor(h.raw, h.body, h.extraStart);
+        const flags = c.vint();
+        if (flags & 4) arc.info.solid = true;
+        if (flags & 8) recovery = true;
+        if (flags & 0x10) locked = true;
+      } else if (h.type === 2 || h.type === 3) {
+        const f = fileHeader(h, vi);
+        if (h.type === 3) {
+          if (f.name === 'RR') recovery = true;
+          if (f.name === 'CMT' && !commentHeader) commentHeader = f;
+        } else {
+          const prev = files[files.length - 1];
+          if (f.splitBefore && prev && prev.splitAfter && !prev.complete) {
+            prev.parts.push(...f.parts);
+            prev.splitAfter = f.splitAfter;
+            prev.crc = f.crc; prev.hash = f.hash; // the last part carries the checksum of the whole file
+            prev.lastCrypt = f.crypt; // its encryption record says whether that checksum is a MAC (earlier parts: no)
+            if (!f.splitAfter) prev.complete = true;
+          } else {
+            if (f.splitBefore) arc.info.warnings.push('file continued from a missing volume: ' + f.name);
+            f.complete = !f.splitAfter;
+            files.push(f);
+          }
+        }
+      } else if (h.type === 5) {
+        // An end header without its flags field (unrar reads 0 past the end) ends the last volume.
+        const c = new Cursor(h.raw, h.body, h.extraStart);
+        more = c.p < c.end && (c.vint() & 1) !== 0;
+        ended = true;
+        break;
+      }
+      pos = h.next;
+    }
+    if (!ended) arc.info.warnings.push(`volume ${vi + 1}: no end of archive header`);
+    if (!more && ended) break;
+  }
+  if (more) arc.info.warnings.push('the next volume is missing');
+
+  function fileHeader(h, vi) {
+    const c = new Cursor(h.raw, h.body, h.extraStart);
+    const fflags = c.vint(), unp = c.vint(), attr = c.vint();
+    const mtime = fflags & 2 ? c.u32() : null, crc = fflags & 4 ? c.u32() : null;
+    const comp = c.vint(), host = c.vint(), nameLen = c.vint();
+    const name = utf8(c.bytes(nameLen));
+    const f = {
+      name, dir: (fflags & 1) !== 0, size: fflags & 8 ? -1 : unp, attr, host, crc, hash: null,
+      mtime: mtime != null ? unixTime(mtime) : null, ctime: null, atime: null,
+      ver: comp & 0x3f, solid: (comp & 0x40) !== 0, method: (comp >> 7) & 7, dict: 0,
+      splitBefore: (h.flags & 8) !== 0, splitAfter: (h.flags & 0x10) !== 0,
+      parts: h.dataSize > 0 || !(h.flags & 8) ? [{ vi, off: h.dataPos, len: h.dataSize }] : [],
+      crypt: null, link: null, linkType: 0, owner: null, version: 0,
+    };
+    if (!f.dir) {
+      const bits = (comp >> 10) & (f.ver === 0 ? 0x0f : 0x1f);
+      f.dict = 0x20000 * 2 ** bits;
+      if (f.ver === 1) f.dict += f.dict / 32 * ((comp >> 15) & 0x1f);
+    }
+    const e = new Cursor(h.raw, h.extraStart, h.bodyEnd);
+    while (e.p < e.end) {
+      const size = e.vint(), next = e.p + size;
+      if (next > e.end) fail('corrupt', 'corrupt RAR 5 extra record');
+      const r = new Cursor(h.raw, e.p, next), type = r.vint();
+      if (type === 1) {
+        const ver = r.vint(), flags = r.vint(), lg2 = r.u8(), salt = r.bytes(16), iv = r.bytes(16);
+        let check = null;
+        if (flags & 1) {
+          const v = r.bytes(12);
+          if (eq(rar5CheckSum(v.subarray(0, 8)), v.subarray(8, 12))) check = v.subarray(0, 8); // damaged: unused
+        }
+        f.crypt = { ver, lg2, salt, iv, check, mac: (flags & 2) !== 0, hasCheck: (flags & 1) !== 0 };
+      } else if (type === 2) {
+        if (r.vint() === 0) f.hash = r.bytes(32);
+      } else if (type === 3) {
+        const flags = r.vint(), unix = (flags & 1) !== 0;
+        const t = (bit) => (flags & bit ? (unix ? { s: r.u32() } : { w: [r.u32(), r.u32()] }) : null);
+        const m = t(2), cr = t(4), a = t(8);
+        if (unix && flags & 0x10) for (const x of [m, cr, a]) if (x) { const ns = r.u32() & 0x3fffffff; if (ns < 1e9) x.s += ns / 1e9; }
+        const conv = (x) => (!x ? null : x.s != null ? unixTime(x.s) : fileTime(x.w[0], x.w[1]));
+        if (m) f.mtime = conv(m);
+        if (cr) f.ctime = conv(cr);
+        if (a) f.atime = conv(a);
+      } else if (type === 4) {
+        r.vint();
+        f.version = r.vint();
+      } else if (type === 5) {
+        f.linkType = r.vint();
+        r.vint();
+        f.link = utf8(r.bytes(r.vint()));
+      } else if (type === 6) {
+        const flags = r.vint(), o = {};
+        if (flags & 1) o.user = utf8(r.bytes(r.vint()));
+        if (flags & 2) o.group = utf8(r.bytes(r.vint()));
+        if (flags & 4) o.uid = r.vint();
+        if (flags & 8) o.gid = r.vint();
+        f.owner = o;
+      }
+      e.p = next;
+    }
+    return f;
+  }
+
+  // --- entries ---------------------------------------------------------------------------------------------
+  const methods = new Set();
+  let prevCompressed = -1, groupStart = -1;
+  for (const f of files) {
+    const index = arc.entries.length;
+    // Older versions of a file (rar -ver) are extracted as name;N, as WinRAR and libarchive do.
+    const path = f.name.replace(/^\/+/, '').replace(/\/+$/, '') + (f.version && !f.dir ? ';' + f.version : '');
+    // Symlinks to directories and NTFS junctions carry the directory flag too: they are links, not directories.
+    if (f.linkType >= 1 && f.linkType <= 3) f.dir = false;
+    const kind = f.dir ? 'dir' : f.linkType >= 1 && f.linkType <= 3 ? 'symlink' : f.linkType === 4 ? 'hardlink' : 'file';
+    const packed = f.parts.reduce((n, p) => n + p.len, 0);
+    let method;
+    if (f.dir) method = undefined;
+    else if (f.method === 0) method = 'Store';
+    else method = `RAR ${f.ver === 1 ? 7 : 5} m${f.method}:${dictLabel(f.dict)}`;
+    const entry = { index, path, dir: f.dir, kind, size: f.size >= 0 ? f.size : undefined, packed };
+    if (f.mtime) entry.mtime = f.mtime;
+    if (f.ctime) entry.ctime = f.ctime;
+    if (f.atime) entry.atime = f.atime;
+    if (f.host === 1) entry.mode = f.attr; else if (f.host === 0) entry.attrib = f.attr;
+    if (method) { entry.method = method; methods.add(method); }
+    if (f.crypt) { entry.encrypted = true; arc.info.encrypted = true; }
+    if (f.crc != null && !(f.crypt && (f.lastCrypt || f.crypt).mac)) entry.crc = f.crc;
+    if (f.link != null) entry.link = f.link;
+    if (f.solid && !f.dir) entry.solid = true;
+    if (f.owner) entry.owner = f.owner;
+    if (f.version) entry.version = f.version;
+    let why = null;
+    if (!f.dir && f.method > 0 && f.ver > 1) why = 'unknown RAR 5 compression version ' + f.ver;
+    else if (!f.dir && f.method > 5) why = 'unknown RAR 5 method ' + f.method;
+    else if (f.crypt && f.crypt.ver !== 0) why = 'unknown RAR 5 encryption version ' + f.crypt.ver;
+    else if (f.crypt && f.crypt.lg2 > 24) why = 'RAR 5 key derivation count too large';
+    else if (f.linkType === 5 && !f.link) why = 'file copy without a target';
+    if (why) entry.unsupported = why;
+    if (!f.dir && f.method > 0 && !why && packed > 0) {
+      if (f.ver === 1) v7 = true;
+      maxDict = Math.max(maxDict, f.dict);
+      // A solid file continues the stream of the previous compressed file.
+      if (!f.solid || prevCompressed < 0) groupStart = index;
+      f.group = groupStart;
+      prevCompressed = index;
+    }
+    f.index = index;
+    arc.entries.push(entry);
+    internal.set(entry, f);
+  }
+  const groups = new Map();
+  for (const f of files) if (f.group != null) { if (!groups.has(f.group)) groups.set(f.group, []); groups.get(f.group).push(f); }
+  for (const list of groups.values()) list.forEach((f, i) => { f.list = list; f.pos = i; });
+
+  arc.info.methods = [...methods];
+  const props = arc.info.props;
+  props.push(['Version', v7 ? 'RAR 7' : 'RAR 5']);
+  if (maxDict) props.push(['Dictionary', dictProp(maxDict)]);
+  if (arc.info.solid) props.push(['Solid', 'yes']);
+  if (recovery) props.push(['Recovery record', 'yes']);
+  if (locked) props.push(['Locked', 'yes']);
+  if (arc.info.volumes > 1) props.push(['Volumes', String(arc.info.volumes)]);
+  if (arc.info.headersEncrypted) props.push(['Encrypted headers', 'yes']);
+  if (sig.offset) { arc.info.sfx = sig.offset; props.push(['SFX', 'yes']); }
+
+  // --- data ----------------------------------------------------------------------------------------------------
+  function keysFor(f) {
+    if (!f.crypt) return null;
+    if (arc.password == null) fail('password', 'a password is needed: ' + f.name);
+    const k = rar5Keys(arc.password, f.crypt.salt, f.crypt.lg2);
+    if (f.crypt.check && !eq(k.check, f.crypt.check)) fail('badPassword', 'wrong password: ' + f.name);
+    return k;
+  }
+
+  // Packed data of all volume parts: one AES-CBC stream across the volumes (the parts repeat the first IV and may
+  // end anywhere, not on 16-byte blocks).
+  function input(f, keys) {
+    if (!f.complete) fail('volume', `missing volume: ${f.name} continues in the next volume`);
+    const s = concatStreams(f.parts.map((p) => () => sourceStream(sources[p.vi], p.off, p.len)));
+    return keys ? cbcStream(s, keys.key, f.crypt.iv) : s;
+  }
+
+  // The MAC key of the checksum comes from the encryption record of the header that holds the checksum.
+  function macKey(f, keys) {
+    const c = f.lastCrypt || f.crypt;
+    return c === f.crypt || (eq(c.salt, f.crypt.salt) && c.lg2 === f.crypt.lg2) ? keys.hashKey : rar5Keys(arc.password, c.salt, c.lg2).hashKey;
+  }
+
+  let state = null; // { unp, list, next } of the solid stream in progress
+  function unpackerFor(f) {
+    const list = f.list;
+    if (state && state.list === list && state.next <= f.pos) return state;
+    let dict = 0, total = 0;
+    for (const g of list) { dict = Math.max(dict, g.dict); total = total >= 0 && g.size >= 0 ? total + g.size : -1; }
+    const need = windowSize(dict, total, UNPACK50_FILTER_MAX);
+    const unp = state && state.unp.W >= need && state.unp.W <= 4 * need + 0x100000 ? state.unp : new Unpack50(need);
+    state = { unp, list, next: 0 };
+    return state;
+  }
+
+  function decoded(f, keys) {
+    const st = unpackerFor(f);
+    try {
+      while (st.next < f.pos) {
+        const g = st.list[st.next];
+        const s = st.unp.file(new Reader(input(g, keysFor(g))), g.size, st.next > 0, g.ver === 1);
+        st.next++;
+        while (s.read(1 << 20));
+      }
+      st.next = f.pos + 1;
+      const out = st.unp.file(new Reader(input(f, keys)), f.size, f.pos > 0, f.ver === 1);
+      // A failure inside the file leaves the decoder mid-stream: the next open starts the solid stream over.
+      return { size: out.size, read(max) { try { return out.read(max); } catch (e) { if (state === st && e.code !== 'aborted') state = null; throw e; } } };
+    } catch (e) {
+      state = null;
+      throw e;
+    }
+  }
+
+  function verify(stream, f, keys) {
+    const name = f.name, size = f.size >= 0 ? f.size : undefined;
+    const noCheck = f.crypt && !f.crypt.check, mac = f.crypt && (f.lastCrypt || f.crypt).mac;
+    let s;
+    if (f.hash) {
+      const h = blake2sp.create();
+      s = hashStream(stream, (b) => h.update(b), () => {
+        let d = h.digest();
+        if (mac) d = rar5MacDigest(macKey(f, keys), d);
+        return eq(d, f.hash);
+      }, { name, size });
+    } else if (f.crc != null) {
+      let c = 0;
+      s = hashStream(stream, (b) => { c = crc32(b, 0, b.length, c); },
+        () => (mac ? rar5MacCrc(macKey(f, keys), c) : c) === f.crc, { name, size });
+    } else s = hashStream(stream, () => {}, () => true, { name, size });
+    if (!noCheck) return s;
+    return { size: s.size, read(max) {
+      try { return s.read(max); } catch (e) {
+        if (e instanceof ArchiveError && (e.code === 'checksum' || e.code === 'corrupt')) fail('badPassword', 'wrong password or damaged data: ' + name);
+        throw e;
+      }
+    } };
+  }
+
+  function openFile(f, depth = 0) {
+    if (f.dir) return bytesStream(EMPTY);
+    const entry = arc.entries[f.index];
+    if (entry.unsupported) fail('unsupported', 'not supported: ' + entry.unsupported);
+    if ((f.linkType === 4 || f.linkType === 5) && depth < 8) { // hard link / file copy: the data of an earlier entry
+      const want = f.link.replace(/\\/g, '/').replace(/^\/+/, '');
+      const target = files.find((g) => g !== f && g.index < f.index && g.name.replace(/\\/g, '/').replace(/^\/+/, '') === want);
+      if (!target) fail('corrupt', `${f.linkType === 4 ? 'hard link' : 'file copy'} target not found: ${f.link}`);
+      return openFile(target, depth + 1);
+    }
+    const keys = keysFor(f);
+    let s;
+    if (f.method === 0) {
+      s = input(f, keys);
+      if (f.size >= 0) s = limitTo(s, f.size, f.name);
+    } else if (f.group == null) s = bytesStream(EMPTY); // compressed file without packed data
+    else s = decoded(f, keys);
+    return verify(s, f, keys);
+  }
+
+  arc.open = (entry) => {
+    const f = internal.get(entry) || internal.get(arc.entries[entry.index]);
+    if (!f) fail('format', 'entry of another archive');
+    return openFile(f);
+  };
+
+  // --- comment -------------------------------------------------------------------------------------------------
+  if (commentHeader && commentHeader.complete !== false) {
+    try {
+      const f = commentHeader;
+      f.complete = true;
+      const keys = f.crypt ? (arc.password != null ? keysFor(f) : null) : null;
+      if (!f.crypt || keys) {
+        let s = input(f, keys);
+        if (f.method !== 0) s = new Unpack50(windowSize(f.dict, f.size, UNPACK50_FILTER_MAX)).file(new Reader(s), f.size, false, f.ver === 1);
+        else if (f.size >= 0) s = limitTo(s, f.size, 'comment');
+        comment = utf8(readAll(s, 1 << 24)).replace(/\0+$/, '');
+      }
+    } catch (e) { arc.info.warnings.push('archive comment: ' + e.message); }
+  }
+  if (comment != null) arc.info.comment = comment;
+  return arc;
+}
+
+// Reads the header at `pos`: { type, flags, raw, body (offset of the type-specific fields), extraStart, bodyEnd,
+// dataPos, dataSize, next }.
+function readHeader(src, pos, hcrypt) {
+  let raw, start;
+  if (hcrypt) {
+    const iv = readAt(src, pos, 16);
+    const dec = new AesCbc(hcrypt.key, iv, { decrypt: true, padding: false });
+    const first = dec.update(readAt(src, pos + 16, 16));
+    const c = new Cursor(first, 4, 16);
+    const size = c.vint(), total = c.p + size, padded = (total + 15) & ~15;
+    if (size > 0x200000) fail(hcrypt.checked ? 'corrupt' : 'badPassword', 'corrupt RAR 5 header (or wrong password)');
+    raw = new Uint8Array(padded);
+    raw.set(first);
+    if (padded > 16) raw.set(dec.update(readAt(src, pos + 32, padded - 16)), 16);
+    start = pos + 16 + padded;
+    raw = raw.subarray(0, total);
+  } else {
+    const head = readAt(src, pos, Math.min(7, src.size - pos));
+    const c = new Cursor(head, 4, head.length);
+    const size = c.vint();
+    if (size > 0x200000) fail('corrupt', 'corrupt RAR 5 header size');
+    raw = readAt(src, pos, c.p + size);
+    start = pos + raw.length;
+  }
+  const want = (raw[0] | (raw[1] << 8) | (raw[2] << 16) | (raw[3] << 24)) >>> 0;
+  if (crc32(raw, 4, raw.length) !== want) {
+    fail(hcrypt && !hcrypt.checked ? 'badPassword' : 'corrupt', hcrypt && !hcrypt.checked ? 'wrong password' : 'RAR 5 header checksum mismatch at ' + pos);
+  }
+  const c = new Cursor(raw, 4, raw.length);
+  c.vint();
+  const type = c.vint(), flags = c.vint();
+  const extraSize = flags & 1 ? c.vint() : 0, dataSize = flags & 2 ? c.vint() : 0;
+  const bodyEnd = raw.length, extraStart = bodyEnd - extraSize;
+  if (extraStart < c.p) fail('corrupt', 'corrupt RAR 5 header (extra area)');
+  return { type, flags, raw, body: c.p, extraStart, bodyEnd, dataPos: start, dataSize, next: start + dataSize };
+}
+
+function limitTo(stream, n, name) {
+  let left = n;
+  return {
+    size: n,
+    read(max = 1 << 20) {
+      if (left <= 0) return null;
+      const b = stream.read(Math.min(max, left));
+      if (!b || !b.length) fail('truncated', 'unexpected end of data: ' + name);
+      const r = b.length > left ? b.subarray(0, left) : b;
+      left -= r.length;
+      return r;
+    },
+  };
+}
+
+function eq(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i];
+  return d === 0;
+}

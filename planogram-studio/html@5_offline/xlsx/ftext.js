@@ -1,0 +1,12 @@
+import{colIndex,MAX_ROWS,colName}from"./cells.js";const TOKEN=/"(?:[^"]|"")*"|'(?:[^']|'')*'|[A-Za-z_\\][\w.\\]*\s*\(|\$?[A-Za-z]{1,3}\$?\d{1,7}(?![\w(.!])|\$?[A-Za-z]{1,3}:\$?[A-Za-z]{1,3}(?![\w(.!])|\$?\d{1,7}:\$?\d{1,7}(?![\w(.])|\d+(?:\.\d*)?(?:[eE][-+]?\d+)?|[A-Za-z_\\][\w.\\]*/g;function mapTokens(text,fn){let out='',last=0,m;TOKEN.lastIndex=0;while((m=TOKEN.exec(text))){out+=text.slice(last,m.index)+fn(m[0]);last=TOKEN.lastIndex;}
+return out+text.slice(last);}
+function fromFileFormula(text){const s=String(text).replace(/^=/,'');if(!/_xl/i.test(s))return s;return mapTokens(s,(t)=>(/\($/.test(t)?t.replace(/^(_xlfn\.)?(_xlws\.)?/i,''):t));}
+function shiftRef(t,dr,dc){let m=/^(\$?)([A-Za-z]{1,3})(\$?)(\d+)$/.exec(t);if(m){const c=colIndex(m[2])+(m[1]?0:dc),r=+m[4]-1+(m[3]?0:dr);if(c<0||r<0||r>=MAX_ROWS||colIndex(m[2])<0)return'#REF!';return m[1]+colName(c)+m[3]+(r+1);}
+if((m=/^(\$?)([A-Za-z]{1,3}):(\$?)([A-Za-z]{1,3})$/.exec(t))){const a=colIndex(m[2])+(m[1]?0:dc),b=colIndex(m[4])+(m[3]?0:dc);return a<0||b<0?'#REF!':m[1]+colName(a)+':'+m[3]+colName(b);}
+if((m=/^(\$?)(\d+):(\$?)(\d+)$/.exec(t))){const a=+m[2]+(m[1]?0:dr),b=+m[4]+(m[3]?0:dr);return a<1||b<1?'#REF!':m[1]+a+':'+m[3]+b;}
+return t;}
+function shiftFormulaText(text,dr,dc){if(!dr&&!dc)return String(text);return mapTokens(String(text),(t)=>(/^\$?[A-Za-z]{1,3}\$?\d|^\$?[A-Za-z]{1,3}:|^\$?\d+:/.test(t)?shiftRef(t,dr,dc):t));}
+const ODF_REF=/\[\$?((?:'(?:[^']|'')*'|[^.[\]:';]*))?\.(\$?[A-Za-z]{0,3}\$?\d*)(?::\$?((?:'(?:[^']|'')*'|[^.[\]:';]*))?\.(\$?[A-Za-z]{0,3}\$?\d*))?\]/g;function fromODFFormula(text){const t=String(text);const m=/^(of|oooc|msoxl):=?([\s\S]*)$/i.exec(t);const s=m?m[2]:t.replace(/^=/,'');if(m&&m[1].toLowerCase()==='msoxl')return s;let out='';const parts=s.split(/("(?:[^"]|"")*")/);for(let i=0;i<parts.length;i++){if(i%2){out+=parts[i];continue;}
+out+=parts[i].replace(ODF_REF,(all,sh1,a,sh2,b)=>{const pre=sh1?(sh1.startsWith("'")?sh1:/^[A-Za-z_][\w.]*$/.test(sh1)?sh1:`'${sh1.replace(/'/g,"''")}'`)+'!':'';return pre+a+(b?':'+b:'');}).replace(/;/g,',').replace(/\b(?:COM\.MICROSOFT|_xlfn)\.(?=[A-Za-z_][\w.]*\s*\()/gi,'');}
+return out;}
+export{shiftFormulaText,fromFileFormula,fromODFFormula};

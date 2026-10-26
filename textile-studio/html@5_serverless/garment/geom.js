@@ -1,0 +1,30 @@
+const dist=(a,b)=>Math.hypot(b[0]-a[0],b[1]-a[1]);const lerp2=(a,b,t)=>[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t];const add2=(a,b)=>[a[0]+b[0],a[1]+b[1]];const sub2=(a,b)=>[a[0]-b[0],a[1]-b[1]];const mul2=(a,s)=>[a[0]*s,a[1]*s];const norm2=(a)=>{const l=Math.hypot(a[0],a[1])||1;return[a[0]/l,a[1]/l];};const perp=(a)=>[-a[1],a[0]];const dot2=(a,b)=>a[0]*b[0]+a[1]*b[1];const cross2=(a,b)=>a[0]*b[1]-a[1]*b[0];const polar=(p,ang,len)=>[p[0]+Math.cos(ang)*len,p[1]+Math.sin(ang)*len];const same=(a,b,tol=1e-6)=>Math.abs(a[0]-b[0])<=tol&&Math.abs(a[1]-b[1])<=tol;function bezier(p0,p1,p2,p3,step=0.4){const est=dist(p0,p1)+dist(p1,p2)+dist(p2,p3);const n=Math.max(2,Math.ceil(est/step));const out=[];for(let i=0;i<=n;i++){const t=i/n,u=1-t;out.push([u*u*u*p0[0]+3*u*u*t*p1[0]+3*u*t*t*p2[0]+t*t*t*p3[0],u*u*u*p0[1]+3*u*u*t*p1[1]+3*u*t*t*p2[1]+t*t*t*p3[1],]);}
+return out;}
+const GL_X=[0.1252334085114689,0.3678314989981802,0.5873179542866175,0.7699026741943047,0.9041172563704749,0.9815606342467192];const GL_W=[0.2491470458134028,0.2334925365383548,0.2031674267230659,0.1600783285433462,0.1069393259953184,0.0471753363865118];function bezierLength(p0,p1,p2,p3){let s=0;for(let k=0;k<6;k++){for(const sg of[-1,1]){const t=0.5+0.5*sg*GL_X[k],u=1-t;const dx=3*(u*u*(p1[0]-p0[0])+2*u*t*(p2[0]-p1[0])+t*t*(p3[0]-p2[0]));const dy=3*(u*u*(p1[1]-p0[1])+2*u*t*(p2[1]-p1[1])+t*t*(p3[1]-p2[1]));s+=GL_W[k]*Math.hypot(dx,dy);}}
+return s/2;}
+function curve(a,da,b,db,ka=0.4,kb=0.4,step=0.4){const c=dist(a,b);return bezier(a,add2(a,mul2(norm2(da),c*ka)),sub2(b,mul2(norm2(db),c*kb)),b,step);}
+function spline(pts,step=0.4){if(pts.length<3)return line(pts[0],pts[pts.length-1],step);const out=[pts[0]];for(let i=0;i<pts.length-1;i++){const p0=pts[Math.max(0,i-1)],p1=pts[i],p2=pts[i+1],p3=pts[Math.min(pts.length-1,i+2)];const c1=add2(p1,mul2(sub2(p2,p0),1/6)),c2=sub2(p2,mul2(sub2(p3,p1),1/6));out.push(...bezier(p1,c1,c2,p2,step).slice(1));}
+return out;}
+const line=(a,b,step=0)=>{if(!step)return[a.slice(),b.slice()];const n=Math.max(1,Math.ceil(dist(a,b)/step));return Array.from({length:n+1},(_,i)=>lerp2(a,b,i/n));};function chain(...parts){const out=[];for(const p of parts){if(!p||!p.length)continue;if(out.length&&same(out[out.length-1],p[0],1e-6))out.push(...p.slice(1));else out.push(...p);}
+return out;}
+function plLength(pts){let s=0;for(let i=1;i<pts.length;i++)s+=dist(pts[i-1],pts[i]);return s;}
+function cumLengths(pts){const c=[0];for(let i=1;i<pts.length;i++)c.push(c[i-1]+dist(pts[i-1],pts[i]));return c;}
+function pointAt(pts,s){const c=cumLengths(pts);const total=c[c.length-1];s=Math.max(0,Math.min(total,s));let i=1;while(i<c.length-1&&c[i]<s)i++;const seg=c[i]-c[i-1]||1e-12;const t=(s-c[i-1])/seg;return{p:lerp2(pts[i-1],pts[i],t),seg:i-1,t,tangent:norm2(sub2(pts[i],pts[i-1]))};}
+function resample(pts,n){const c=cumLengths(pts),total=c[c.length-1];const out=[];let j=1;for(let i=0;i<=n;i++){const s=(total*i)/n;while(j<c.length-1&&c[j]<s)j++;const seg=c[j]-c[j-1]||1e-12;out.push(lerp2(pts[j-1],pts[j],Math.max(0,Math.min(1,(s-c[j-1])/seg))));}
+return out;}
+function splitAt(pts,s){const{p,seg}=pointAt(pts,s);return[pts.slice(0,seg+1).concat([p]),[p].concat(pts.slice(seg+1))].map((x)=>dedupe(x));}
+function dedupe(pts,tol=1e-7){const out=[];for(const p of pts)if(!out.length||!same(out[out.length-1],p,tol))out.push(p);return out.length===1?[out[0],out[0].slice()]:out;}
+const reversed=(pts)=>pts.slice().reverse();function offsetPolyline(pts,d){if(pts.length<2)return pts.slice();const out=[];const nrm=[];for(let i=1;i<pts.length;i++)nrm.push(perp(norm2(sub2(pts[i],pts[i-1]))));out.push(add2(pts[0],mul2(nrm[0],d)));for(let i=1;i<pts.length-1;i++){const n1=nrm[i-1],n2=nrm[i];const m=norm2(add2(n1,n2));const c=dot2(m,n1);out.push(add2(pts[i],mul2(m,d/Math.max(0.25,c))));}
+out.push(add2(pts[pts.length-1],mul2(nrm[nrm.length-1],d)));return out;}
+function area(poly){let s=0;for(let i=0;i<poly.length;i++){const a=poly[i],b=poly[(i+1)%poly.length];s+=a[0]*b[1]-b[0]*a[1];}
+return s/2;}
+function bbox(pts){let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;for(const p of pts){if(p[0]<x0)x0=p[0];if(p[1]<y0)y0=p[1];if(p[0]>x1)x1=p[0];if(p[1]>y1)y1=p[1];}
+return{x0,y0,x1,y1,w:x1-x0,h:y1-y0};}
+function inside(poly,p){let c=false;for(let i=0,j=poly.length-1;i<poly.length;j=i++){const a=poly[i],b=poly[j];if((a[1]>p[1])!==(b[1]>p[1])&&p[0]<((b[0]-a[0])*(p[1]-a[1]))/(b[1]-a[1])+a[0])c=!c;}
+return c;}
+function segIntersect(a,b,c,d,tol=1e-9){const r=sub2(b,a),s=sub2(d,c);const den=cross2(r,s);if(Math.abs(den)<1e-12)return null;const t=cross2(sub2(c,a),s)/den,u=cross2(sub2(c,a),r)/den;if(t<=tol||t>=1-tol||u<=tol||u>=1-tol)return null;return add2(a,mul2(r,t));}
+function lineIntersect(a,b,c,d){const r=sub2(b,a),s=sub2(d,c);const den=cross2(r,s);if(Math.abs(den)<1e-12)return null;const t=cross2(sub2(c,a),s)/den,u=cross2(sub2(c,a),r)/den;return{p:add2(a,mul2(r,t)),t,u};}
+function segDist(p,a,b){const ab=sub2(b,a),l2=dot2(ab,ab);const t=l2?Math.max(0,Math.min(1,dot2(sub2(p,a),ab)/l2)):0;return dist(p,add2(a,mul2(ab,t)));}
+const apply=(m,p)=>[m[0]*p[0]+m[2]*p[1]+m[4],m[1]*p[0]+m[3]*p[1]+m[5]];const compose=(a,b)=>[a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5],];const translate=(dx,dy)=>[1,0,0,1,dx,dy];const rotation=(ang,c=[0,0])=>{const cs=Math.cos(ang),sn=Math.sin(ang);return[cs,sn,-sn,cs,c[0]-cs*c[0]+sn*c[1],c[1]-sn*c[0]-cs*c[1]];};function reflectLine(a,b){const d=norm2(sub2(b,a));const c=d[0]*d[0]-d[1]*d[1],s=2*d[0]*d[1];const m=[c,s,s,-c,0,0];const pa=apply(m,a);return[c,s,s,-c,a[0]-pa[0],a[1]-pa[1]];}
+const det=(m)=>m[0]*m[3]-m[1]*m[2];function rigidOnto(a0,a1,b0,b1){const ang=Math.atan2(b1[1]-b0[1],b1[0]-b0[0])-Math.atan2(a1[1]-a0[1],a1[0]-a0[0]);const r=rotation(ang);const p=apply(r,a0);return compose(translate(b0[0]-p[0],b0[1]-p[1]),r);}
+export{dedupe,plLength,dist,area,bbox,reversed,apply,compose,det,pointAt,splitAt,inside,segDist,chain,rigidOnto,reflectLine,offsetPolyline,lineIntersect,same,segIntersect,spline,line,polar,bezier,curve,bezierLength,translate,resample};

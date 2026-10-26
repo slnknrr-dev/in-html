@@ -1,0 +1,184 @@
+// kdbx-app/editor.js - the entry editor: icon (picker), title, user name, password (inline generation with the remembered
+// generator settings, the generator dialog, a live strength line: the exact entropy of a generated password until it is
+// edited, else the zxcvbn estimate), memory protection, URL, notes, tags, expiry, custom fields, TOTP and attachments.
+// Saving keeps the previous state in the entry history. Re-rendering goes through S.hooks.render.
+// 
+// Edits go to a draft (plain object), never to the entry: cancel simply drops the draft; save validates first, then
+// writes everything at once after pushing the old state to the history.
+import { field, t, textInput, toast, toggle } from '../ui/app.js';
+import { h } from '../ui/dom.js';
+import { iconEl } from '../ui/icons.js';
+import { pickFiles } from '../ui/files.js';
+import { STANDARD_FIELDS, buildOtpUri, entryOtp, parseOtpUri, setEntryOtp } from '../kdbx/kdbx.js';
+import { base32ToBytes } from '../crypto/encoding.js';
+import { S, fmtSize, markDirty } from './state.js';
+import { generate, generateError, generatorDialog, strengthView } from './generator.js';
+import { entryIconFor, iconDialog, iconTile } from './iconpicker.js';
+import { secretInput } from './lock.js';
+
+// Field names used by KeePass (TimeOtp-*, HmacOtp-*), KeePassXC (otp) and the old TrayTOTP plugin (TOTP Seed / Settings): hidden from the custom field list, managed by the OTP setting.
+export const OTP_FIELDS = /^(otp|TOTP Seed|TOTP Settings|TimeOtp-.*|HmacOtp-.*)$/;
+
+export function makeDraft(e, group) {
+  const mp = S.db.meta.memoryProtection;
+  const otp = e ? entryOtp(e) : null;
+  const icon = e ? { icon: e.icon, customIcon: e.customIcon } : entryIconFor(group);
+  const d = {
+    entry: e, group, ...icon,
+    title: e ? e.get('Title') : '', user: e ? e.get('UserName') : S.db.meta.defaultUser, password: e ? e.get('Password') : '',
+    url: e ? e.get('URL') : '', notes: e ? e.get('Notes') : '', tags: e ? e.tags.join(', ') : '',
+    expires: e ? e.times.expires : false, expiry: e ? e.times.expiry : new Date(Date.now() + 365 * 864e5),
+    fields: e ? e.customFields.filter((k) => !OTP_FIELDS.test(k)).map((k) => ({ name: k, value: e.get(k), protect: e.isProtected(k) })) : [],
+    binaries: e ? [...e.binaries].map(([name, b]) => ({ name, b })) : [],
+    otp: otp ? (e.fields.has('otp') && e.get('otp').startsWith('otpauth:') ? e.get('otp') : buildOtpUri(otp)) : '',
+    otpOriginal: '',
+    protectPassword: e ? e.isProtected('Password') || mp.password : mp.password,
+    generated: null, // { text, bits } of the last generated password (exact entropy while unchanged)
+  };
+  d.otpOriginal = d.otp;
+  return d;
+}
+
+// datetime-local needs local time without zone: shift by the timezone offset, then cut the ISO string.
+const toLocalInput = (d) => { const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 16); };
+
+export function editorView() {
+  const d = S.draft;
+  // Icon
+  const iconBtn = h('button', { type: 'button', class: 'kx-icon-btn', title: t('kx.changeIcon'), 'aria-label': t('kx.changeIcon') });
+  const paintIcon = () => iconBtn.replaceChildren(iconTile(d, 40));
+  paintIcon();
+  iconBtn.addEventListener('click', async () => {
+    const c = await iconDialog({ kind: 'entry', icon: d.icon, customIcon: d.customIcon });
+    if (c) { d.icon = c.icon; d.customIcon = c.customIcon; paintIcon(); }
+  });
+  // Password: inline generation, the generator dialog, the strength line.
+  const pw = secretInput(d.password, { 'aria-label': t('kx.f.password'), autocomplete: 'new-password', id: 'kx-ed-pw' });
+  const meter = strengthView({ compact: true });
+  const paintMeter = () => meter.set(d.password, { exact: d.generated && d.generated.text === d.password ? d.generated.bits : null });
+  const reveal = () => { pw.input.type = 'text'; const eye = pw.row.querySelector('[aria-pressed]'); if (eye) { eye.setAttribute('aria-pressed', 'true'); eye.replaceChildren(iconEl('eyeOff')); } };
+  const put = (text, bits = null) => { d.password = text; pw.input.value = text; d.generated = bits != null ? { text, bits } : null; reveal(); paintMeter(); };
+  pw.input.addEventListener('input', () => { d.password = pw.input.value; paintMeter(); });
+  paintMeter();
+  pw.row.append(
+    h('button', { type: 'button', class: 'ed-iconbtn', title: t('kx.gen.quick'), 'aria-label': t('kx.gen.quick'), onclick: () => {
+      try { const r = generate(); put(r.password, r.entropy); } catch (e) { toast(generateError(e), 'warn'); }
+    } }, iconEl('dice')),
+    h('button', { type: 'button', class: 'ed-iconbtn', title: t('kx.gen.open'), 'aria-label': t('kx.gen.open'), onclick: () => generatorDialog((v) => put(v)) }, iconEl('sliders')));
+  const inp = (key, label, attrs = {}) => field(label, textInput(d[key], (v) => { d[key] = v; }, attrs));
+  const expiry = h('input', { type: 'datetime-local', class: 'ed-input', value: toLocalInput(d.expiry), disabled: !d.expires, 'aria-label': t('kx.expires') });
+  expiry.addEventListener('change', () => { const v = new Date(expiry.value); if (!isNaN(v)) d.expiry = v; });
+  const custom = h('div', { class: 'kx-custom' });
+  const paintCustom = () => {
+    custom.textContent = '';
+    d.fields.forEach((f, i) => {
+      const name = textInput(f.name, (v) => { f.name = v; }, { placeholder: t('kx.fieldName'), 'aria-label': t('kx.fieldName') });
+      const val = textInput(f.value, (v) => { f.value = v; }, { placeholder: t('kx.fieldValue'), 'aria-label': t('kx.fieldValue'), type: f.protect ? 'password' : 'text', autocomplete: 'off' });
+      custom.append(h('div', { class: 'kx-custom-row' }, name, val,
+        h('label', { class: 'ed-check-inline', title: t('kx.protect') }, toggle(f.protect, (v) => { f.protect = v; val.type = v ? 'password' : 'text'; }), h('span', { class: 'kx-sr' }, t('kx.protect')), iconEl('lock')),
+        h('button', { type: 'button', class: 'ed-iconbtn ed-danger', title: t('kx.removeField'), 'aria-label': t('kx.removeField'), onclick: () => { d.fields.splice(i, 1); paintCustom(); } }, iconEl('trash'))));
+    });
+    custom.append(h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: () => { d.fields.push({ name: '', value: '', protect: false }); paintCustom(); custom.querySelector('.kx-custom-row:last-of-type input')?.focus(); } }, iconEl('plus'), t('kx.addField')));
+  };
+  paintCustom();
+  const atts = h('div', { class: 'kx-atts' });
+  const paintAtts = () => {
+    atts.textContent = '';
+    d.binaries.forEach((a, i) => atts.append(h('div', { class: 'kx-att' }, iconEl('file'), h('span', { class: 'kx-ellipsis' }, a.name), h('span', { class: 'ed-muted' }, fmtSize(a.b.size)),
+      h('button', { type: 'button', class: 'ed-iconbtn ed-sm ed-danger', title: t('kx.removeAtt'), 'aria-label': `${t('kx.removeAtt')}: ${a.name}`, onclick: () => { d.binaries.splice(i, 1); paintAtts(); } }, iconEl('trash')))));
+    atts.append(h('button', { type: 'button', class: 'ed-btn ed-sm', onclick: async () => {
+      const files = await pickFiles({ multiple: true });
+      for (const f of files) {
+        let name = f.name;
+        for (let k = 2; d.binaries.some((x) => x.name === name); k++) name = f.name.replace(/(\.[^.]*)?$/, ` (${k})$1`);
+        d.binaries.push({ name, b: S.db.addBinary(new Uint8Array(await f.arrayBuffer())) });
+      }
+      paintAtts();
+    } }, iconEl('clip'), t('kx.addAtt')));
+  };
+  paintAtts();
+  const otpIn = textInput(d.otp, (v) => { d.otp = v.trim(); }, { placeholder: t('kx.otpPh'), 'aria-label': t('kx.totp'), spellcheck: 'false', autocomplete: 'off' });
+  const err = h('div', { class: 'kx-error', role: 'alert' });
+  const title = textInput(d.title, (v) => { d.title = v; }, { id: 'kx-ed-title', 'aria-label': t('kx.f.title') });
+  const form = h('form', { class: 'kx-editor', novalidate: true, onsubmit: (ev) => { ev.preventDefault(); saveDraft(err); } },
+    h('div', { class: 'kx-detail-h' },
+      h('button', { type: 'button', class: 'ed-iconbtn kx-back', title: t('kx.back'), 'aria-label': t('kx.back'), onclick: () => cancelDraft() }, iconEl('back')),
+      h('h2', {}, t(d.entry ? 'kx.editEntry' : 'kx.newEntry')),
+      h('span', { class: 'ed-spacer' }),
+      h('button', { type: 'button', class: 'ed-btn', onclick: () => cancelDraft() }, t('dlg.cancel')),
+      h('button', { type: 'submit', class: 'ed-btn ed-primary' }, iconEl('check'), t('kx.saveEntry'))),
+    err,
+    h('div', { class: 'ed-fields' },
+      h('div', { class: 'kx-ed-top' }, iconBtn, h('div', { class: 'kx-ed-title' }, field('kx.f.title', title))),
+      inp('user', 'kx.f.user', { autocomplete: 'off' }),
+      field('kx.f.password', h('div', {}, pw.row, meter.el)),
+      field('kx.protectPassword', toggle(d.protectPassword, (v) => { d.protectPassword = v; })),
+      inp('url', 'kx.f.url', { inputmode: 'url', autocomplete: 'off', autocapitalize: 'off', placeholder: 'https://', 'aria-label': t('kx.f.url') }),
+      field('kx.f.notes', textInput(d.notes, (v) => { d.notes = v; }, { multiline: true, rows: 4, class: 'ed-input ed-textarea kx-notes-in' })),
+      inp('tags', 'kx.tags', { placeholder: t('kx.tagsPh') }),
+      h('div', { class: 'kx-grid2' },
+        field('kx.expiresToggle', toggle(d.expires, (v) => { d.expires = v; expiry.disabled = !v; })),
+        field('kx.expires', expiry)),
+      field('kx.totp', otpIn, 'kx.otpHint'),
+      h('div', { class: 'kx-block' }, h('h3', {}, t('kx.customFields')), custom),
+      h('div', { class: 'kx-block' }, h('h3', {}, t('kx.attachments')), atts)));
+  form.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') { ev.stopPropagation(); cancelDraft(); } });
+  return form;
+}
+
+export function cancelDraft() {
+  S.draft = null;
+  if (!S.entry) S.view = 'list';
+  S.hooks.render();
+}
+
+// Validation before any write: empty, reserved or duplicate custom field names and an unreadable OTP secret block the save.
+function saveDraft(err) {
+  const d = S.draft, db = S.db;
+  err.textContent = '';
+  const names = d.fields.map((f) => f.name.trim());
+  if (names.some((n) => !n)) { err.textContent = t('kx.errFieldName'); return; }
+  if (names.some((n) => STANDARD_FIELDS.includes(n) || OTP_FIELDS.test(n))) { err.textContent = t('kx.errReserved'); return; }
+  if (new Set(names).size !== names.length) { err.textContent = t('kx.errDuplicate'); return; }
+  let otp = null;
+  if (d.otp) {
+    try {
+      otp = d.otp.startsWith('otpauth:') ? parseOtpUri(d.otp) : { type: 'totp', secret: base32ToBytes(d.otp), algorithm: 'SHA1', digits: 6, period: 30, issuer: '', account: d.user || '' };
+    } catch { otp = null; }
+    if (!otp || !otp.secret.length) { err.textContent = t('kx.errOtp'); return; }
+  }
+  let e = d.entry;
+  // History entry first (KeePass semantics): the previous state stays restorable.
+  if (e) e.pushHistory(db);
+  else e = db.createEntry(d.group);
+  const mp = db.meta.memoryProtection;
+  e.icon = d.icon;
+  e.customIcon = d.customIcon && db.meta.customIcons.has(d.customIcon) ? d.customIcon : null;
+  e.set('Title', d.title, mp.title);
+  e.set('UserName', d.user, mp.userName);
+  e.set('Password', d.password, d.protectPassword);
+  e.set('URL', d.url, mp.url);
+  e.set('Notes', d.notes, mp.notes);
+  // OTP fields stay as they are (KeePass TimeOtp-*, KeePassXC otp) unless the OTP setting was changed; a changed
+  // setting is stored as KeePassXC's "otp" field.
+  const otpChanged = d.otp !== d.otpOriginal;
+  for (const k of e.customFields) if (!OTP_FIELDS.test(k) || otpChanged) e.remove(k);
+  for (const f of d.fields) e.set(f.name.trim(), f.value, f.protect);
+  if (otpChanged && otp) {
+    if (d.otp.startsWith('otpauth:')) e.set('otp', d.otp, true);
+    else setEntryOtp(e, otp);
+  }
+  e.binaries = new Map(d.binaries.map((a) => [a.name, a.b]));
+  e.tags = d.tags.split(/[,;]/).map((x) => x.trim()).filter(Boolean);
+  e.times.expires = d.expires;
+  if (d.expires) e.times.expiry = d.expiry;
+  e.times.touch();
+  S.entry = e;
+  S.sel = new Set([e]);
+  S.anchor = e;
+  S.draft = null;
+  S.reveal.clear();
+  markDirty();
+  toast(t('kx.entrySaved'), 'ok');
+  S.hooks.render();
+}

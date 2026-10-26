@@ -1,0 +1,539 @@
+// planogram-studio/store.js - the store page: the floor plan of the shop in metres (plan/ shop stencils: racks,
+// gondolas, wall racks, end caps, fridges, freezers, checkouts, counters, pallets, promo tables, zones, doors, walls,
+// labels), moving by drag or arrow keys on a grid, rotating, resizing, linking equipment to the planogram fixtures
+// (a red mark when a linked planogram has fit warnings; double click / Enter opens it), the area summary (floor,
+// equipment footprint, zones, shelf metres on the plan) with overlaps, narrow aisles and items outside the walls,
+// undo / redo, and exports (SVG, print at 1:50 / 1:100 / 1:200).
+//
+// Same architecture as main.js: state S (project + view UI), commit(fn) for undoable changes, refresh() repaints.
+// The plan model (plan/model.js) is immutable-style: helpers return a new page (addShape, moveShapes...), and setPage
+// writes it back into the plan. History snapshots the plan only, because this page edits nothing else (with one
+// exception, see loadDemoPlan). Coordinates are metres; the grid step snaps moves.
+import { FIXTURE_KINDS, fmt, group, kvRows, loadProject, normalizeProject, numInput, pageHref, printSheet, printable, saveProject, startShell, svgMm, svgToPng, versionsList, versionsSave } from './common.js';
+import { buildDemo } from './demo.js';
+import { button, card, download, field, seg, select, t, textInput, toast, toggle } from '../ui/app.js';
+import { $, $$, debounce, h, isEditable, lsGet, lsSet } from '../ui/dom.js';
+import { icon, iconEl } from '../ui/icons.js';
+import { confirmDialog, openDialog } from '../ui/overlays.js';
+import { addShape, duplicateShape, makeShape, moveShapes, normalizePage, normalizeShape, removeShapes, reorder, updateShape } from '../plan/model.js';
+import { corners, polygonArea, perimeter, rectOutline, snap } from '../plan/geom.js';
+import { shapeArea, stencil } from '../plan/stencils.js';
+import { narrowAisles, outsidePage, overlaps } from '../plan/summary.js';
+import { pageSVG, planCss } from '../plan/svg.js';
+import { createHistory } from '../plan/history.js';
+import { checkFixture } from '../planogram/fit.js';
+
+const PALETTE = ['gondola', 'rack', 'wall-rack', 'end-cap', 'fridge-upright', 'freezer-chest', 'checkout', 'counter', 'pallet', 'promo-table', 'basket-stand', 'column', 'zone', 'door', 'wall', 'text'];
+// Equipment that can carry a planogram.
+// Only equipment that physically holds goods can link to a planogram fixture (a door or zone cannot).
+const LINKABLE = new Set(['gondola', 'rack', 'wall-rack', 'end-cap', 'fridge-upright', 'freezer-chest', 'promo-table', 'pallet', 'counter']);
+const UKEY = 'pgs-ui-store';
+const S = { P: null, ui: { page: 0, sel: null, zoom: 100, grid: true, minAisle: 0.9, ratio: 100, paper: 'a4', landscape: true, ...(lsGet(UKEY, null) || {}) } };
+const hist = createHistory({ limit: 150 });
+const saveUi = debounce(() => lsSet(UKEY, S.ui), 250);
+
+const page = () => S.P.plan.pages[Math.min(S.ui.page, S.P.plan.pages.length - 1)];
+const setPage = (pg) => { S.P.plan.pages[Math.min(S.ui.page, S.P.plan.pages.length - 1)] = pg; };
+const selShape = () => page().shapes.find((s) => s.id === S.ui.sel) || null;
+const stName = (k) => t('pgs.st.' + k);
+const fixtureOf = (id) => S.P.fixtures.find((f) => f.id === id);
+const shapeName = (s) => s.label || (s.ref && fixtureOf(s.ref)?.name) || stName(s.kind);
+const snapState = () => S.P.plan;
+
+// One undo step per call; history holds JSON snapshots of P.plan.
+function commit(fn) {
+  hist.push(snapState());
+  fn();
+  afterChange();
+}
+function afterChange() {
+  if (S.ui.sel && !selShape()) S.ui.sel = null;
+  saveProject(S.P);
+  saveUi();
+  refresh();
+}
+function undo() { const s = hist.undo(snapState()); if (s) { S.P.plan = s; afterChange(); } }
+function redo() { const s = hist.redo(snapState()); if (s) { S.P.plan = s; afterChange(); } }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Layout
+
+const main = $('#main');
+main.classList.add('pgs-storep');
+const els = {};
+
+// planCss() is injected once as a <style>: the plan SVG classes are styled globally so inline SVG and exports share
+// one stylesheet (exports embed it, see withCss). Palette items are draggable stencil thumbnails, also clickable
+// (add at page centre) for keyboard users.
+function render() {
+  main.textContent = '';
+  if (!$('#pgs-plan-css')) document.head.append(h('style', { id: 'pgs-plan-css' }, planCss()));
+  els.status = h('div', { class: 'pgs-sr', role: 'status', 'aria-live': 'polite' });
+  els.toolbar = h('div', { class: 'pgs-toolbar ap-card' });
+  els.canvas = h('div', { class: 'pgs-plan-canvas' });
+  els.stage = h('div', { class: 'pgs-plan-stage', tabindex: '0', role: 'group', 'aria-label': t('pgs.store.aria'), 'aria-describedby': 'pgs-store-help' }, els.canvas);
+  els.issues = h('div', { class: 'pgs-warn' });
+  els.fixtures = h('div', { class: 'pgs-fxlist' });
+  els.insp = h('div', { class: 'ed-fields' });
+  els.summary = h('div', { class: 'pgs-sum' });
+  els.settings = h('div', { class: 'ed-fields' });
+  const pal = h('div', { class: 'pgs-palette' }, PALETTE.map((k) => {
+    const st = stencil(k);
+    const b = h('button', { type: 'button', class: 'pgs-pal', draggable: 'true', dataset: { kind: k }, title: t('pgs.store.addHint'), onclick: () => addAt(k, page().w / 2, page().h / 2) },
+      h('span', { class: 'pgs-pal-art', html: `<svg viewBox="-0.05 -0.05 ${st.w + 0.1} ${Math.max(st.h, 0.2) + 0.1}" width="34" height="22" aria-hidden="true">${st.draw({ kind: k, w: st.w, h: st.h }, st.w, st.h)}</svg>` }),
+      h('span', {}, stName(k)));
+    b.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/x-pgs-stencil', k); e.dataTransfer.effectAllowed = 'copy'; });
+    return b;
+  }));
+  const palCard = card('pgs.store.palette', pal);
+  palCard.classList.add('pgs-s-pal');
+  const fxCard = card('pgs.store.fixtures', els.fixtures);
+  fxCard.classList.add('pgs-s-fx');
+  const stageCard = h('section', { class: 'ap-card pgs-s-stage' }, els.stage, h('p', { class: 'ed-hint', id: 'pgs-store-help' }, t('pgs.store.help')), els.issues);
+  const inspCard = card('pgs.store.shape', els.insp);
+  const sumCard = card('pgs.store.summary', els.summary);
+  const setCard = card('pgs.store.settings', els.settings);
+  const exCard = card('pgs.x.title', h('div', { class: 'ap-row pgs-x' },
+    xb('pgs.x.svg', 'download', exportSVG, 'primary'), xb('pgs.x.png', 'image', exportPNG), xb('pgs.x.print', 'print', printDialog)));
+  main.append(els.status, h('div', { class: 'pgs-swork' }, els.toolbar,
+    h('div', { class: 'pgs-col pgs-s-left' }, palCard, fxCard), stageCard,
+    h('div', { class: 'pgs-col pgs-s-right' }, inspCard, sumCard, setCard, exCard)));
+  bindStage();
+  refresh();
+}
+function xb(label, ic, fn, kind) { const b = button(label, ic, fn, kind); b.classList.add('ed-sm'); return b; }
+
+function refresh() {
+  if (S.ui.page >= S.P.plan.pages.length) S.ui.page = 0;
+  paintToolbar();
+  paintStage();
+  paintFixtures();
+  paintInspector();
+  paintSummary();
+  paintSettings();
+}
+
+function keepFocus(fn) {
+  const a = document.activeElement, fk = a && a.dataset ? a.dataset.fk : null;
+  fn();
+  if (fk) { const b = document.querySelector(`[data-fk="${CSS.escape(fk)}"]`); if (b && b !== document.activeElement) b.focus({ preventScroll: true }); }
+}
+function announce(msg) { els.status.textContent = ''; setTimeout(() => { els.status.textContent = msg; }, 30); }
+
+function paintToolbar() {
+  keepFocus(() => {
+    const box = els.toolbar;
+    box.textContent = '';
+    const pages = S.P.plan.pages;
+    const ps = select(pages.map((p, i) => ({ v: i, l: '=' + p.name })), S.ui.page, (v) => { S.ui.page = +v; S.ui.sel = null; saveUi(); refresh(); });
+    ps.setAttribute('aria-label', t('pgs.store.page')); ps.dataset.fk = 'page';
+    const addP = h('button', { type: 'button', class: 'ed-iconbtn', title: t('pgs.store.addPage'), 'aria-label': t('pgs.store.addPage'), html: icon('plus'), onclick: () => commit(() => {
+      S.P.plan.pages.push(normalizePage({ id: 'p' + Date.now().toString(36), name: t('pgs.store.hallN', { n: pages.length + 1 }), w: 16, h: 10, shapes: [] }, pages.length, 'shop'));
+      S.ui.page = S.P.plan.pages.length - 1; S.ui.sel = null;
+    }) });
+    const ub = h('button', { type: 'button', class: 'ed-iconbtn', title: t('pgs.tb.undo') + ' (Ctrl+Z)', 'aria-label': t('pgs.tb.undo'), html: icon('undo'), disabled: !hist.canUndo, onclick: undo, dataset: { fk: 'undo' } });
+    const rb = h('button', { type: 'button', class: 'ed-iconbtn', title: t('pgs.tb.redo') + ' (Ctrl+Y)', 'aria-label': t('pgs.tb.redo'), html: icon('redo'), disabled: !hist.canRedo, onclick: redo, dataset: { fk: 'redo' } });
+    const zoom = h('input', { type: 'range', class: 'ed-range pgs-zoom', min: 60, max: 300, step: 10, value: S.ui.zoom, 'aria-label': t('pgs.tb.zoom'), dataset: { fk: 'zoom' } });
+    zoom.addEventListener('input', () => { S.ui.zoom = +zoom.value; saveUi(); els.canvas.style.width = S.ui.zoom + '%'; });
+    const grid = toggle(S.ui.grid, (v) => { S.ui.grid = v; saveUi(); paintStage(); });
+    grid.dataset.fk = 'grid';
+    box.append(
+      h('div', { class: 'pgs-tb-group' }, iconEl('store'), ps, addP),
+      h('div', { class: 'pgs-tb-group' }, ub, rb),
+      h('label', { class: 'pgs-tb-group pgs-tb-zoom' }, iconEl('zoomIn'), h('span', { class: 'pgs-tb-l' }, t('pgs.tb.zoom')), zoom),
+      h('label', { class: 'pgs-tb-group' }, grid, h('span', { class: 'pgs-tb-l' }, t('pgs.store.grid'))));
+  });
+}
+
+// --- stage --------------------------------------------------------------------------------------------------------
+
+// Number of real fit violations of a linked fixture (missing dimensions excluded), or null when not linked/unknown.
+function fixtureIssues(id) {
+  const f = fixtureOf(id);
+  if (!f) return null;
+  const map = new Map(S.P.products.map((p) => [p.id, p]));
+  return checkFixture(f, map).warnings.filter((w) => w.code !== 'no_dimensions').length;
+}
+
+// Zoom is a CSS width percentage of the container: the SVG scales by its viewBox, no re-generation. Marks are
+// appended as markup at the top-right corner of each linked shape; ref ids are restricted to [A-Za-z0-9_-] by
+// normFixture/cleanId, so interpolating them into the SVG string cannot inject markup.
+function paintStage() {
+  const pg = page();
+  els.canvas.style.width = S.ui.zoom + '%';
+  els.canvas.innerHTML = pageSVG(pg, { grid: S.ui.grid ? 0.5 : 0, sel: S.ui.sel ? [S.ui.sel] : [], ruler: true, dims: true, scale: true, title: pg.name, layers: false });
+  const svg = els.canvas.querySelector('svg');
+  // Marks: linked equipment (accent dot) and linked planograms with fit warnings (red "!").
+  let marks = '';
+  for (const sh of pg.shapes) {
+    if (!sh.ref) continue;
+    const c = corners(sh);
+    const x = Math.max(...c.map((p) => p[0])), y = Math.min(...c.map((p) => p[1]));
+    const bad = fixtureIssues(sh.ref);
+    if (bad == null) continue;
+    marks += bad ? `<g class="pgs-mark pgs-mark-bad" data-ref="${sh.ref}"><circle cx="${x}" cy="${y}" r="0.22"/><text x="${x}" y="${y + 0.09}" font-size="0.28" text-anchor="middle">!</text></g>`
+      : `<circle class="pgs-mark pgs-mark-ok" cx="${x}" cy="${y}" r="0.12"/>`;
+  }
+  svg.insertAdjacentHTML('beforeend', marks);
+  for (const g of $$('[data-sh]', svg)) if (g.dataset.ref) g.classList.add('pgs-linked');
+  paintIssues();
+}
+
+function cmPoint(e) {
+  const svg = els.canvas.querySelector('svg');
+  const m = svg && svg.getScreenCTM();
+  return m ? new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse()) : null;
+}
+
+// New shapes snap to the grid; extra (size, ref, label) is normalised again so a fixture-sized rack stays valid.
+function addAt(kind, x, y, extra = {}) {
+  const pg = page();
+  let sh = makeShape(kind, x, y, { step: S.P.plan.grid });
+  if (Object.keys(extra).length) sh = normalizeShape({ ...sh, ...extra });
+  commit(() => { setPage(addShape(pg, sh)); S.ui.sel = sh.id; });
+  announce(t('pgs.store.added', { name: shapeName(sh) }));
+  els.stage.focus({ preventScroll: true });
+}
+
+// Dragging moves from a frozen base page (drag.base) by the total pointer delta, snapped - not by accumulating
+// per-move deltas, which would drift with snapping. The whole drag becomes one undo step: the plan before the drag
+// is pushed on release, only if something moved.
+function bindStage() {
+  const cv = els.canvas, st = els.stage;
+  let drag = null;
+  cv.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    const g = e.target.closest('[data-sh]');
+    if (!g) { if (S.ui.sel) { S.ui.sel = null; saveUi(); paintStage(); paintInspector(); } return; }
+    const id = g.dataset.sh;
+    const p0 = cmPoint(e);
+    if (!p0) return;
+    drag = { id, p0, before: JSON.stringify(S.P.plan), base: page(), moved: false, sx: e.clientX, sy: e.clientY };
+    if (S.ui.sel !== id) { S.ui.sel = id; saveUi(); paintStage(); paintInspector(); }
+    try { cv.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    e.preventDefault();
+    st.focus({ preventScroll: true });
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 4) return;
+    drag.moved = true;
+    const p = cmPoint(e);
+    if (!p) return;
+    const sh = drag.base.shapes.find((s) => s.id === drag.id);
+    const dx = snap(sh.x + p.x - drag.p0.x, S.P.plan.grid) - sh.x, dy = snap(sh.y + p.y - drag.p0.y, S.P.plan.grid) - sh.y;
+    setPage(moveShapes(drag.base, [drag.id], dx, dy));
+    paintStage();
+  });
+  const end = () => {
+    if (!drag) return;
+    const d = drag;
+    drag = null;
+    if (d.moved) { hist.push(JSON.parse(d.before)); afterChange(); }
+  };
+  cv.addEventListener('pointerup', end);
+  cv.addEventListener('pointercancel', end);
+  cv.addEventListener('dblclick', (e) => { const g = e.target.closest('[data-sh]'); if (g && g.dataset.ref) openPlanogram(g.dataset.ref); });
+  st.addEventListener('dragover', (e) => { if ([...e.dataTransfer.types].includes('text/x-pgs-stencil')) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } });
+  st.addEventListener('drop', (e) => {
+    const k = e.dataTransfer.getData('text/x-pgs-stencil');
+    if (!k) return;
+    e.preventDefault();
+    const p = cmPoint(e);
+    if (p) addAt(k, p.x, p.y);
+  });
+  st.addEventListener('keydown', stageKeys);
+}
+
+// Keyboard: [ ] cycle selection, arrows move by one grid step (Shift: x10), R rotates 15 degrees, Ctrl+D duplicates,
+// Enter opens the linked planogram.
+function stageKeys(e) {
+  const pg = page(), sh = selShape(), k = e.key;
+  const step = (S.P.plan.grid || 0.1) * (e.shiftKey ? 10 : 1);
+  let handled = true;
+  if (k === ']' || k === '[') {
+    if (pg.shapes.length) {
+      const i = pg.shapes.findIndex((s) => s.id === S.ui.sel);
+      const j = i < 0 ? (k === ']' ? 0 : pg.shapes.length - 1) : (i + (k === ']' ? 1 : -1) + pg.shapes.length) % pg.shapes.length;
+      S.ui.sel = pg.shapes[j].id; saveUi(); paintStage(); paintInspector(); announce(shapeName(pg.shapes[j]));
+    }
+  } else if (!sh) handled = false;
+  else if (k.startsWith('Arrow')) {
+    const d = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[k];
+    commit(() => setPage(moveShapes(pg, [sh.id], d[0], d[1], S.P.plan.grid)));
+  } else if (k === 'r' || k === 'R') commit(() => setPage(updateShape(pg, sh.id, { rot: ((sh.rot + (e.shiftKey ? -15 : 15)) % 360 + 360) % 360 })));
+  else if (k === 'Delete' || k === 'Backspace') removeSel();
+  else if ((k === 'd' || k === 'D') && (e.ctrlKey || e.metaKey)) duplicateSel();
+  else if (k === 'Enter' && sh.ref) openPlanogram(sh.ref);
+  else if (k === 'Escape') { S.ui.sel = null; saveUi(); paintStage(); paintInspector(); }
+  else handled = false;
+  if (handled) e.preventDefault();
+}
+
+function removeSel() { const sh = selShape(); if (!sh) return; commit(() => { setPage(removeShapes(page(), [sh.id])); S.ui.sel = null; }); announce(t('pgs.removed', { name: shapeName(sh) })); }
+// A duplicate never inherits the planogram link: one fixture is in one place on the plan.
+function duplicateSel() {
+  const sh = selShape();
+  if (!sh) return;
+  commit(() => {
+    const before = new Set(page().shapes.map((s) => s.id));
+    const pg = duplicateShape(page(), sh.id);
+    const copy = pg.shapes.find((s) => !before.has(s.id));
+    if (copy) delete copy.ref;
+    setPage(pg);
+    S.ui.sel = copy ? copy.id : S.ui.sel;
+  });
+}
+function openPlanogram(ref) { location.href = pageHref('pg-plan') + '#fixture=' + encodeURIComponent(ref); }
+
+// --- issues ---------------------------------------------------------------------------------------------------------
+
+// Plan checks from plan/summary.js: overlapping footprints, aisles narrower than the set minimum (0.9 m default, a
+// common accessibility rule of thumb for shop aisles), shapes outside the page/walls.
+function paintIssues() {
+  const pg = page(), box = els.issues;
+  box.textContent = '';
+  const byId = new Map(pg.shapes.map((s) => [s.id, s]));
+  const nm = (id) => (byId.get(id) ? shapeName(byId.get(id)) : id);
+  const rows = [
+    ...overlaps(pg).map((o) => ['error', t('pgs.store.overlap', { a: nm(o.a), b: nm(o.b), d: fmt(o.depth * 100, 0) }), o.a]),
+    ...narrowAisles(pg, S.ui.minAisle).map((o) => ['warn', t('pgs.store.narrow', { a: nm(o.a), b: nm(o.b), g: fmt(o.gap * 100, 0) }), o.a]),
+    ...outsidePage(pg).map((id) => ['warn', t('pgs.store.outside', { a: nm(id) }), id]),
+  ];
+  box.dataset.count = String(rows.length);
+  if (!rows.length) { box.append(h('div', { class: 'pgs-w pgs-w-ok' }, iconEl('check'), h('span', {}, t('pgs.store.noIssues')))); return; }
+  const ul = h('ul', { class: 'pgs-wlist' });
+  for (const [k, msg, id] of rows.slice(0, 60)) ul.append(h('li', {}, h('button', { type: 'button', class: 'pgs-w pgs-w-' + k, onclick: () => { S.ui.sel = id; saveUi(); paintStage(); paintInspector(); els.stage.focus(); } }, iconEl('warn'), h('span', {}, msg))));
+  box.append(ul);
+}
+
+// --- fixtures list ----------------------------------------------------------------------------------------------
+
+// fixture id -> where it sits on the plan; used to offer only unplaced fixtures for linking.
+function placedRefs() {
+  const m = new Map();
+  S.P.plan.pages.forEach((pg, pi) => pg.shapes.forEach((s) => { if (s.ref) m.set(s.ref, { page: pi, id: s.id }); }));
+  return m;
+}
+
+function paintFixtures() {
+  keepFocus(() => {
+    const box = els.fixtures, refs = placedRefs();
+    box.textContent = '';
+    if (!S.P.fixtures.length) { box.append(h('div', { class: 'ap-empty' }, t('pgs.store.noFixtures'))); return; }
+    const ul = h('ul', { class: 'pgs-vlist' });
+    for (const f of S.P.fixtures) {
+      const at = refs.get(f.id), bad = fixtureIssues(f.id);
+      const metres = f.shelves.reduce((x, s) => x + s.width, 0) / 100;
+      const act = at
+        ? xb('pgs.store.show', 'search', () => { S.ui.page = at.page; S.ui.sel = at.id; saveUi(); refresh(); els.stage.focus(); })
+        : xb('pgs.store.place', 'plus', () => placeFixture(f));
+      act.dataset.fk = 'fxl-' + f.id;
+      const open = h('a', { class: 'ed-btn ed-sm', href: pageHref('pg-plan') + '#fixture=' + encodeURIComponent(f.id) }, iconEl('external'), t('pgs.store.open'));
+      ul.append(h('li', { class: 'pgs-vitem', dataset: { fixture: f.id, placed: at ? '1' : '0' } },
+        h('div', { class: 'pgs-vitem-t' }, h('b', {}, f.name || t('pgs.kind.' + f.kind)),
+          h('span', { class: 'ed-hint' }, `${t('pgs.kind.' + f.kind)} · ${fmt(metres, 2)} m · ${at ? t('pgs.store.onPlan') : t('pgs.store.notOnPlan')}`),
+          bad ? h('span', { class: 'pgs-verdict pgs-v-over' }, iconEl('warn'), t('pgs.fit.bad', { n: bad })) : null),
+        h('div', { class: 'ap-row' }, act, open)));
+    }
+    box.append(ul);
+  });
+}
+
+// Footprint from the fixture: width x depth in metres, doubled for two-sided stencils (gondolas have two faces).
+function sizeFromFixture(f, kind) {
+  const st = stencil(kind);
+  return { w: Math.max(0.2, f.width / 100), h: Math.max(0.2, (f.depth / 100) * (st.twoSided ? 2 : 1)) };
+}
+
+function placeFixture(f) {
+  const kind = FIXTURE_KINDS[f.kind]?.stencil || 'rack';
+  const pg = page();
+  addAt(kind, pg.w / 2, pg.h / 2, { ...sizeFromFixture(f, kind), ref: f.id, label: f.name });
+}
+
+// --- inspector ------------------------------------------------------------------------------------------------------
+
+// Linking keeps a user-typed label, but replaces a label that was just the previous fixture's name. Unlinking deletes
+// the ref key entirely (updateShape would keep a null).
+function paintInspector() {
+  keepFocus(() => {
+    const box = els.insp, pg = page(), sh = selShape();
+    box.textContent = '';
+    const list = select([{ v: '', l: 'pgs.store.none' }, ...pg.shapes.map((s) => ({ v: s.id, l: `=${shapeName(s)} · ${stName(s.kind)}` }))], S.ui.sel || '', (v) => { S.ui.sel = v || null; saveUi(); paintStage(); paintInspector(); });
+    list.dataset.fk = 'shape-list';
+    box.append(field('pgs.store.pick', list));
+    if (!sh) { box.append(h('p', { class: 'ed-hint' }, t('pgs.store.pickHint'))); return; }
+    const upd = (patch) => commit(() => setPage(updateShape(pg, sh.id, patch)));
+    const n = (k, min, max, step, fk) => { const x = numInput(sh[k], (v) => upd({ [k]: v }), { min, max, step }); x.dataset.fk = fk; return x; };
+    const label = textInput(sh.label || '', () => {}, { 'data-fk': 'sh-label', dir: 'auto' });
+    label.addEventListener('change', () => upd({ label: label.value }));
+    box.append(h('div', { class: 'pgs-insp-h' }, stName(sh.kind)), field('pgs.store.label', label),
+      h('div', { class: 'ed-grid2' }, field('pgs.store.x', n('x', -500, 500, 0.05, 'sh-x')), field('pgs.store.y', n('y', -500, 500, 0.05, 'sh-y'))),
+      h('div', { class: 'ed-grid2' }, field('pgs.store.w', n('w', 0.05, 500, 0.05, 'sh-w')), field('pgs.store.h', n('h', 0, 500, 0.05, 'sh-h'))),
+      field('pgs.store.rot', n('rot', -360, 360, 15, 'sh-rot')));
+    if (LINKABLE.has(sh.kind)) {
+      const refs = placedRefs();
+      const opts = [{ v: '', l: 'pgs.store.noLink' }, ...S.P.fixtures.filter((f) => f.id === sh.ref || !refs.has(f.id)).map((f) => ({ v: f.id, l: '=' + (f.name || t('pgs.kind.' + f.kind)) }))];
+      const ls = select(opts, sh.ref || '', (v) => commit(() => {
+        const f = fixtureOf(v);
+        const patch = { ref: v || null };
+        if (f && (!sh.label || (sh.ref && sh.label === fixtureOf(sh.ref)?.name))) patch.label = f.name;
+        let pg2 = updateShape(pg, sh.id, patch);
+        if (!v) pg2 = { ...pg2, shapes: pg2.shapes.map((s) => { if (s.id !== sh.id) return s; const c = { ...s }; delete c.ref; return c; }) };
+        setPage(pg2);
+      }));
+      ls.dataset.fk = 'sh-link';
+      box.append(field('pgs.store.link', ls, 'pgs.store.linkHint'));
+      const f = fixtureOf(sh.ref);
+      if (f) {
+        const bad = fixtureIssues(f.id);
+        box.append(kvRows([['pgs.fx.kind', t('pgs.kind.' + f.kind)], ['pgs.chip.size', `${fmt(f.width)} × ${fmt(f.height)} × ${fmt(f.depth)} cm`],
+          ['pgs.chip.shelvesL', String(f.shelves.length)], ['pgs.store.fit', bad ? t('pgs.fit.bad', { n: bad }) : t('pgs.fit.ok')]]));
+        box.append(h('div', { class: 'ap-actions' },
+          h('a', { class: 'ed-btn ed-sm ed-primary', href: pageHref('pg-plan') + '#fixture=' + encodeURIComponent(f.id), dataset: { act: 'open-planogram' } }, iconEl('external'), t('pgs.store.open')),
+          xb('pgs.store.fitSize', 'fitWidth', () => upd(sizeFromFixture(f, sh.kind)))));
+      }
+    }
+    const ib = (ic, label, fn) => h('button', { type: 'button', class: 'ed-iconbtn', title: t(label), 'aria-label': t(label), html: icon(ic), onclick: fn });
+    box.append(h('div', { class: 'ap-actions' },
+      ib('rotate', 'pgs.store.rotL', () => upd({ rot: ((sh.rot - 90) % 360 + 360) % 360 })),
+      ib('refresh', 'pgs.store.rotR', () => upd({ rot: (sh.rot + 90) % 360 })),
+      ib('up', 'pgs.store.front', () => commit(() => setPage(reorder(pg, sh.id, 'front')))),
+      ib('down', 'pgs.store.back', () => commit(() => setPage(reorder(pg, sh.id, 'back')))),
+      ib('copy', 'pgs.store.dup', duplicateSel),
+      (() => { const b = button('dlg.delete', 'trash', removeSel, 'danger'); b.classList.add('ed-sm'); return b; })()));
+  });
+}
+
+// --- summary ----------------------------------------------------------------------------------------------------
+
+// Floor area from the wall outline polygon (shoelace formula in plan/geom.js) or the page rectangle; equipment
+// footprint excludes zones (areas, not objects) and columns (structure, not equipment).
+function paintSummary() {
+  keepFocus(() => {
+    const pg = page(), box = els.summary;
+    box.textContent = '';
+    const floor = pg.outline ? polygonArea(pg.outline) : pg.w * pg.h;
+    const per = pg.outline ? perimeter(pg.outline) : 2 * (pg.w + pg.h);
+    const equip = pg.shapes.filter((s) => stencil(s.kind).shop && s.kind !== 'zone');
+    const foot = equip.filter((s) => s.kind !== 'column').reduce((x, s) => x + shapeArea(s), 0);
+    const zones = pg.shapes.filter((s) => s.kind === 'zone').reduce((x, s) => x + shapeArea(s), 0);
+    const linked = pg.shapes.filter((s) => s.ref && fixtureOf(s.ref));
+    const metres = linked.reduce((x, s) => x + fixtureOf(s.ref).shelves.reduce((y, q) => y + q.width, 0), 0) / 100;
+    const allMetres = S.P.fixtures.reduce((x, f) => x + f.shelves.reduce((y, q) => y + q.width, 0), 0) / 100;
+    box.append(h('div', { class: 'pgs-tiles pgs-tiles-sm', dataset: { floor: String(Math.round(floor * 10) / 10) } },
+      tile('pgs.store.floor', fmt(floor, 1) + ' m²', t('pgs.store.perimeter', { m: fmt(per, 1) })),
+      tile('pgs.store.foot', fmt(foot, 1) + ' m²', fmt(floor ? (foot / floor) * 100 : 0, 0) + ' % ' + t('pgs.store.ofFloor')),
+      tile('pgs.store.free', fmt(Math.max(0, floor - foot), 1) + ' m²'),
+      tile('pgs.store.zones', fmt(zones, 1) + ' m²'),
+      tile('pgs.store.linked', `${linked.length} / ${S.P.fixtures.length}`, t('pgs.store.linkedSub')),
+      tile('pgs.store.metres', fmt(metres, 2) + ' m', t('pgs.store.metresSub', { m: fmt(allMetres, 2) }))));
+    const kinds = new Map();
+    for (const s of pg.shapes) { const r = kinds.get(s.kind) ?? { n: 0, a: 0 }; r.n++; r.a += stencil(s.kind).flat ? 0 : shapeArea(s); kinds.set(s.kind, r); }
+    const body = h('tbody', {}, [...kinds].sort((a, b) => b[1].n - a[1].n).map(([k, r]) => h('tr', {}, h('th', { scope: 'row' }, stName(k)), h('td', { class: 'pgs-numc' }, String(r.n)), h('td', { class: 'pgs-numc' }, fmt(r.a, 2)))));
+    box.append(h('div', { class: 'pgs-table-wrap' }, h('table', { class: 'pgs-table' }, h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, t('pgs.store.kind')), h('th', { scope: 'col' }, t('pgs.store.count')), h('th', { scope: 'col' }, 'm²'))), body)));
+    const mi = numInput(S.ui.minAisle, (v) => { S.ui.minAisle = v; saveUi(); paintIssues(); }, { min: 0.3, max: 3, step: 0.05 });
+    mi.dataset.fk = 'min-aisle';
+    box.append(field('pgs.store.minAisle', mi, 'pgs.store.minAisleHint'));
+  });
+}
+const tile = (label, value, sub) => h('div', { class: 'pgs-tile' }, h('div', { class: 'pgs-tile-l' }, t(label)), h('div', { class: 'pgs-tile-v' }, value), sub ? h('div', { class: 'pgs-tile-s' }, sub) : null);
+
+// --- settings -----------------------------------------------------------------------------------------------------
+
+function paintSettings() {
+  keepFocus(() => {
+    const pg = page(), box = els.settings;
+    box.textContent = '';
+    const name = textInput(pg.name, () => {}, { 'data-fk': 'pg-name' });
+    name.addEventListener('change', () => commit(() => setPage({ ...pg, name: name.value.slice(0, 60) || pg.name })));
+    const size = (k, fk) => { const x = numInput(pg[k], (v) => commit(() => setPage({ ...page(), [k]: v })), { min: 1, max: 500, step: 0.1 }); x.dataset.fk = fk; return x; };
+    const grid = select([0, 0.05, 0.1, 0.25, 0.5].map((v) => ({ v, l: v ? `=${v * 100} cm` : 'pgs.store.noSnap' })), S.P.plan.grid, (v) => commit(() => { S.P.plan.grid = +v; }));
+    grid.dataset.fk = 'snap';
+    box.append(field('pgs.store.pageName', name),
+      h('div', { class: 'ed-grid2' }, field('pgs.store.pw', size('w', 'pg-w')), field('pgs.store.ph', size('h', 'pg-h'))),
+      field('pgs.store.snap', grid),
+      h('div', { class: 'ap-actions' },
+        xb('pgs.store.rectOutline', 'layout', () => commit(() => setPage({ ...page(), outline: rectOutline(page().w, page().h) }))),
+        pg.outline ? xb('pgs.store.noOutline', 'close', () => commit(() => { const p2 = { ...page() }; delete p2.outline; setPage(p2); })) : null,
+        xb('pgs.prj.demo', 'refresh', loadDemoPlan)),
+      h('p', { class: 'ed-hint' }, pg.outline ? t('pgs.store.outlineHint', { n: pg.outline.length }) : t('pgs.store.rectHint')));
+  });
+}
+
+// KNOWN DEFECT: this commit also appends demo fixtures and products, but the store page history snapshots P.plan
+// only, so undo restores the old plan while the added fixtures/products stay. Fix: snapshot the whole project here
+// (or push a project-level snapshot for this action).
+async function loadDemoPlan() {
+  if (!(await confirmDialog(t('pgs.store.demoQ'), t('pgs.store.demoText'), t('pgs.prj.demo')))) return;
+  const d = buildDemo();
+  // The demo plan links demo fixtures: they come along when missing.
+  commit(() => {
+    S.P.plan = d.project.plan;
+    for (const f of d.project.fixtures) if (!fixtureOf(f.id)) S.P.fixtures.push(f);
+    for (const p of d.project.products) if (!S.P.products.some((x) => x.id === p.id)) S.P.products.push(p);
+    S.ui.page = 0; S.ui.sel = null;
+  });
+}
+
+// --- export ---------------------------------------------------------------------------------------------------------
+
+// Standalone SVG exports need the plan stylesheet embedded, otherwise classes render unstyled outside this page.
+const withCss = (svg) => svg.replace(/^<svg([^>]*)>/, (m) => `${m}<style>${planCss()}</style>`);
+const fileBase = () => String(page().name || 'store-plan').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60);
+
+function exportSVG() { download(withCss(pageSVG(page(), { pxPerMetre: 50, ruler: true, dims: true, scale: true, layers: false })), fileBase() + '.svg', 'image/svg+xml'); }
+async function exportPNG() {
+  try { download(await svgToPng(withCss(pageSVG(page(), { pxPerMetre: 50, ruler: true, dims: true, scale: true, layers: false })), 2), fileBase() + '.png', 'image/png'); } catch (e) { toast(t('err.generic', { msg: e.message }), 'error'); }
+}
+
+// Floor plans print at architectural scales 1:50 / 1:100 / 1:200; the fit hint compares the drawing with the paper.
+function printDialog() {
+  const info = h('div', { class: 'ed-hint', role: 'status' });
+  const svgOf = () => withCss(pageSVG(page(), { unit: 'mm', ratio: S.ui.ratio, ruler: true, dims: true, scale: true, layers: false }));
+  const paint = () => {
+    const [w, hh] = svgMm(svgOf());
+    const [pw, ph] = printable(S.ui.paper, S.ui.landscape);
+    const fits = w <= pw + 0.5 && hh <= ph + 0.5;
+    info.className = 'ed-hint' + (fits ? '' : ' ed-hint-warn');
+    info.textContent = t('pgs.p.size', { w: fmt(w, 0), h: fmt(hh, 0), pw: fmt(pw, 0), ph: fmt(ph, 0) }) + ' ' + (fits ? t('pgs.p.fits') : t('pgs.p.noFit'));
+  };
+  const body = h('div', { class: 'ed-fields' },
+    group('pgs.p.ratio', seg([50, 100, 200].map((v) => ({ v, l: '=1:' + v })), S.ui.ratio, (v) => { S.ui.ratio = +v; saveUi(); paint(); }, 'pgs.p.ratio')),
+    group('pgs.p.paper', seg([{ v: 'a4', l: '=A4' }, { v: 'a3', l: '=A3' }], S.ui.paper, (v) => { S.ui.paper = v; saveUi(); paint(); }, 'pgs.p.paper')),
+    field('pgs.p.landscape', toggle(S.ui.landscape, (v) => { S.ui.landscape = v; saveUi(); paint(); })), info);
+  paint();
+  openDialog({ title: t('pgs.p.title'), body, buttons: [{ label: t('dlg.cancel'), value: null }, { label: t('pgs.p.go'), value: 'go', primary: true }] }).then((v) => {
+    if (v !== 'go') return;
+    printSheet(h('div', { class: 'pgs-print-in' }, h('div', { class: 'pgs-print-svg', html: svgOf() }), h('p', { class: 'pgs-print-cap' }, `${page().name} · 1:${S.ui.ratio}`)), { paper: S.ui.paper, landscape: S.ui.landscape });
+  });
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Start
+
+document.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+  if (isEditable(e.target) && e.target.type !== 'checkbox' && e.target.type !== 'range') return;
+  if (document.querySelector('.ed-backdrop')) return;
+  const k = e.key.toLowerCase();
+  if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+  else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
+});
+
+// A project saved by the planogram page may predate the store plan: normalizeProject adds the default page.
+function load() {
+  const p = loadProject();
+  if (p) return p;
+  const d = buildDemo();
+  if (!versionsList().length) versionsSave(d.versions);
+  saveProject(d.project);
+  return d.project;
+}
+
+startShell('store', () => render());
+S.P = load();
+if (!S.P.plan.pages.length) S.P = normalizeProject(S.P);
+render();
+window.addEventListener('storage', (e) => { if (e.key === 'pgs-project' && e.newValue) { const p = loadProject(); if (p) { S.P = p; refresh(); } } });

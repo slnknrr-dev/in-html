@@ -1,0 +1,103 @@
+/* language-studio/rhyme.css - the rhyme and meter workshop (rhyme-tools.js): rh-* classes. Loaded last (after
+   app.css), so it may reuse and override ls-* pieces at equal specificity.
+
+   CONTRACT
+   - Quality grades good / fair / poor are local tokens (--rh-good/fair/poor) declared on .rh-tool: one place to tune,
+     and they scope to the workshop instead of polluting :root. Fixed green/amber/red hues, because a rhyme grade must
+     read the same in both themes; tints via color-mix(..., transparent) adapt to any background.
+   - A grade is shown three ways at once (pill text, coloured underline, tint) so it does not rely on hue alone.
+   - Syllables are <button>s (click moves the stress): their button chrome is reset to inherit the verse typography,
+     and :focus-visible gets the hover background so keyboard users see where they are. */
+.rh-tool { --rh-good: #16a34a; --rh-fair: #ca8a04; --rh-poor: #dc2626; --rh-slot: color-mix(in srgb, var(--ed-muted) 22%, transparent); }
+.rh-tool .ed-field { max-width: none; }
+.rh-ctl .ed-field { min-width: 150px; }
+.rh-ctl .ed-field-check { min-width: 0; flex-direction: row; align-items: center; gap: 6px; }
+.rh-pattern { margin-top: 4px; max-width: 160px; }
+.rh-textfield { width: 100%; }
+.rh-text { width: 100%; min-height: 96px; font-size: 16px; line-height: 1.55; resize: vertical; }
+.rh-meta p { margin: 2px 0; }
+.rh-others { display: flex; flex-wrap: wrap; gap: 6px; }
+.rh-summary { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; font-weight: 600; }
+.rh-legend { font-weight: 400; color: var(--ed-muted); }
+.rh-lines { display: flex; flex-direction: column; gap: 8px; }
+.rh-gapline { height: 4px; }
+.rh-line { border: 1px solid var(--ed-border); border-radius: var(--ed-radius); padding: 8px 10px; background: var(--ed-panel); cursor: pointer; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.rh-line.rh-on { border-color: var(--ed-accent); box-shadow: 0 0 0 1px var(--ed-accent); }
+.rh-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.rh-head .ls-say { margin-left: auto; }
+.rh-letter { display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; padding: 0 4px; border-radius: 6px; background: var(--ed-accent-weak); color: var(--ed-accent-text, var(--ed-text)); font-weight: 700; }
+.rh-target { color: var(--ed-muted); }
+.rh-pill { font-size: 12.5px; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.rh-pill.rh-good { color: var(--rh-good); } .rh-pill.rh-fair { color: var(--rh-fair); } .rh-pill.rh-poor { color: var(--rh-poor); }
+.rh-words { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 18px; line-height: 1.4; }
+.rh-w { display: inline-flex; border-radius: 6px; padding: 0 2px; border-bottom: 3px solid transparent; }
+.rh-w.rh-good { border-bottom-color: var(--rh-good); background: color-mix(in srgb, var(--rh-good) 9%, transparent); }
+.rh-w.rh-fair { border-bottom-color: var(--rh-fair); background: color-mix(in srgb, var(--rh-fair) 12%, transparent); }
+.rh-w.rh-poor { border-bottom-color: var(--rh-poor); background: color-mix(in srgb, var(--rh-poor) 10%, transparent); }
+.rh-w.rh-end { font-weight: 600; }
+.rh-w.rh-inner { outline: 2px dotted var(--rh-inner, #7c3aed); outline-offset: 1px; }
+.rh-inner1 { --rh-inner: #0891b2; } .rh-inner2 { --rh-inner: #db2777; } .rh-inner3 { --rh-inner: #65a30d; }
+.rh-syl { font: inherit; color: inherit; background: none; border: 0; padding: 0 1px; margin: 0; cursor: pointer; border-radius: 4px; }
+.rh-syl + .rh-syl { border-left: 1px dotted color-mix(in srgb, var(--ed-muted) 60%, transparent); }
+.rh-syl:hover, .rh-syl:focus-visible { background: var(--ed-hover); outline: none; }
+.rh-syl.rh-st { text-decoration: underline 2px; text-underline-offset: 4px; color: var(--ed-accent); }
+.rh-syl.rh-st2 { text-decoration: underline 1px dotted; text-underline-offset: 4px; }
+.rh-syl.rh-elided { opacity: 0.5; font-style: italic; }
+.rh-syl.rh-i-shift { box-shadow: inset 0 -2px 0 var(--rh-poor); }
+.rh-cons { cursor: default; }
+/* Meter slots: one box per metrical position, taller when strong (ictus). Deviations from the meter are drawn with
+   inset box-shadows of different shapes (full ring = stress shift, thin ring = pyrrhic, bottom bar = spondee, right
+   bar = misplaced caesura): inset shadows add no layout size, and several kinds stay distinguishable without colour. */
+.rh-slots, .rh-sounds { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 3px; }
+.rh-slot { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 20px; padding: 0 3px; border-radius: 4px; background: var(--rh-slot); color: var(--ed-muted); font-size: 11px; line-height: 1; }
+.rh-slot.rh-strong { height: 28px; min-width: 28px; background: color-mix(in srgb, var(--ed-muted) 38%, transparent); color: var(--ed-text); font-weight: 600; }
+.rh-slot.rh-missing { background: none; border: 1px dashed var(--rh-poor); }
+.rh-slot.rh-extra { background: color-mix(in srgb, var(--rh-poor) 30%, transparent); }
+.rh-slot.rh-i-shift { box-shadow: inset 0 0 0 2px var(--rh-poor); }
+.rh-slot.rh-i-pyrrhic { box-shadow: inset 0 0 0 1px var(--rh-fair); }
+.rh-slot.rh-i-spondee { box-shadow: inset 0 -2px 0 var(--rh-fair); }
+.rh-slot.rh-i-caesura { box-shadow: inset -2px 0 0 var(--rh-poor); }
+.rh-caesura { width: 2px; height: 28px; background: var(--ed-border-strong); margin: 0 3px; border-radius: 1px; }
+/* Rhyme comparison: sound segments of the two endings aligned; eq / near / off tint by the grade tokens; .rh-sv
+   marks the stressed vowel, the anchor of a rhyme. */
+.rh-seg { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 24px; padding: 0 4px; border-radius: 4px; font-size: 13px; background: var(--rh-slot); }
+.rh-seg.rh-sv { min-width: 28px; height: 28px; font-weight: 700; }
+.rh-seg.rh-eq { background: color-mix(in srgb, var(--rh-good) 30%, transparent); }
+.rh-seg.rh-near { background: color-mix(in srgb, var(--rh-fair) 32%, transparent); }
+.rh-seg.rh-off { background: color-mix(in srgb, var(--rh-poor) 26%, transparent); }
+.rh-seg.rh-sup { opacity: 0.75; }
+.rh-arrow { color: var(--ed-muted); font-size: 13px; margin: 0 4px; }
+.rh-kind { font-size: 12px; }
+.rh-active { border: 1px solid var(--ed-border); border-radius: var(--ed-radius); padding: 10px; display: flex; flex-direction: column; gap: 10px; background: var(--ed-panel-2, var(--ed-panel)); }
+.rh-active h4 { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.rh-active h5 { margin: 0 0 4px; }
+.rh-endbox { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 20px; }
+.rh-stem { padding: 2px 6px; border-radius: 6px; background: color-mix(in srgb, #16a34a 14%, transparent); }
+.rh-squares { display: inline-flex; flex-wrap: wrap; gap: 3px; }
+.rh-sq { width: 1.6em; height: 1.6em; padding: 0; text-align: center; font: inherit; font-size: 18px; border: 2px solid var(--ed-border-strong); border-radius: 6px; background: var(--ed-bg); color: var(--ed-text); }
+.rh-sq:focus { border-color: var(--ed-accent); outline: none; }
+.rh-sq-new { border-style: dashed; opacity: 0.7; }
+.rh-field { display: flex; flex-direction: column; gap: 4px; }
+.rh-end-opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.rh-end-opt { display: inline-flex; gap: 6px; align-items: baseline; }
+.rh-end-opt.rh-good { border-color: var(--rh-good); } .rh-end-opt.rh-fair { border-color: var(--rh-fair); } .rh-end-opt.rh-poor { opacity: 0.75; }
+.rh-end-opt small { color: var(--ed-muted); }
+.rh-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.rh-col { min-width: 0; }
+.rh-cands { display: flex; flex-direction: column; gap: 4px; }
+/* Rhyme candidate: named grid areas (word | score, then the bar across) keep the layout readable in CSS; the left
+   border carries the grade colour. */
+.rh-cand { display: grid; grid-template-columns: auto 1fr; grid-template-areas: 'w s' 'b b'; gap: 0 8px; text-align: left; font: inherit; color: inherit; background: var(--ed-bg); border: 1px solid var(--ed-border); border-left: 4px solid var(--ed-border); border-radius: 6px; padding: 3px 8px; cursor: pointer; min-width: 0; }
+.rh-cand:hover { background: var(--ed-hover); }
+.rh-cand b { grid-area: w; }
+.rh-cand small { grid-area: s; color: var(--ed-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; align-self: center; }
+.rh-cand.rh-good { border-left-color: var(--rh-good); } .rh-cand.rh-fair { border-left-color: var(--rh-fair); } .rh-cand.rh-poor { border-left-color: var(--rh-poor); }
+.rh-bar { grid-area: b; height: 3px; background: var(--rh-slot); border-radius: 2px; margin-top: 2px; }
+.rh-bar span { display: block; height: 100%; background: var(--ed-accent); border-radius: 2px; }
+.rh-word p { margin: 4px 0; }
+.rh-ipa { font-family: var(--ed-mono); font-size: 13px; }
+@media (max-width: 560px) {
+  .rh-words { font-size: 16px; }
+  .rh-ctl .ed-field { min-width: 0; flex: 1 1 140px; }
+  .rh-cand small { white-space: normal; }
+}

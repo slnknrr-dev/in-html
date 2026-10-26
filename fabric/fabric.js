@@ -1,0 +1,201 @@
+// fabric/fabric.js - fabrics as serialisable descriptions: a structure (woven weave, knit, jacquard), warp and weft
+// colour orders (plain colours, stripes, checks, tartan setts, houndstooth), a visual thread density and the physical
+// properties used by rendering and simulation (mass per area, thickness, stretch, bending stiffness, shear, sheen,
+// roughness, friction). Presets cover shirting, suiting, denim, satin for lapels, linings, interfacings, canvas,
+// pocketing and the knits of merch (jersey, rib, French terry, fleece).
+//
+//   FABRICS (presets), normalizeFabric(spec) -> fabric, fabricWeave(fabric) -> weave | knit, colorOrder(fabric, 'warp')
+//   parseSett('K4 R/24 ...') -> [{ color, n }], TARTAN_COLORS, simParams(fabric) -> { density, stretch, bend, ... }
+//   averageColor(fabric) -> '#rrggbb'
+//
+// A fabric is pure data (JSON-serialisable): presets are partial descriptions merged by normalizeFabric, which is
+// the only gate for untrusted input. Physical props use textile units (gsm, mm, % stretch) because those are what
+// fabric specifications publish; simParams converts them to simulator units in one place.
+
+import { weave, knit, jacquard, WEAVES, KNITS } from './weave.js';
+import { normalizeDye } from './dye.js';
+
+export const TARTAN_COLORS = {
+  K: '#1b1b1f', R: '#b3202a', G: '#1f5c3a', B: '#1f3a6e', Y: '#e0b229', W: '#f2efe6', N: '#7c7c7c', A: '#5a8bc4',
+  P: '#5b2d6e', O: '#d8702a', T: '#a6784a', LG: '#7fa86b', LB: '#9fc0e0', DB: '#14213d', DG: '#123821', DR: '#6e1018',
+};
+
+/**
+ * Tartan thread count: tokens like "K4 R24 K24 Y4" (colour letters and thread counts); a "/" before a count marks a
+ * pivot (half sett, the standard notation of symmetric tartans). Symmetric setts are reflected at the pivots.
+ */
+// Tartan notation: colour code + thread count, '/' marks a pivot. Any sett with more than one stripe is treated as
+// symmetric and reflected about its first and last stripes (the overwhelmingly common case); asymmetric setts
+// cannot be expressed. KNOWN DEFECT: the hex-colour fallback tests m[1], which matches only [A-Za-z]+, so a code
+// like 'a1b2c3' is never accepted and only all-letter hex codes ('abcdef') work. Fix: allow [0-9A-Za-z] in the
+// token regex and test the hex form before the letter codes.
+export function parseSett(text) {
+  const toks = String(text).trim().split(/[\s,]+/).filter(Boolean).map((t) => {
+    const m = /^([A-Za-z]+)(\/)?(\d+)$/.exec(t);
+    if (!m) return null;
+    const code = m[1].toUpperCase();
+    return { color: TARTAN_COLORS[code] || (/^[0-9a-f]{6}$/i.test(m[1]) ? '#' + m[1] : '#888888'), code, n: Number(m[3]), pivot: !!m[2] };
+  }).filter(Boolean);
+  if (!toks.length) return [];
+  const symmetric = toks.some((t) => t.pivot) || toks.length > 1;
+  if (!symmetric) return toks.map(({ color, n }) => ({ color, n }));
+  // Reflect: A B C D -> A B C D C B (the end colours are pivots, counted once each).
+  const fwd = toks.map(({ color, n }) => ({ color, n }));
+  const back = fwd.slice(1, -1).reverse();
+  return [...fwd, ...back];
+}
+
+// Identity marker: makes each preset line greppable and leaves room for per-preset normalisation without edits.
+const P = (o) => o;
+export const FABRICS = {
+  poplin: P({ group: 'shirting', structure: { type: 'woven', weave: 'plain' }, color: '#f4f5f7', threadsPerCm: 6, props: { gsm: 115, thickness: 0.22, stretchWarp: 1.5, stretchWeft: 2.5, bending: 0.3, shear: 0.4, sheen: 0.18, roughness: 0.55, friction: 0.45 } }),
+  oxford: P({ group: 'shirting', structure: { type: 'woven', weave: 'basket', params: { n: 2 } }, color: '#cfe0f3', warp: [{ color: '#a9c6ea', n: 1 }, { color: '#f4f7fb', n: 1 }], threadsPerCm: 5, props: { gsm: 140, thickness: 0.3, stretchWarp: 1.5, stretchWeft: 2, bending: 0.38, shear: 0.45, sheen: 0.1, roughness: 0.7, friction: 0.55 } }),
+  gingham: P({ group: 'shirting', structure: { type: 'woven', weave: 'plain' }, warp: [{ color: '#2d5aa0', n: 6 }, { color: '#ffffff', n: 6 }], weft: [{ color: '#2d5aa0', n: 6 }, { color: '#ffffff', n: 6 }], threadsPerCm: 6, props: { gsm: 120, thickness: 0.22, stretchWarp: 1.5, stretchWeft: 2.5, bending: 0.3, shear: 0.4, sheen: 0.12, roughness: 0.6, friction: 0.45 } }),
+  denim: P({ group: 'casual', structure: { type: 'woven', weave: 'twill', params: { up: 3, down: 1, dir: 'Z' } }, warp: [{ color: '#24395f', n: 1 }], weft: [{ color: '#e8e1cf', n: 1 }], threadsPerCm: 4, props: { gsm: 400, thickness: 0.75, stretchWarp: 1, stretchWeft: 2, bending: 0.85, shear: 0.6, sheen: 0.08, roughness: 0.85, friction: 0.7 } }),
+  suiting: P({ group: 'tailoring', structure: { type: 'woven', weave: 'twill', params: { up: 2, down: 2, dir: 'Z' } }, color: '#2f3b52', threadsPerCm: 7, props: { gsm: 260, thickness: 0.45, stretchWarp: 1.5, stretchWeft: 2.5, bending: 0.55, shear: 0.5, sheen: 0.14, roughness: 0.6, friction: 0.5 } }),
+  flannel: P({ group: 'tailoring', structure: { type: 'woven', weave: 'twill', params: { up: 2, down: 2 } }, color: '#6d6f73', threadsPerCm: 5, props: { gsm: 330, thickness: 0.7, stretchWarp: 2, stretchWeft: 3, bending: 0.6, shear: 0.55, sheen: 0.04, roughness: 0.9, friction: 0.65 } }),
+  tweed: P({ group: 'tailoring', structure: { type: 'woven', weave: 'herringbone', params: { up: 2, down: 2, period: 8 } }, warp: [{ color: '#6b5a45', n: 1 }], weft: [{ color: '#c9b79c', n: 1 }], threadsPerCm: 3, props: { gsm: 420, thickness: 1.0, stretchWarp: 2, stretchWeft: 3, bending: 0.8, shear: 0.6, sheen: 0.03, roughness: 0.95, friction: 0.75 } }),
+  barathea: P({ group: 'tailoring', structure: { type: 'woven', weave: 'brokenTwill', params: { up: 2, down: 2 } }, color: '#16171b', threadsPerCm: 8, props: { gsm: 300, thickness: 0.5, stretchWarp: 1.5, stretchWeft: 2, bending: 0.6, shear: 0.5, sheen: 0.12, roughness: 0.65, friction: 0.5 } }),
+  houndstooth: P({ group: 'tailoring', structure: { type: 'woven', weave: 'twill', params: { up: 2, down: 2 } }, warp: [{ color: '#1c1c1c', n: 4 }, { color: '#f1ede3', n: 4 }], weft: [{ color: '#1c1c1c', n: 4 }, { color: '#f1ede3', n: 4 }], threadsPerCm: 5, props: { gsm: 320, thickness: 0.6, stretchWarp: 1.5, stretchWeft: 2.5, bending: 0.6, shear: 0.55, sheen: 0.06, roughness: 0.8, friction: 0.6 } }),
+  tartan: P({ group: 'tailoring', structure: { type: 'woven', weave: 'twill', params: { up: 2, down: 2 } }, sett: 'K/4 R24 K24 Y/4', threadsPerCm: 6, props: { gsm: 300, thickness: 0.6, stretchWarp: 1.5, stretchWeft: 2.5, bending: 0.55, shear: 0.5, sheen: 0.06, roughness: 0.8, friction: 0.6 } }),
+  satin: P({ group: 'satin', structure: { type: 'woven', weave: 'satin', params: { shafts: 8, move: 3, face: 'warp' } }, color: '#121317', threadsPerCm: 14, props: { gsm: 110, thickness: 0.2, stretchWarp: 1, stretchWeft: 2, bending: 0.18, shear: 0.3, sheen: 0.85, roughness: 0.18, friction: 0.25 } }),
+  charmeuse: P({ group: 'satin', structure: { type: 'woven', weave: 'satin', params: { shafts: 5, face: 'warp' } }, color: '#d9b7a4', threadsPerCm: 14, props: { gsm: 85, thickness: 0.15, stretchWarp: 1.5, stretchWeft: 3, bending: 0.1, shear: 0.25, sheen: 0.75, roughness: 0.22, friction: 0.25 } }),
+  linen: P({ group: 'casual', structure: { type: 'woven', weave: 'plain' }, color: '#d9cdb4', threadsPerCm: 4, props: { gsm: 180, thickness: 0.35, stretchWarp: 1, stretchWeft: 1.5, bending: 0.5, shear: 0.6, sheen: 0.06, roughness: 0.85, friction: 0.6 } }),
+  lining: P({ group: 'inner', structure: { type: 'woven', weave: 'twill', params: { up: 2, down: 1 } }, color: '#6b4f8c', threadsPerCm: 12, props: { gsm: 75, thickness: 0.12, stretchWarp: 1.5, stretchWeft: 2.5, bending: 0.08, shear: 0.25, sheen: 0.5, roughness: 0.3, friction: 0.2 } }),
+  habotai: P({ group: 'inner', structure: { type: 'woven', weave: 'plain' }, color: '#e8d9c8', threadsPerCm: 14, props: { gsm: 50, thickness: 0.08, stretchWarp: 1, stretchWeft: 2, bending: 0.05, shear: 0.2, sheen: 0.45, roughness: 0.3, friction: 0.2 } }),
+  interfacing: P({ group: 'inner', structure: { type: 'woven', weave: 'plain' }, color: '#f7f7f2', threadsPerCm: 10, props: { gsm: 60, thickness: 0.2, stretchWarp: 1, stretchWeft: 2, bending: 0.6, shear: 0.6, sheen: 0, roughness: 0.9, friction: 0.6 } }),
+  canvas: P({ group: 'inner', structure: { type: 'woven', weave: 'plain' }, color: '#e6dcc4', threadsPerCm: 4, props: { gsm: 260, thickness: 0.6, stretchWarp: 0.5, stretchWeft: 1, bending: 0.95, shear: 0.8, sheen: 0, roughness: 0.95, friction: 0.7 } }),
+  pocketing: P({ group: 'inner', structure: { type: 'woven', weave: 'twill', params: { up: 2, down: 1 } }, color: '#ece7dc', threadsPerCm: 9, props: { gsm: 120, thickness: 0.2, stretchWarp: 1, stretchWeft: 2, bending: 0.3, shear: 0.4, sheen: 0.1, roughness: 0.6, friction: 0.5 } }),
+  cottonCanvas: P({ group: 'merch', structure: { type: 'woven', weave: 'basket', params: { n: 2 } }, color: '#efe7d6', threadsPerCm: 3, props: { gsm: 340, thickness: 0.7, stretchWarp: 0.8, stretchWeft: 1.2, bending: 0.85, shear: 0.7, sheen: 0.03, roughness: 0.95, friction: 0.7 } }),
+  jersey: P({ group: 'merch', structure: { type: 'knit', knit: 'jersey' }, color: '#f2f2f0', threadsPerCm: 7, props: { gsm: 165, thickness: 0.4, stretchWarp: 15, stretchWeft: 35, bending: 0.12, shear: 0.2, sheen: 0.05, roughness: 0.8, friction: 0.55 } }),
+  rib: P({ group: 'merch', structure: { type: 'knit', knit: 'rib1x1' }, color: '#f2f2f0', threadsPerCm: 7, props: { gsm: 280, thickness: 0.8, stretchWarp: 25, stretchWeft: 80, bending: 0.2, shear: 0.25, sheen: 0.04, roughness: 0.85, friction: 0.6 } }),
+  frenchTerry: P({ group: 'merch', structure: { type: 'knit', knit: 'frenchTerry' }, color: '#b7bec9', threadsPerCm: 6, props: { gsm: 300, thickness: 0.9, stretchWarp: 10, stretchWeft: 25, bending: 0.35, shear: 0.3, sheen: 0.03, roughness: 0.9, friction: 0.6 } }),
+  fleece: P({ group: 'merch', structure: { type: 'knit', knit: 'fleece' }, color: '#3a3f4a', threadsPerCm: 6, props: { gsm: 330, thickness: 1.4, stretchWarp: 8, stretchWeft: 20, bending: 0.4, shear: 0.35, sheen: 0.02, roughness: 0.95, friction: 0.7 } }),
+  pique: P({ group: 'merch', structure: { type: 'knit', knit: 'pique' }, color: '#ffffff', threadsPerCm: 7, props: { gsm: 210, thickness: 0.6, stretchWarp: 10, stretchWeft: 25, bending: 0.2, shear: 0.25, sheen: 0.04, roughness: 0.85, friction: 0.55 } }),
+  broadcloth: P({ group: 'tailoring', structure: { type: 'woven', weave: 'plain' }, color: '#1d1f24', threadsPerCm: 6, props: { gsm: 420, thickness: 0.85, stretchWarp: 1.5, stretchWeft: 2, bending: 0.75, shear: 0.55, sheen: 0.06, roughness: 0.8, friction: 0.6 } }),
+  velvet: P({ group: 'satin', structure: { type: 'woven', weave: 'plain' }, color: '#5a1f2b', threadsPerCm: 10, props: { gsm: 290, thickness: 1.1, stretchWarp: 1.5, stretchWeft: 3, bending: 0.45, shear: 0.35, sheen: 0.55, roughness: 0.35, friction: 0.55 } }),
+  nylon: P({ group: 'outerwear', structure: { type: 'woven', weave: 'basket', params: { n: 2 } }, color: '#2c3a2a', threadsPerCm: 16, props: { gsm: 70, thickness: 0.12, stretchWarp: 0.8, stretchWeft: 1.2, bending: 0.25, shear: 0.3, sheen: 0.35, roughness: 0.35, friction: 0.25 } }),
+  gabardine: P({ group: 'outerwear', structure: { type: 'woven', weave: 'twill', params: { up: 2, down: 1, dir: 'Z' } }, color: '#b49a6c', threadsPerCm: 9, props: { gsm: 240, thickness: 0.45, stretchWarp: 1, stretchWeft: 1.5, bending: 0.6, shear: 0.5, sheen: 0.1, roughness: 0.6, friction: 0.5 } }),
+  wadding: P({ group: 'inner', structure: { type: 'knit', knit: 'fleece' }, color: '#f4f2ec', threadsPerCm: 3, props: { gsm: 120, thickness: 5, stretchWarp: 3, stretchWeft: 3, bending: 0.15, shear: 0.2, sheen: 0, roughness: 1, friction: 0.7 } }),
+};
+
+// The usual fabric of each material slot of a draft (garment/details.js materials).
+export const MATERIAL_DEFAULTS = { shell: 'suiting', lining: 'lining', satin: 'satin', contrast: 'linen', rib: 'rib', interfacing: 'interfacing', canvas: 'canvas', pocketing: 'pocketing', wadding: 'wadding' };
+
+const hexRe = /^#[0-9a-f]{6}$/i;
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+const numOr = (v, d) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+
+// Complete, clamped fabric from a partial description { preset, color, structure, warp, weft, sett, props }.
+// Every numeric field is clamped and every structure name validated, so a hostile file cannot request a 10^6-cell
+// drawdown or a negative mass. `props` accepts only keys the preset defines (k in props): unknown keys are ignored.
+// KNOWN DEFECT: FABRICS[s.preset] follows the prototype chain, so preset 'constructor' yields base = Object and
+// undefined structure / props (NaN-like props downstream). Fix: Object.hasOwn(FABRICS, s.preset).
+export function normalizeFabric(spec = {}) {
+  const s = typeof spec === 'string' ? { preset: spec } : spec || {};
+  const base = FABRICS[s.preset] || FABRICS.poplin;
+  const preset = FABRICS[s.preset] ? s.preset : 'poplin';
+  const st = { ...base.structure, ...(s.structure || {}) };
+  if (st.type === 'knit' && !KNITS[st.knit]) st.knit = 'jersey';
+  if (st.type === 'woven' && st.weave === 'custom') {
+    // A drawdown edited cell by cell: cells as a string of 0 / 1 over w x h (2..64).
+    st.w = clamp(Math.round(numOr(st.w, 4)), 2, 64); st.h = clamp(Math.round(numOr(st.h, 4)), 2, 64);
+    st.cells = typeof st.cells === 'string' && /^[01]+$/.test(st.cells) && st.cells.length === st.w * st.h ? st.cells : '1'.repeat(st.w * st.h).split('').map((_, i) => ((i % st.w) + Math.floor(i / st.w)) % 2 ? '0' : '1').join('');
+  } else if (st.type === 'jacquard') {
+    // Jacquard: a small grey bitmap (base64 bytes, w x h up to 128) with a figure and a ground weave.
+    st.w = clamp(Math.round(numOr(st.w, 16)), 2, 128); st.h = clamp(Math.round(numOr(st.h, 16)), 2, 128);
+    if (typeof st.bitmap !== 'string') st.bitmap = '';
+    st.figure = WEAVES[st.figure] ? st.figure : 'satin'; st.ground = WEAVES[st.ground] ? st.ground : 'satin';
+  } else if (st.type === 'woven' && !WEAVES[st.weave]) st.weave = 'plain';
+  if (!['woven', 'knit', 'jacquard'].includes(st.type)) { st.type = 'woven'; st.weave = 'plain'; }
+  const order = (o) => (Array.isArray(o) ? o.filter((x) => x && hexRe.test(x.color)).map((x) => ({ color: x.color, n: clamp(Math.round(numOr(x.n, 1)), 1, 200) })) : null);
+  const props = { ...base.props };
+  for (const [k, v] of Object.entries(s.props || {})) if (k in props) props[k] = numOr(v, props[k]);
+  props.gsm = clamp(props.gsm, 20, 1200); props.thickness = clamp(props.thickness, 0.03, 5);
+  for (const k of ['bending', 'shear', 'sheen', 'roughness', 'friction']) props[k] = clamp(props[k], 0, 1);
+  const color = hexRe.test(s.color) ? s.color : base.color || '#cccccc';
+  const sett = typeof s.sett === 'string' ? s.sett : base.sett || null;
+  return {
+    preset, name: s.name || preset, structure: st, color,
+    // An explicit colour overrides the preset's colour order (a blue oxford is plain blue, not the preset's stripes).
+    warp: order(s.warp) || (s.color ? null : order(base.warp)) || null,
+    weft: order(s.weft) || (s.color ? null : order(base.weft)) || null,
+    sett, threadsPerCm: clamp(numOr(s.threadsPerCm, base.threadsPerCm || 6), 1, 40), props,
+    bitmap: s.bitmap || null,
+    // dyeing over the finished fabric (fabric/dye.js); lies in the garment's frame, not in the weave tile
+    dye: normalizeDye(s.dye),
+  };
+}
+
+// Weave matrix (woven / jacquard) or knit chart.
+// Single dispatch from the serialised structure to a cell matrix (woven, custom, jacquard) or a stitch chart (knit).
+// A jacquard bitmap of the wrong size falls back to a 2x2 block figure so the preview still shows the effect.
+export function fabricWeave(f) {
+  const st = f.structure;
+  if (st.type === 'knit') return knit(st.knit);
+  if (st.type === 'woven' && st.weave === 'custom') {
+    const cells = new Uint8Array(st.w * st.h);
+    for (let i = 0; i < cells.length; i++) cells[i] = st.cells.charCodeAt(i) === 49 ? 1 : 0;
+    return { w: st.w, h: st.h, cells, kind: 'custom' };
+  }
+  if (st.type === 'jacquard') {
+    const bytes = decodeB64(st.bitmap);
+    const data = bytes.length === st.w * st.h ? bytes : new Uint8Array(st.w * st.h).map((_, i) => (((i % st.w) < st.w / 2) !== (Math.floor(i / st.w) < st.h / 2) ? 0 : 255));
+    const face = (name, warpFace) => (name === 'satin' ? weave('satin', { shafts: 5, face: warpFace ? 'warp' : 'weft' }) : weave(name, st.params || {}));
+    return jacquard({ w: st.w, h: st.h, channels: 1, data }, { figure: face(st.figure, true), ground: face(st.ground, false) });
+  }
+  return weave(st.weave, st.params || {});
+}
+
+// atob in browsers, Buffer in Node: the module runs in both without a codec import.
+function decodeB64(s) {
+  if (!s) return new Uint8Array(0);
+  try {
+    if (typeof atob === 'function') { const b = atob(s); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+    return new Uint8Array(Buffer.from(s, 'base64'));
+  } catch { return new Uint8Array(0); }
+}
+
+// Colour per thread over one colour repeat: the sett, the explicit order or the plain colour.
+// Expanded one colour per thread. A sett applies to warp and weft alike (tartans are square); a missing weft order
+// reuses the warp's (checks), and with neither the plain colour is used.
+export function colorOrder(f, which = 'warp') {
+  const ord = f.sett ? parseSett(f.sett) : (which === 'warp' ? f.warp : f.weft) || (which === 'weft' ? f.warp : null);
+  const list = ord && ord.length ? ord : [{ color: f.color, n: 1 }];
+  const out = [];
+  for (const { color, n } of list) for (let i = 0; i < n; i++) out.push(color);
+  return out;
+}
+
+const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+const hex = (c) => '#' + c.map((v) => Math.round(clamp(v, 0, 255)).toString(16).padStart(2, '0')).join('');
+
+// Colour seen from afar: warp and weft averages mixed by the share of warp on the face (cells set to 1).
+export function averageColor(f) {
+  const wa = colorOrder(f, 'warp').map(rgb), we = colorOrder(f, 'weft').map(rgb);
+  const st = fabricWeave(f);
+  const share = st.cells ? st.cells.reduce((s, v) => s + v, 0) / st.cells.length : 0.5;
+  const avg = (l) => [0, 1, 2].map((k) => l.reduce((s, c) => s + c[k], 0) / l.length);
+  const a = avg(wa), b = avg(we);
+  return hex([0, 1, 2].map((k) => a[k] * share + b[k] * (1 - share)));
+}
+
+/**
+ * Simulation parameters (cloth/): density g/cm² from the gsm, stretch limits from the stretch percentages, bending and
+ * shear stiffness as compliances (softer = larger), collision thickness in cm, friction and damping.
+ */
+// Compliances, not stiffnesses: XPBD-style constraints (cloth/) take compliance = 1 / stiffness, so 0 means rigid.
+// The exponent on bending spreads the 0..1 slider perceptually: most of its range is the soft end where drape
+// differences are visible.
+export function simParams(f) {
+  const p = f.props;
+  return {
+    density: p.gsm / 10000, // g per cm²
+    thickness: p.thickness / 10, // cm
+    stretchWarp: p.stretchWarp / 100, stretchWeft: p.stretchWeft / 100,
+    stretchCompliance: 1e-5 * (1 + (p.stretchWarp + p.stretchWeft) / 4),
+    bendCompliance: 0.25 * Math.pow(1 - p.bending, 2.2) + 0.0008,
+    shearCompliance: 0.02 * (1 - p.shear) + 0.0005,
+    friction: p.friction, damping: 0.02 + 0.04 * p.roughness, sheen: p.sheen, roughness: p.roughness,
+  };
+}

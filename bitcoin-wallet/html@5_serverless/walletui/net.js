@@ -1,0 +1,4 @@
+const apiBase=()=>new URL('api/',location.href).href;async function backendCall(path,{method='GET',body,token}={}){const r=await fetch(apiBase()+path.replace(/^\//,''),{method,cache:'no-store',headers:{...(body!==undefined?{'Content-Type':'application/json'}:{}),...(token?{Authorization:'Bearer '+token}:{})},body:body!==undefined?JSON.stringify(body):undefined,});let data=null;try{data=await r.json();}catch{data=null;}
+if(!r.ok)throw Object.assign(new Error((data&&data.error)||'HTTP '+r.status),{status:r.status});return data;}
+async function probeBackend(app){if(location.protocol==='file:')return null;try{const info=await backendCall('info');return info&&info.app===app?info:null;}catch{return null;}}
+export{backendCall,probeBackend};

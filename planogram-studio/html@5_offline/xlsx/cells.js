@@ -1,0 +1,11 @@
+const MAX_ROWS=1048576;const MAX_COLS=16384;function colName(c){let s='';let n=Math.floor(c)+1;while(n>0){const m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=(n-1-m)/26;}
+return s;}
+function colIndex(name){const s=String(name).toUpperCase();if(!/^[A-Z]{1,3}$/.test(s))return-1;let n=0;for(let i=0;i<s.length;i++)n=n*26+(s.charCodeAt(i)-64);return n-1<MAX_COLS?n-1:-1;}
+function parseA1(ref){const m=/^(\$?)([A-Za-z]{1,3})(\$?)(\d{1,7})$/.exec(String(ref).trim());if(!m)return null;const c=colIndex(m[2]);const r=+m[4]-1;if(c<0||r<0||r>=MAX_ROWS)return null;return{r,c,ac:!!m[1],ar:!!m[3]};}
+function parseRange(ref){const[a,b]=String(ref).split(':');const p=parseA1(a);const q=b==null?p:parseA1(b);if(!p||!q)return null;return{r1:Math.min(p.r,q.r),c1:Math.min(p.c,q.c),r2:Math.max(p.r,q.r),c2:Math.max(p.c,q.c)};}
+class CellError{constructor(code){this.code=code;}
+toString(){return this.code;}}
+const FILE_ERRORS=['#NULL!','#DIV/0!','#VALUE!','#REF!','#NAME?','#NUM!','#N/A','#GETTING_DATA','#SPILL!','#CALC!'];const INTERN=new Map();for(const code of[...FILE_ERRORS,'#CIRC!','#ERROR!'])INTERN.set(code,new CellError(code));function cellError(code){const k=String(code).toUpperCase();let e=INTERN.get(k);if(!e){e=new CellError(k);INTERN.set(k,e);}
+return e;}
+const ERR={NULL:cellError('#NULL!'),DIV0:cellError('#DIV/0!'),VALUE:cellError('#VALUE!'),REF:cellError('#REF!'),NAME:cellError('#NAME?'),NUM:cellError('#NUM!'),NA:cellError('#N/A'),SPILL:cellError('#SPILL!'),CALC:cellError('#CALC!'),CIRC:cellError('#CIRC!'),ERROR:cellError('#ERROR!'),};const isRich=(cell)=>cell!==null&&typeof cell==='object'&&!(cell instanceof CellError)&&!(cell instanceof Date);const cellValue=(cell)=>(isRich(cell)?(cell.v===undefined?null:cell.v):cell===undefined?null:cell);const DAY=86400000;const EPOCH_1900=Date.UTC(1899,11,30);const EPOCH_1904=Date.UTC(1904,0,1);const DATE1904_OFFSET=1462;function dateToSerial(d,date1904=false){const ms=d instanceof Date?d.getTime():+d;if(date1904)return(ms-EPOCH_1904)/DAY;let s=(ms-EPOCH_1900)/DAY;if(s<61)s-=1;return s;}
+export{colIndex,MAX_ROWS,colName,dateToSerial,cellError,DATE1904_OFFSET,parseRange,parseA1,isRich,cellValue};

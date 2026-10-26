@@ -1,0 +1,11 @@
+const XX='+-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';const enc={uu:(v)=>(v===0?'`':String.fromCharCode(32+v)),xx:(v)=>XX[v]};const dec={uu:(c)=>(c==='`'?0:(c.charCodeAt(0)-32)&63),xx:(c)=>{const v=XX.indexOf(c);if(v<0)throw new Error(`invalid XX character "${c}"`);return v;},};function uuEncode(bytes,{table='uu',name='data.bin',mode='644',frame=true}={}){const e=enc[table];if(!e)throw new Error('table must be "uu" or "xx"');const lines=[];for(let i=0;i<bytes.length;i+=45){const chunk=bytes.subarray(i,i+45);let line=e(chunk.length);for(let j=0;j<chunk.length;j+=3){const a=chunk[j],b=chunk[j+1]||0,c=chunk[j+2]||0;line+=e(a>>2)+e(((a&3)<<4)|(b>>4))+e(((b&15)<<2)|(c>>6))+e(c&63);}
+lines.push(line);}
+if(!frame)return lines.join('\n')+(lines.length?'\n':'');return`begin ${mode} ${name}\n${lines.join('\n')}${lines.length?'\n':''}${e(0)}\nend\n`;}
+const VALID={uu:/^[ -`]+$/,xx:/^[+\-0-9A-Za-z]+$/};function fits(lines,t){let score=0;for(const l of lines){if(!VALID[t].test(l))return-1;const n=dec[t](l[0]),k=l.length-1,need=Math.ceil(n/3)*4;if(k===need||k===need+1)score++;}
+return score;}
+function uuDecode(text,{table='auto'}={}){let lines=String(text).replace(/\r\n?/g,'\n').split('\n');let name='',mode='';const b=lines.findIndex((l)=>/^begin(-base64)? [0-7]{3,4} /.test(l));if(b>=0){const m=/^begin [0-7]{3,4} (.*)$/.exec(lines[b]);if(!m)throw new Error('"begin-base64" is MIME Base64, not UUencode');mode=lines[b].split(' ')[1];name=m[1];lines=lines.slice(b+1);}
+const data=lines.filter((l)=>l.length&&l!=='end');let t=table;if(t==='auto'){const su=fits(data,'uu'),sx=fits(data,'xx');t=sx>su?'xx':'uu';}
+const d=dec[t];if(!d)throw new Error('table must be "auto", "uu" or "xx"');const out=[];for(const line of data){if(line==='end')break;const n=d(line[0]);if(n===0)break;const groups=line.slice(1);const bytes=[];for(let j=0;j<groups.length&&bytes.length<n;j+=4){const v=[0,1,2,3].map((k)=>(groups[j+k]!==undefined?d(groups[j+k]):0));bytes.push((v[0]<<2)|(v[1]>>4),((v[1]&15)<<4)|(v[2]>>2),((v[2]&3)<<6)|v[3]);}
+if(bytes.length<n)throw new Error(`line too short for ${n} bytes`);out.push(...bytes.slice(0,n).map((x)=>x&255));}
+return{bytes:Uint8Array.from(out),name,mode};}
+export{uuEncode,uuDecode};

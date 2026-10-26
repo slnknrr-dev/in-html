@@ -311,7 +311,9 @@ export async function run() {
     full.addPage().text('ა', 10, 20);
     ok('sys no-subset embeds whole font', full.toBytes().length > sout.length / 4);
     const reparsed = sins.fonts.filter((x) => x.subtype === 'Type0');
-    eq('sys fonts embedded', reparsed.map((x) => [x.embedded, x.subset, x.toUnicode]), [[true, true, true], [true, true, true]]);
+    // Both lookups may land on the same file (DejaVuSans.ttf on a bare Linux runner): then one font is embedded.
+    const fonts = Buffer.compare(Buffer.from(notoBytes), Buffer.from(geoBytes)) === 0 ? 1 : 2;
+    eq('sys fonts embedded', reparsed.map((x) => [x.embedded, x.subset, x.toUnicode]), Array.from({ length: fonts }, () => [true, true, true]));
   }
 
   console.log(`pdf: ${pass} passed, ${fail} failed${skipped ? ', system-font checks skipped' : ''}`);

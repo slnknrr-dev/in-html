@@ -154,7 +154,7 @@ export async function run() {
       const c = (await get('api/db')).body.nodes.find((n) => n.id === 'coll1');
       ok('collage became the playlist cover', c && c.cover && c.cover.blob, c);
       const cmd = await get('api/jobs/' + r.body.id + '/command?shell=cmd');
-      ok('job command for cmd.exe', cmd.status === 200 && /magick/.test(cmd.body.text), cmd.body);
+      ok('job command for cmd.exe', cmd.status === 200 && /magick|convert/.test(cmd.body.text), cmd.body);
     } else skipped.push('ImageMagick collage (magick not found)');
     const stream = await get('api/stream?media=' + wavMedia.id);
     ok('stream needs a source', stream.status === 404);
